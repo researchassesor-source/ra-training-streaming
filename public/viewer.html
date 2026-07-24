@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Espectador · Research Assesor & Training</title>
+<title>Espectador · Research Assessor & Training Streaming</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,7 +11,8 @@
     <div class="brand" id="brand"></div>
     <div class="topbar-right">
       <span class="badge" id="recordingBadge" style="display:none; background:#5c1a1a; color:#ff8a8a;">🔴 grabando</span>
-      <span class="badge" id="countBadge">1 conectado</span>
+      <button id="btnChatToggle" class="secondary badge-btn" title="Mostrar/ocultar chat">💬</button>
+      <span class="badge clickable" id="countBadge">👥 1 conectado</span>
       <span class="badge" id="statusBadge">conectando…</span>
     </div>
   </div>
@@ -19,13 +20,14 @@
     <div class="stage">
       <div class="stage-grid" id="stageGrid"></div>
       <div class="controls">
-        <button id="btnRaiseHand" class="accent">✋ Pedir la palabra</button>
-        <button id="btnCam" hidden>Activar cámara</button>
-        <button id="btnMic" class="secondary" hidden>Activar micrófono</button>
-        <button id="btnLeave" class="danger">Salir</button>
+        <button id="btnRaiseHand" class="icon-btn accent"><span class="icon">✋</span><span class="label">Pedir palabra</span></button>
+        <button id="btnLowerHand" class="icon-btn secondary" hidden><span class="icon">🖐️⬇</span><span class="label">Bajar mano</span></button>
+        <button id="btnCam" class="icon-btn" hidden><span class="icon">📷</span><span class="label">Cámara</span></button>
+        <button id="btnMic" class="icon-btn secondary" hidden><span class="icon">🎤</span><span class="label">Micrófono</span></button>
+        <button id="btnLeave" class="icon-btn danger"><span class="icon">🚪</span><span class="label">Salir</span></button>
       </div>
     </div>
-    <div class="chat">
+    <div class="chat" id="chatPanel">
       <h2>Chat en vivo</h2>
       <div class="chat-messages" id="chatMessages"></div>
       <p class="upload-progress" id="uploadStatus"></p>
@@ -59,14 +61,28 @@
     const countBadge = document.getElementById('countBadge');
     const btnLeave = document.getElementById('btnLeave');
     const btnRaiseHand = document.getElementById('btnRaiseHand');
+    const btnLowerHand = document.getElementById('btnLowerHand');
     const btnCam = document.getElementById('btnCam');
     const btnMic = document.getElementById('btnMic');
 
-    const stage = createStage(document.getElementById('stageGrid'), 'Esperando a que el presentador inicie…');
+    const chatPanel = document.getElementById('chatPanel');
+    const btnChatToggle = document.getElementById('btnChatToggle');
+    let chatVisible = true;
+    btnChatToggle.onclick = () => {
+      chatVisible = !chatVisible;
+      chatPanel.classList.toggle('chat-hidden', !chatVisible);
+    };
+
+    const stage = createStage(
+      document.getElementById('stageGrid'),
+      'Esperando a que el presentador inicie…',
+      (spotlight) => chatPanel.classList.toggle('floating', spotlight)
+    );
 
     let camOn = false;
     let micOn = false;
     let canSpeak = false;
+    let handState = 'idle'; // idle | pending | granted
 
     const room = new LivekitClient.Room();
     attachRemoteStageEvents(room, stage);
@@ -75,23 +91,42 @@
       return `conectado · sala "${roomName}"`;
     }
 
-    function onPermissionsChanged() {
-      const allowed = Boolean(room.localParticipant.permissions?.canPublish);
-      if (allowed === canSpeak) return;
-      canSpeak = allowed;
-      if (allowed) {
+    function setLabel(btn, text) {
+      const el = btn.querySelector('.label');
+      if (el) el.textContent = text;
+    }
+
+    function renderHandState() {
+      if (handState === 'granted') {
         btnRaiseHand.hidden = true;
+        btnLowerHand.hidden = false;
         btnCam.hidden = false;
         btnMic.hidden = false;
       } else {
         btnRaiseHand.hidden = false;
-        btnRaiseHand.textContent = '✋ Pedir la palabra';
-        btnRaiseHand.disabled = false;
+        btnLowerHand.hidden = true;
         btnCam.hidden = true;
         btnMic.hidden = true;
-        if (camOn) { camOn = false; room.localParticipant.setCameraEnabled(false); stage.removeTrack(identity, 'camera'); btnCam.textContent = 'Activar cámara'; }
-        if (micOn) { micOn = false; room.localParticipant.setMicrophoneEnabled(false); btnMic.textContent = 'Activar micrófono'; }
+        btnRaiseHand.disabled = false;
+        if (handState === 'pending') {
+          setLabel(btnRaiseHand, 'Cancelar');
+          btnRaiseHand.classList.add('active');
+        } else {
+          setLabel(btnRaiseHand, 'Pedir palabra');
+          btnRaiseHand.classList.remove('active');
+        }
       }
+    }
+
+    function onPermissionsChanged() {
+      const allowed = Boolean(room.localParticipant.permissions?.canPublish);
+      canSpeak = allowed;
+      handState = allowed ? 'granted' : 'idle';
+      if (!allowed) {
+        if (camOn) { camOn = false; room.localParticipant.setCameraEnabled(false); stage.removeTrack(identity, 'camera'); setLabel(btnCam, 'Cámara'); btnCam.classList.remove('active'); }
+        if (micOn) { micOn = false; room.localParticipant.setMicrophoneEnabled(false); setLabel(btnMic, 'Micrófono'); btnMic.classList.remove('active'); }
+      }
+      renderHandState();
     }
 
     room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, (prev, participant) => {
@@ -100,18 +135,43 @@
 
     btnRaiseHand.onclick = () => {
       const encoder = new TextEncoder();
-      room.localParticipant.publishData(
-        encoder.encode(JSON.stringify({ kind: 'hand-raise', identity })),
-        { reliable: true }
-      );
-      btnRaiseHand.textContent = '✋ Solicitud enviada…';
-      btnRaiseHand.disabled = true;
+      if (handState === 'idle') {
+        room.localParticipant.publishData(
+          encoder.encode(JSON.stringify({ kind: 'hand-raise', identity })),
+          { reliable: true }
+        );
+        handState = 'pending';
+      } else if (handState === 'pending') {
+        room.localParticipant.publishData(
+          encoder.encode(JSON.stringify({ kind: 'hand-lower', identity })),
+          { reliable: true }
+        );
+        handState = 'idle';
+      }
+      renderHandState();
+    };
+
+    btnLowerHand.onclick = async () => {
+      btnLowerHand.disabled = true;
+      try {
+        await fetch('/api/participants/demote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room: roomName, panelistIdentity: identity, targetIdentity: identity }),
+        });
+        // The server-side permission change fires ParticipantPermissionsChanged, which updates the UI.
+      } catch (err) {
+        console.error(err);
+      } finally {
+        btnLowerHand.disabled = false;
+      }
     };
 
     btnCam.onclick = async () => {
       camOn = !camOn;
       await room.localParticipant.setCameraEnabled(camOn);
-      btnCam.textContent = camOn ? 'Apagar cámara' : 'Activar cámara';
+      setLabel(btnCam, camOn ? 'Apagar' : 'Cámara');
+      btnCam.classList.toggle('active', camOn);
       const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
       if (camOn && pub?.track) stage.setTrack(identity, `${identity} (tú)`, 'camera', pub.track, { muted: true });
       else stage.removeTrack(identity, 'camera');
@@ -120,7 +180,8 @@
     btnMic.onclick = async () => {
       micOn = !micOn;
       await room.localParticipant.setMicrophoneEnabled(micOn);
-      btnMic.textContent = micOn ? 'Silenciar micrófono' : 'Activar micrófono';
+      setLabel(btnMic, micOn ? 'Silenciar' : 'Micrófono');
+      btnMic.classList.toggle('active', micOn);
     };
 
     async function main() {

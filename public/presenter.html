@@ -3,14 +3,15 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Panelista · Research Assesor & Training</title>
+<title>Panelista · Research Assessor & Training Streaming</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="topbar">
     <div class="brand" id="brand"></div>
     <div class="topbar-right">
-      <span class="badge" id="countBadge">1 conectado</span>
+      <button id="btnChatToggle" class="secondary badge-btn" title="Mostrar/ocultar chat">💬</button>
+      <span class="badge clickable" id="countBadge">👥 1 conectado</span>
       <span class="badge" id="statusBadge">conectando…</span>
     </div>
   </div>
@@ -19,14 +20,14 @@
       <div class="stage-grid" id="stageGrid"></div>
       <div class="hand-requests" id="handRequests" hidden></div>
       <div class="controls">
-        <button id="btnCam">Activar cámara</button>
-        <button id="btnMic" class="secondary">Activar micrófono</button>
-        <button id="btnScreen" class="secondary">Compartir pantalla</button>
-        <button id="btnRecord" class="secondary">● Grabar sesión</button>
-        <button id="btnLeave" class="danger">Salir</button>
+        <button id="btnCam" class="icon-btn"><span class="icon">📷</span><span class="label">Cámara</span></button>
+        <button id="btnMic" class="icon-btn secondary"><span class="icon">🎤</span><span class="label">Micrófono</span></button>
+        <button id="btnScreen" class="icon-btn secondary"><span class="icon">🖥️</span><span class="label">Pantalla</span></button>
+        <button id="btnRecord" class="icon-btn secondary"><span class="icon">⏺️</span><span class="label">Grabar</span></button>
+        <button id="btnLeave" class="icon-btn danger"><span class="icon">🚪</span><span class="label">Salir</span></button>
       </div>
     </div>
-    <div class="chat">
+    <div class="chat" id="chatPanel">
       <h2>Chat en vivo</h2>
       <div class="chat-messages" id="chatMessages"></div>
       <p class="upload-progress" id="uploadStatus"></p>
@@ -64,7 +65,22 @@
     const btnRecord = document.getElementById('btnRecord');
     const btnLeave = document.getElementById('btnLeave');
 
-    const stage = createStage(document.getElementById('stageGrid'), 'Activa la cámara o comparte pantalla para empezar');
+    // Chat becomes a floating overlay while someone is screen-sharing, so the
+    // shared screen gets the room instead of a fixed sidebar; a toggle lets
+    // the user hide/show it regardless of mode.
+    const chatPanel = document.getElementById('chatPanel');
+    const btnChatToggle = document.getElementById('btnChatToggle');
+    let chatVisible = true;
+    btnChatToggle.onclick = () => {
+      chatVisible = !chatVisible;
+      chatPanel.classList.toggle('chat-hidden', !chatVisible);
+    };
+
+    const stage = createStage(
+      document.getElementById('stageGrid'),
+      'Activa la cámara o comparte pantalla para empezar',
+      (spotlight) => chatPanel.classList.toggle('floating', spotlight)
+    );
 
     let camOn = false;
     let micOn = false;
@@ -91,7 +107,7 @@
         chip.className = 'hand-chip';
         chip.innerHTML = `<span>✋ ${name}</span>`;
         const btn = document.createElement('button');
-        btn.textContent = 'Aprobar';
+        btn.textContent = '✅ Aprobar';
         btn.className = 'accent';
         btn.onclick = () => promote(pid);
         chip.appendChild(btn);
@@ -102,7 +118,7 @@
         chip.className = 'hand-chip granted';
         chip.innerHTML = `<span>🎤 ${pid}</span>`;
         const btn = document.createElement('button');
-        btn.textContent = 'Quitar palabra';
+        btn.textContent = '🖐️⬇ Quitar palabra';
         btn.className = 'secondary';
         btn.onclick = () => demote(pid);
         chip.appendChild(btn);
@@ -147,6 +163,9 @@
         if (msg.kind === 'hand-raise') {
           pendingHands.set(msg.identity, participant?.identity || msg.identity);
           renderHandRequests();
+        } else if (msg.kind === 'hand-lower') {
+          pendingHands.delete(msg.identity);
+          renderHandRequests();
         }
       } catch (e) { /* not our message, ignore */ }
     });
@@ -161,13 +180,19 @@
       // Catches the browser's native "Stop sharing" button, not just our own toggle.
       if (publication.source === LivekitClient.Track.Source.ScreenShare && screenOn) {
         screenOn = false;
-        btnScreen.textContent = 'Compartir pantalla';
+        setLabel(btnScreen, 'Pantalla');
+        btnScreen.classList.remove('active');
         stage.removeTrack(identity, 'screen');
       }
     });
 
     function label() {
       return recording ? `🔴 grabando · sala "${roomName}"` : `en vivo · sala "${roomName}"`;
+    }
+
+    function setLabel(btn, text) {
+      const el = btn.querySelector('.label');
+      if (el) el.textContent = text;
     }
 
     async function main() {
@@ -187,7 +212,8 @@
     btnCam.onclick = async () => {
       camOn = !camOn;
       await room.localParticipant.setCameraEnabled(camOn);
-      btnCam.textContent = camOn ? 'Apagar cámara' : 'Activar cámara';
+      setLabel(btnCam, camOn ? 'Apagar' : 'Cámara');
+      btnCam.classList.toggle('active', camOn);
       const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
       if (camOn && pub?.track) stage.setTrack(identity, `${identity} (tú)`, 'camera', pub.track, { muted: true });
       else stage.removeTrack(identity, 'camera');
@@ -196,13 +222,15 @@
     btnMic.onclick = async () => {
       micOn = !micOn;
       await room.localParticipant.setMicrophoneEnabled(micOn);
-      btnMic.textContent = micOn ? 'Silenciar micrófono' : 'Activar micrófono';
+      setLabel(btnMic, micOn ? 'Silenciar' : 'Micrófono');
+      btnMic.classList.toggle('active', micOn);
     };
 
     btnScreen.onclick = async () => {
       screenOn = !screenOn;
       await room.localParticipant.setScreenShareEnabled(screenOn);
-      btnScreen.textContent = screenOn ? 'Detener pantalla' : 'Compartir pantalla';
+      setLabel(btnScreen, screenOn ? 'Detener' : 'Pantalla');
+      btnScreen.classList.toggle('active', screenOn);
       const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
       if (screenOn && pub?.track) stage.setTrack(identity, `${identity} (pantalla)`, 'screen', pub.track);
       else stage.removeTrack(identity, 'screen');
@@ -221,7 +249,8 @@
           if (!res.ok) throw new Error(data.error || 'error desconocido');
           egressId = data.egressId;
           recording = true;
-          btnRecord.textContent = '■ Detener grabación';
+          setLabel(btnRecord, 'Detener');
+          btnRecord.classList.add('active');
         } else {
           await fetch('/api/recording/stop', {
             method: 'POST',
@@ -230,7 +259,8 @@
           });
           recording = false;
           egressId = null;
-          btnRecord.textContent = '● Grabar sesión';
+          setLabel(btnRecord, 'Grabar');
+          btnRecord.classList.remove('active');
         }
         statusBadge.textContent = label();
         broadcastRecordingStatus(room, recording);

@@ -1,11 +1,12 @@
 // Renders a grid of video tiles for however many panelists are publishing.
 // When any tile is a screen-share, it takes the main spotlight and every
 // other tile (cameras, including the sharer's own) drops into a thumbnail strip.
-function createStage(containerEl, placeholderText) {
+function createStage(containerEl, placeholderText, onSpotlightChange) {
   const tileEls = new Map(); // `${identity}|${source}` -> { root, video, labelEl }
   const placeholder = document.createElement('div');
   placeholder.className = 'placeholder';
   placeholder.textContent = placeholderText || 'Esperando participantes…';
+  let lastSpotlight = false;
 
   function getOrCreateTile(identity, source, label) {
     const key = `${identity}|${source}`;
@@ -62,11 +63,18 @@ function createStage(containerEl, placeholderText) {
     removeTrack(identity, 'screen');
   }
 
+  function notifySpotlight(active) {
+    if (active === lastSpotlight) return;
+    lastSpotlight = active;
+    onSpotlightChange?.(active);
+  }
+
   function layout() {
     containerEl.innerHTML = '';
     if (tileEls.size === 0) {
       containerEl.classList.remove('has-spotlight');
       containerEl.appendChild(placeholder);
+      notifySpotlight(false);
       return;
     }
     const screenEntry = [...tileEls.entries()].find(([key]) => key.endsWith('|screen'));
@@ -80,9 +88,11 @@ function createStage(containerEl, placeholderText) {
         thumbs.appendChild(entry.root);
       }
       if (thumbs.children.length) containerEl.appendChild(thumbs);
+      notifySpotlight(true);
     } else {
       containerEl.classList.remove('has-spotlight');
       for (const entry of tileEls.values()) containerEl.appendChild(entry.root);
+      notifySpotlight(false);
     }
   }
 
