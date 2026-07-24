@@ -103,15 +103,129 @@
       return row;
     }
 
+    function buildWhatsAppMessage(m, viewerUrl) {
+      const when = m.scheduledAt
+        ? new Date(m.scheduledAt).toLocaleString('es', { dateStyle: 'full', timeStyle: 'short' })
+        : 'disponible ahora';
+      return `📅 *${m.title}*\n🗓️ ${when}\n\n👉 Únete aquí: ${viewerUrl}\n\n_Research Assessor & Training Streaming_`;
+    }
+
     function meetingCard(m) {
       const div = document.createElement('div');
       div.className = 'meeting-item';
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex; justify-content:space-between; align-items:flex-start; gap:10px;';
       const when = m.scheduledAt ? new Date(m.scheduledAt).toLocaleString() : 'Sin fecha (disponible ya)';
-      div.innerHTML = `<div class="title">${m.title}</div><div class="meta">${when} · sala "${m.room}"</div>`;
+      const info = document.createElement('div');
+      info.innerHTML = `<div class="title">${m.title}</div><div class="meta">${when} · sala "${m.room}"</div>`;
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex; gap:6px; flex-shrink:0;';
+      const editBtn = document.createElement('button');
+      editBtn.className = 'secondary';
+      editBtn.style.cssText = 'padding:8px 12px; min-height:36px; font-size:13px;';
+      editBtn.textContent = '✏️ Editar';
+      const delBtn = document.createElement('button');
+      delBtn.className = 'danger';
+      delBtn.style.cssText = 'padding:8px 12px; min-height:36px; font-size:13px;';
+      delBtn.textContent = '🗑️ Eliminar';
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+      header.appendChild(info);
+      header.appendChild(actions);
+      div.appendChild(header);
+
       const presenterUrl = `${location.origin}/presenter.html?room=${encodeURIComponent(m.room)}&code=${encodeURIComponent(m.hostCode)}`;
       const viewerUrl = `${location.origin}/viewer.html?room=${encodeURIComponent(m.room)}&code=${encodeURIComponent(m.viewerPassword)}`;
       div.appendChild(linkRow('Panelistas', presenterUrl));
       div.appendChild(linkRow('Espectadores', viewerUrl));
+
+      const waMessage = buildWhatsAppMessage(m, viewerUrl);
+      const waRow = document.createElement('div');
+      waRow.className = 'link-row';
+      const waLabel = document.createElement('span');
+      waLabel.className = 'link-label';
+      waLabel.textContent = 'WhatsApp';
+      const waCopyBtn = document.createElement('button');
+      waCopyBtn.className = 'secondary';
+      waCopyBtn.textContent = '📋 Copiar mensaje';
+      waCopyBtn.onclick = () => copyToClipboard(waMessage, waCopyBtn);
+      const waSendLink = document.createElement('a');
+      waSendLink.href = `https://wa.me/?text=${encodeURIComponent(waMessage)}`;
+      waSendLink.target = '_blank';
+      waSendLink.rel = 'noopener noreferrer';
+      waSendLink.textContent = '🟢 Enviar por WhatsApp';
+      waSendLink.className = 'secondary';
+      waSendLink.style.cssText = 'display:inline-flex; align-items:center; padding:8px 12px; font-size:13px; text-decoration:none; color:var(--text); border-radius:8px;';
+      waRow.appendChild(waLabel);
+      waRow.appendChild(waCopyBtn);
+      waRow.appendChild(waSendLink);
+      div.appendChild(waRow);
+
+      const editForm = document.createElement('div');
+      editForm.className = 'field-row';
+      editForm.style.cssText = 'margin-top:12px; display:none;';
+      editForm.innerHTML = `
+        <div><label>Título</label><input class="editTitle" value="${m.title.replace(/"/g, '&quot;')}" /></div>
+        <div><label>Fecha</label><input class="editDate" type="date" value="${m.scheduledAt ? new Date(m.scheduledAt).toISOString().slice(0, 10) : ''}" /></div>
+        <div><label>Hora</label><input class="editTime" type="time" value="${m.scheduledAt ? new Date(m.scheduledAt).toTimeString().slice(0, 5) : ''}" /></div>
+      `;
+      const editActions = document.createElement('div');
+      editActions.className = 'actions';
+      editActions.style.cssText = 'margin-top:10px; display:none;';
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = 'Guardar cambios';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'secondary';
+      cancelBtn.textContent = 'Cancelar';
+      editActions.appendChild(saveBtn);
+      editActions.appendChild(cancelBtn);
+      div.appendChild(editForm);
+      div.appendChild(editActions);
+
+      editBtn.onclick = () => {
+        editForm.style.display = editForm.style.display === 'none' ? 'flex' : 'none';
+        editActions.style.display = editActions.style.display === 'none' ? 'flex' : 'none';
+      };
+      cancelBtn.onclick = () => {
+        editForm.style.display = 'none';
+        editActions.style.display = 'none';
+      };
+      saveBtn.onclick = async () => {
+        const title = editForm.querySelector('.editTitle').value.trim();
+        const date = editForm.querySelector('.editDate').value;
+        const time = editForm.querySelector('.editTime').value;
+        const scheduledAt = date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
+        saveBtn.disabled = true;
+        try {
+          const res = await fetch(`/api/meetings/${encodeURIComponent(m.room)}`, {
+            method: 'PATCH',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ title, scheduledAt }),
+          });
+          if (!res.ok) throw new Error((await res.json()).error || 'error desconocido');
+          await loadMeetings();
+        } catch (err) {
+          alert('No se pudo guardar: ' + err.message);
+          saveBtn.disabled = false;
+        }
+      };
+      delBtn.onclick = async () => {
+        if (!confirm(`¿Eliminar la reunión "${m.title}"? Los enlaces compartidos dejarán de funcionar.`)) return;
+        delBtn.disabled = true;
+        try {
+          const res = await fetch(`/api/meetings/${encodeURIComponent(m.room)}`, {
+            method: 'DELETE',
+            headers: authHeaders(),
+          });
+          if (!res.ok) throw new Error((await res.json()).error || 'error desconocido');
+          await loadMeetings();
+        } catch (err) {
+          alert('No se pudo eliminar: ' + err.message);
+          delBtn.disabled = false;
+        }
+      };
+
       return div;
     }
 

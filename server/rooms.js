@@ -2,6 +2,7 @@
 // bucket used for recordings — avoids standing up a separate database for
 // something this small. Falls back to "rooms are open" if storage isn't
 // configured (e.g. local dev without S3 credentials).
+const crypto = require('crypto');
 const { PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 
@@ -68,4 +69,28 @@ async function checkAccess(room, role, suppliedCode) {
   return { allowed: false, requiresCode: true };
 }
 
-module.exports = { createRoom, getRoom, checkAccess };
+// Invalidates a room's access codes — used when a meeting is deleted. We
+// deliberately overwrite with unguessable codes instead of removing the
+// config object: a missing config means "open" (see checkAccess above), so
+// a plain delete would have made old shared links work *without* a
+// password instead of blocking them.
+async function revokeRoom(room) {
+  const config = {
+    hostCode: crypto.randomBytes(16).toString('hex'),
+    viewerPassword: crypto.randomBytes(16).toString('hex'),
+    revokedAt: Date.now(),
+  };
+  if (storageConfigured) {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: keyFor(room),
+        Body: JSON.stringify(config),
+        ContentType: 'application/json',
+      })
+    );
+  }
+  cache.set(room, { config, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
+module.exports = { createRoom, getRoom, checkAccess, revokeRoom };

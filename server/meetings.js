@@ -1,5 +1,5 @@
 // Scheduled meeting metadata, stored as JSON in R2 (one object per room).
-const { PutObjectCommand, GetObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+const { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 
 function keyFor(room) {
@@ -35,4 +35,37 @@ async function listMeetings() {
   return items;
 }
 
-module.exports = { createMeeting, listMeetings };
+async function getMeeting(room) {
+  if (!storageConfigured) return undefined;
+  try {
+    const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(room) }));
+    return JSON.parse(await res.Body.transformToString());
+  } catch {
+    return undefined;
+  }
+}
+
+async function updateMeeting(room, updates) {
+  const existing = await getMeeting(room);
+  if (!existing) throw new Error('Reunión no encontrada');
+  const updated = { ...existing, ...updates };
+  if (storageConfigured) {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: keyFor(room),
+        Body: JSON.stringify(updated),
+        ContentType: 'application/json',
+      })
+    );
+  }
+  return updated;
+}
+
+async function deleteMeeting(room) {
+  if (storageConfigured) {
+    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: keyFor(room) })).catch(() => {});
+  }
+}
+
+module.exports = { createMeeting, listMeetings, getMeeting, updateMeeting, deleteMeeting };

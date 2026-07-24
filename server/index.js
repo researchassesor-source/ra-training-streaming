@@ -324,6 +324,30 @@ app.get('/api/meetings', auth.requireAuth, async (req, res) => {
   }
 });
 
+app.patch('/api/meetings/:room', auth.requireAuth, async (req, res) => {
+  const { title, scheduledAt } = req.body || {};
+  try {
+    const updated = await meetings.updateMeeting(req.params.room, {
+      ...(title !== undefined ? { title } : {}),
+      ...(scheduledAt !== undefined ? { scheduledAt } : {}),
+    });
+    res.json(updated);
+  } catch (err) {
+    res.status(404).json({ error: err.message || 'No se pudo actualizar la reunión' });
+  }
+});
+
+app.delete('/api/meetings/:room', auth.requireAuth, async (req, res) => {
+  try {
+    await meetings.deleteMeeting(req.params.room);
+    await roomRegistry.revokeRoom(req.params.room);
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error('meetings/delete error', err);
+    res.status(500).json({ error: 'No se pudo eliminar la reunión' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Token server listening on http://localhost:${PORT}`);
   console.log(`LiveKit: ${LIVEKIT_WS_URL} | Recording configured: ${recordingConfigured}`);

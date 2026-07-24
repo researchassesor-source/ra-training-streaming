@@ -176,6 +176,28 @@
       renderHandRequests();
     });
 
+    // When the screen-share tile goes native-fullscreen (⛶ button), the browser
+    // only renders that element's subtree — chat and hand-raise requests would
+    // otherwise become invisible. Move them inside the fullscreened element
+    // while it's active, then move them back when it exits.
+    document.addEventListener('fullscreenchange', () => {
+      const fsEl = document.fullscreenElement;
+      if (fsEl && fsEl.classList.contains('tile')) {
+        fsEl.appendChild(handRequestsEl);
+        fsEl.appendChild(chatPanel);
+        handRequestsEl.classList.add('in-fullscreen');
+        chatPanel.classList.add('floating', 'in-fullscreen');
+        chatPanel.classList.remove('chat-hidden');
+      } else {
+        document.getElementById('stageGrid').insertAdjacentElement('afterend', handRequestsEl);
+        document.querySelector('.layout').appendChild(chatPanel);
+        handRequestsEl.classList.remove('in-fullscreen');
+        chatPanel.classList.remove('in-fullscreen');
+        chatPanel.classList.toggle('floating', document.getElementById('stageGrid').classList.contains('has-spotlight'));
+        chatPanel.classList.toggle('chat-hidden', !chatVisible);
+      }
+    });
+
     room.on(LivekitClient.RoomEvent.LocalTrackUnpublished, (publication) => {
       // Catches the browser's native "Stop sharing" button, not just our own toggle.
       if (publication.source === LivekitClient.Track.Source.ScreenShare && screenOn) {
