@@ -31,17 +31,22 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 
 // Registers a room with an optional host code (required to join as panelist)
 // and/or viewer password. Rooms that are never registered stay open.
-app.post('/api/rooms', (req, res) => {
+app.post('/api/rooms', async (req, res) => {
   const { room, hostCode, viewerPassword } = req.body || {};
   if (!room) return res.status(400).json({ error: 'room es requerido' });
-  const config = roomRegistry.createRoom(String(room), { hostCode, viewerPassword });
-  res.json({ room, requiresHostCode: Boolean(config.hostCode), requiresViewerPassword: Boolean(config.viewerPassword) });
+  try {
+    const config = await roomRegistry.createRoom(String(room), { hostCode, viewerPassword });
+    res.json({ room, requiresHostCode: Boolean(config.hostCode), requiresViewerPassword: Boolean(config.viewerPassword) });
+  } catch (err) {
+    console.error('rooms/create error', err);
+    res.status(500).json({ error: 'No se pudo crear la sala' });
+  }
 });
 
 // Lets the join screen know whether to show a code/password field before
 // it even tries to fetch a token.
-app.get('/api/rooms/:room', (req, res) => {
-  const config = roomRegistry.getRoom(req.params.room);
+app.get('/api/rooms/:room', async (req, res) => {
+  const config = await roomRegistry.getRoom(req.params.room);
   res.json({
     exists: Boolean(config),
     requiresHostCode: Boolean(config?.hostCode),
@@ -58,7 +63,7 @@ app.get('/api/token', async (req, res) => {
   const role = req.query.role === 'presenter' ? 'presenter' : 'viewer';
   const code = req.query.code ? String(req.query.code) : undefined;
 
-  const access = roomRegistry.checkAccess(room, role, code);
+  const access = await roomRegistry.checkAccess(room, role, code);
   if (!access.allowed) {
     return res.status(403).json({ error: 'Código o contraseña incorrectos', requiresCode: true });
   }
