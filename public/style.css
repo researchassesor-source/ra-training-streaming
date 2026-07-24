@@ -49,7 +49,7 @@ body {
 }
 .brand-name {
   font-weight: 700;
-  font-size: 15px;
+  font-size: clamp(12px, 3.6vw, 15px);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -57,7 +57,7 @@ body {
 .brand-name .accent { color: var(--brand-tomato); }
 .brand-product {
   font-weight: 800;
-  font-size: 12px;
+  font-size: clamp(10px, 2.8vw, 12px);
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--brand-tomato);
@@ -240,9 +240,16 @@ button:disabled {
   mix-blend-mode: screen;
 }
 .mascot[hidden] { display: none; }
-.landing .brand { justify-content: center; margin-bottom: 18px; }
+.landing .brand { justify-content: center; margin-bottom: 18px; text-align: center; }
+.landing .brand-text { overflow: visible; }
 .landing .brand-logo { width: 48px; height: 48px; }
-.landing .brand-name { font-size: 18px; }
+.landing .brand-name {
+  font-size: clamp(15px, 5vw, 18px);
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.landing .brand-product { font-size: clamp(11px, 3.5vw, 13px); }
 .landing h1 {
   font-size: 20px;
   margin-top: 0;
