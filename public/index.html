@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Webinar Prototype</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="landing">
+    <h1>Prototipo de Webinar</h1>
+    <p class="status-line">1 presentador (cámara + pantalla) → hasta 1000 espectadores + chat en vivo.</p>
+
+    <label for="room">Sala</label>
+    <input id="room" value="webinar-demo" />
+
+    <label for="name">Tu nombre</label>
+    <input id="name" placeholder="Ej. Eddy" />
+
+    <div class="actions">
+      <button id="goPresenter">Entrar como presentador</button>
+      <button id="goViewer" class="secondary">Entrar como espectador</button>
+    </div>
+  </div>
+
+  <script>
+    function go(role) {
+      const room = document.getElementById('room').value.trim() || 'webinar-demo';
+      const name = document.getElementById('name').value.trim() || ('Invitado-' + Math.floor(Math.random() * 1000));
+      const page = role === 'presenter' ? 'presenter.html' : 'viewer.html';
+      window.location.href = `${page}?room=${encodeURIComponent(room)}&name=${encodeURIComponent(name)}`;
+    }
+    document.getElementById('goPresenter').onclick = () => go('presenter');
+    document.getElementById('goViewer').onclick = () => go('viewer');
+  </script>
+</body>
+</html>

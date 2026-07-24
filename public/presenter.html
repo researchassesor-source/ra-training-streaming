@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Presentador · Webinar</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1>🎙️ Panel de presentador</h1>
+    <span class="badge" id="statusBadge">conectando…</span>
+  </div>
+  <div class="layout">
+    <div class="stage">
+      <div class="video-wrap">
+        <video id="localVideo" autoplay playsinline muted></video>
+        <div class="placeholder" id="placeholder">Activa la cámara o comparte pantalla para empezar</div>
+      </div>
+      <div class="controls">
+        <button id="btnCam">Activar cámara</button>
+        <button id="btnMic" class="secondary">Activar micrófono</button>
+        <button id="btnScreen" class="secondary">Compartir pantalla</button>
+        <button id="btnRecord" class="secondary">● Grabar sesión</button>
+        <button id="btnLeave" class="danger">Salir</button>
+      </div>
+    </div>
+    <div class="chat">
+      <h2>Chat en vivo</h2>
+      <div class="chat-messages" id="chatMessages"></div>
+      <form class="chat-form" id="chatForm">
+        <input id="chatInput" autocomplete="off" placeholder="Escribe un mensaje…" />
+        <button type="submit">Enviar</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
+  <script src="chat.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const roomName = params.get('room') || 'webinar-demo';
+    const identity = params.get('name') || ('Presentador-' + Math.floor(Math.random() * 1000));
+
+    const statusBadge = document.getElementById('statusBadge');
+    const localVideo = document.getElementById('localVideo');
+    const placeholder = document.getElementById('placeholder');
+    const btnCam = document.getElementById('btnCam');
+    const btnMic = document.getElementById('btnMic');
+    const btnScreen = document.getElementById('btnScreen');
+    const btnRecord = document.getElementById('btnRecord');
+    const btnLeave = document.getElementById('btnLeave');
+
+    let camOn = false;
+    let micOn = false;
+    let screenOn = false;
+    let recording = false;
+    let egressId = null;
+
+    const room = new LivekitClient.Room();
+
+    async function main() {
+      const res = await fetch(`/api/token?room=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(identity)}&role=presenter`);
+      const data = await res.json();
+      await room.connect(data.wsUrl, data.token);
+      statusBadge.textContent = `en vivo · sala "${roomName}"`;
+      setupChat(room, identity);
+      if (!data.recordingConfigured) {
+        btnRecord.disabled = true;
+        btnRecord.title = 'Configura las credenciales S3 en el servidor para habilitar la grabación';
+      }
+    }
+
+    function attachVideo(track) {
+      track.attach(localVideo);
+      placeholder.style.display = 'none';
+    }
+
+    btnCam.onclick = async () => {
+      camOn = !camOn;
+      await room.localParticipant.setCameraEnabled(camOn);
+      btnCam.textContent = camOn ? 'Apagar cámara' : 'Activar cámara';
+      const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+      if (camOn && pub?.track) attachVideo(pub.track);
+    };
+
+    btnMic.onclick = async () => {
+      micOn = !micOn;
+      await room.localParticipant.setMicrophoneEnabled(micOn);
+      btnMic.textContent = micOn ? 'Silenciar micrófono' : 'Activar micrófono';
+    };
+
+    btnScreen.onclick = async () => {
+      screenOn = !screenOn;
+      await room.localParticipant.setScreenShareEnabled(screenOn);
+      btnScreen.textContent = screenOn ? 'Detener pantalla' : 'Compartir pantalla';
+      const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+      if (screenOn && pub?.track) attachVideo(pub.track);
+      else if (!screenOn) {
+        const camPub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+        if (camOn && camPub?.track) attachVideo(camPub.track);
+        else { localVideo.srcObject = null; placeholder.style.display = 'block'; }
+      }
+    };
+
+    btnRecord.onclick = async () => {
+      btnRecord.disabled = true;
+      try {
+        if (!recording) {
+          const res = await fetch('/api/recording/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ room: roomName, identity }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'error desconocido');
+          egressId = data.egressId;
+          recording = true;
+          btnRecord.textContent = '■ Detener grabación';
+          statusBadge.textContent = `🔴 grabando · sala "${roomName}"`;
+          broadcastRecordingStatus(room, true);
+        } else {
+          await fetch('/api/recording/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ egressId }),
+          });
+          recording = false;
+          egressId = null;
+          btnRecord.textContent = '● Grabar sesión';
+          statusBadge.textContent = `en vivo · sala "${roomName}"`;
+          broadcastRecordingStatus(room, false);
+        }
+      } catch (err) {
+        console.error(err);
+        alert('No se pudo cambiar el estado de grabación: ' + err.message);
+      } finally {
+        btnRecord.disabled = false;
+      }
+    };
+
+    btnLeave.onclick = async () => {
+      if (recording && egressId) {
+        await fetch('/api/recording/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ egressId }),
+        }).catch(() => {});
+      }
+      await room.disconnect();
+      window.location.href = 'index.html';
+    };
+
+    main().catch((err) => {
+      console.error(err);
+      statusBadge.textContent = 'error de conexión';
+    });
+  </script>
+</body>
+</html>

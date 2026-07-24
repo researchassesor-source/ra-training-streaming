@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Espectador · Webinar</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1>👀 Sala de espectador</h1>
+    <span class="badge" id="recordingBadge" style="display:none; background:#5c1a1a; color:#ff8a8a;">🔴 esta sesión se está grabando</span>
+    <span class="badge" id="statusBadge">conectando…</span>
+  </div>
+  <div class="layout">
+    <div class="stage">
+      <div class="video-wrap">
+        <video id="remoteVideo" autoplay playsinline></video>
+        <div class="placeholder" id="placeholder">Esperando a que el presentador inicie…</div>
+      </div>
+      <div class="controls">
+        <button id="btnLeave" class="danger">Salir</button>
+      </div>
+    </div>
+    <div class="chat">
+      <h2>Chat en vivo</h2>
+      <div class="chat-messages" id="chatMessages"></div>
+      <form class="chat-form" id="chatForm">
+        <input id="chatInput" autocomplete="off" placeholder="Escribe un mensaje…" />
+        <button type="submit">Enviar</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
+  <script src="chat.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const roomName = params.get('room') || 'webinar-demo';
+    const identity = params.get('name') || ('Espectador-' + Math.floor(Math.random() * 1000));
+
+    const statusBadge = document.getElementById('statusBadge');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const placeholder = document.getElementById('placeholder');
+    const btnLeave = document.getElementById('btnLeave');
+
+    const room = new LivekitClient.Room();
+    let screenTrack = null;
+    let camTrack = null;
+
+    function refreshView() {
+      const track = screenTrack || camTrack;
+      if (track) {
+        track.attach(remoteVideo);
+        placeholder.style.display = 'none';
+      } else {
+        remoteVideo.srcObject = null;
+        placeholder.style.display = 'block';
+      }
+    }
+
+    room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      if (track.kind === 'audio') {
+        track.attach(); // plays automatically via a hidden audio element
+        return;
+      }
+      if (publication.source === LivekitClient.Track.Source.ScreenShare) screenTrack = track;
+      if (publication.source === LivekitClient.Track.Source.Camera) camTrack = track;
+      refreshView();
+    });
+
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication) => {
+      if (publication.source === LivekitClient.Track.Source.ScreenShare) screenTrack = null;
+      if (publication.source === LivekitClient.Track.Source.Camera) camTrack = null;
+      refreshView();
+    });
+
+    async function main() {
+      const res = await fetch(`/api/token?room=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(identity)}&role=viewer`);
+      const { token, wsUrl } = await res.json();
+      await room.connect(wsUrl, token);
+      statusBadge.textContent = `conectado · sala "${roomName}"`;
+      setupChat(room, identity);
+      onRecordingStatus(room, (active) => {
+        document.getElementById('recordingBadge').style.display = active ? 'inline' : 'none';
+      });
+    }
+
+    btnLeave.onclick = async () => {
+      await room.disconnect();
+      window.location.href = 'index.html';
+    };
+
+    main().catch((err) => {
+      console.error(err);
+      statusBadge.textContent = 'error de conexión';
+    });
+  </script>
+</body>
+</html>

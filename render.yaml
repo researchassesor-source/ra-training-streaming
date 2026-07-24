@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: webinar-prototype
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: LIVEKIT_WS_URL
+        sync: false
+      - key: RECORDING_S3_ACCESS_KEY
+        sync: false
+      - key: RECORDING_S3_SECRET_KEY
+        sync: false
+      - key: RECORDING_S3_BUCKET
+        sync: false
+      - key: RECORDING_S3_REGION
+        sync: false
+      - key: RECORDING_S3_ENDPOINT
+        sync: false
