@@ -4,6 +4,7 @@
   --brand-blue-light: #4d78e8;
   --brand-orange: #f5a623;
   --brand-orange-dark: #d98a10;
+  --brand-tomato: #ff6347;
   --bg: #0d1526;
   --bg-panel: #142046;
   --bg-panel-2: #101a38;
@@ -38,8 +39,6 @@ body {
   height: 100%;
   object-fit: contain;
   display: block;
-  mix-blend-mode: multiply;
-  border-radius: 6px;
 }
 .brand-text {
   display: flex;
@@ -55,12 +54,14 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.brand-name .accent { color: var(--brand-orange); }
-.brand-name .product {
-  font-weight: 400;
-  font-size: 0.75em;
-  color: var(--text-dim);
-  margin-left: 4px;
+.brand-name .accent { color: var(--brand-tomato); }
+.brand-product {
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--brand-tomato);
+  line-height: 1.3;
 }
 .brand-tagline {
   font-size: 11px;
