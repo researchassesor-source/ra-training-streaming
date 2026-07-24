@@ -20,7 +20,7 @@
   <div class="layout">
     <div class="stage">
       <div class="stage-grid" id="stageGrid"></div>
-      <div class="controls">
+      <div class="controls" id="controlsPanel">
         <button id="btnRaiseHand" class="icon-btn accent"><span class="icon">✋</span><span class="label">Pedir palabra</span></button>
         <button id="btnLowerHand" class="icon-btn secondary" hidden><span class="icon">🖐️⬇</span><span class="label">Bajar mano</span></button>
         <button id="btnCam" class="icon-btn" hidden><span class="icon">📷</span><span class="label">Cámara</span></button>
@@ -71,16 +71,46 @@
     const chatPanel = document.getElementById('chatPanel');
     const btnChatToggle = document.getElementById('btnChatToggle');
     let chatVisible = true;
+    let unreadChat = 0;
+    function updateChatBadge() {
+      btnChatToggle.textContent = unreadChat > 0 ? `💬 ${unreadChat}` : '💬';
+    }
     btnChatToggle.onclick = () => {
       chatVisible = !chatVisible;
       chatPanel.classList.toggle('chat-hidden', !chatVisible);
+      if (chatVisible) { unreadChat = 0; updateChatBadge(); }
     };
 
+    const controlsPanel = document.getElementById('controlsPanel');
     const stage = createStage(
       document.getElementById('stageGrid'),
       'Esperando a que el presentador inicie…',
-      (spotlight) => chatPanel.classList.toggle('floating', spotlight)
+      (spotlight) => {
+        chatPanel.classList.toggle('floating', spotlight);
+        controlsPanel.classList.toggle('floating', spotlight);
+      }
     );
+
+    // Mirrors presenter.html: if a viewer fullscreens the shared-screen tile,
+    // chat and controls move inside it so they stay usable.
+    document.addEventListener('fullscreenchange', () => {
+      const fsEl = document.fullscreenElement;
+      if (fsEl && fsEl.classList.contains('tile')) {
+        fsEl.appendChild(chatPanel);
+        fsEl.appendChild(controlsPanel);
+        chatPanel.classList.add('floating', 'in-fullscreen');
+        chatPanel.classList.remove('chat-hidden');
+        controlsPanel.classList.add('floating', 'in-fullscreen');
+      } else {
+        document.querySelector('.layout').appendChild(chatPanel);
+        document.querySelector('.stage').appendChild(controlsPanel);
+        chatPanel.classList.remove('in-fullscreen');
+        chatPanel.classList.toggle('floating', document.getElementById('stageGrid').classList.contains('has-spotlight'));
+        chatPanel.classList.toggle('chat-hidden', !chatVisible);
+        controlsPanel.classList.remove('in-fullscreen');
+        controlsPanel.classList.toggle('floating', document.getElementById('stageGrid').classList.contains('has-spotlight'));
+      }
+    });
 
     let camOn = false;
     let micOn = false;
@@ -194,7 +224,12 @@
       statusBadge.textContent = label();
       statusBadge.className = 'badge live';
       attachConnectionUI(room, { statusBadge, countBadge, getLabel: label });
-      setupChat(room, identity, { roomName });
+      setupChat(room, identity, {
+        roomName,
+        onMessage: () => {
+          if (!chatVisible) { unreadChat++; updateChatBadge(); }
+        },
+      });
       playConnectedSound();
       onRecordingStatus(room, (active) => {
         document.getElementById('recordingBadge').style.display = active ? 'inline' : 'none';

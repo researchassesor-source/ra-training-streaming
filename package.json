@@ -4,15 +4,20 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "build:track-processors": "esbuild node_modules/@livekit/track-processors/dist/index.mjs --bundle --format=iife --global-name=TrackProcessors --alias:livekit-client=./build-tools/livekit-client-shim.mjs --outfile=public/vendor/track-processors.bundle.js --minify"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1094.0",
     "@aws-sdk/s3-request-presigner": "^3.1094.0",
+    "@livekit/track-processors": "^0.7.2",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "livekit-client": "^2.21.0",
     "livekit-server-sdk": "^2.9.4",
     "multer": "^2.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

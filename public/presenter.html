@@ -20,9 +20,17 @@
     <div class="stage">
       <div class="stage-grid" id="stageGrid"></div>
       <div class="hand-requests" id="handRequests" hidden></div>
-      <div class="controls">
+      <div class="controls" id="controlsPanel">
         <button id="btnCam" class="icon-btn"><span class="icon">📷</span><span class="label">Cámara</span></button>
         <button id="btnMic" class="icon-btn secondary"><span class="icon">🎤</span><span class="label">Micrófono</span></button>
+        <div style="position:relative;">
+          <button id="btnBg" class="icon-btn secondary"><span class="icon">🎨</span><span class="label">Fondo</span></button>
+          <div class="bg-picker" id="bgPicker" hidden>
+            <button type="button" class="bg-option" data-bg="none">🚫<span>Sin efecto</span></button>
+            <button type="button" class="bg-option" data-bg="blur">💫<span>Difuminar</span></button>
+            <label class="bg-option bg-upload">🖼️<span>Subir imagen</span><input type="file" id="bgImageInput" accept="image/*" hidden /></label>
+          </div>
+        </div>
         <button id="btnScreen" class="icon-btn secondary"><span class="icon">🖥️</span><span class="label">Pantalla</span></button>
         <button id="btnRecord" class="icon-btn secondary"><span class="icon">⏺️</span><span class="label">Grabar</span></button>
         <button id="btnLeave" class="icon-btn danger"><span class="icon">🚪</span><span class="label">Salir</span></button>
@@ -48,6 +56,7 @@
   <script src="brand.js"></script>
   <script src="sounds.js"></script>
   <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
+  <script src="/vendor/track-processors.bundle.js"></script>
   <script src="access.js"></script>
   <script src="stage.js"></script>
   <script src="connection.js"></script>
@@ -74,15 +83,24 @@
     const chatPanel = document.getElementById('chatPanel');
     const btnChatToggle = document.getElementById('btnChatToggle');
     let chatVisible = true;
+    let unreadChat = 0;
+    function updateChatBadge() {
+      btnChatToggle.textContent = unreadChat > 0 ? `💬 ${unreadChat}` : '💬';
+    }
     btnChatToggle.onclick = () => {
       chatVisible = !chatVisible;
       chatPanel.classList.toggle('chat-hidden', !chatVisible);
+      if (chatVisible) { unreadChat = 0; updateChatBadge(); }
     };
 
+    const controlsPanel = document.getElementById('controlsPanel');
     const stage = createStage(
       document.getElementById('stageGrid'),
       'Activa la cámara o comparte pantalla para empezar',
-      (spotlight) => chatPanel.classList.toggle('floating', spotlight)
+      (spotlight) => {
+        chatPanel.classList.toggle('floating', spotlight);
+        controlsPanel.classList.toggle('floating', spotlight);
+      }
     );
 
     let camOn = false;
@@ -188,16 +206,21 @@
       if (fsEl && fsEl.classList.contains('tile')) {
         fsEl.appendChild(handRequestsEl);
         fsEl.appendChild(chatPanel);
+        fsEl.appendChild(controlsPanel);
         handRequestsEl.classList.add('in-fullscreen');
         chatPanel.classList.add('floating', 'in-fullscreen');
         chatPanel.classList.remove('chat-hidden');
+        controlsPanel.classList.add('floating', 'in-fullscreen');
       } else {
         document.getElementById('stageGrid').insertAdjacentElement('afterend', handRequestsEl);
         document.querySelector('.layout').appendChild(chatPanel);
+        document.querySelector('.stage').appendChild(controlsPanel);
         handRequestsEl.classList.remove('in-fullscreen');
         chatPanel.classList.remove('in-fullscreen');
         chatPanel.classList.toggle('floating', document.getElementById('stageGrid').classList.contains('has-spotlight'));
         chatPanel.classList.toggle('chat-hidden', !chatVisible);
+        controlsPanel.classList.remove('in-fullscreen');
+        controlsPanel.classList.toggle('floating', document.getElementById('stageGrid').classList.contains('has-spotlight'));
       }
     });
 
@@ -227,7 +250,12 @@
       statusBadge.textContent = label();
       statusBadge.className = 'badge live';
       attachConnectionUI(room, { statusBadge, countBadge, getLabel: label });
-      setupChat(room, identity, { roomName });
+      setupChat(room, identity, {
+        roomName,
+        onMessage: () => {
+          if (!chatVisible) { unreadChat++; updateChatBadge(); }
+        },
+      });
       playConnectedSound();
       if (!data.recordingConfigured) {
         btnRecord.disabled = true;
@@ -241,8 +269,64 @@
       setLabel(btnCam, camOn ? 'Apagar' : 'Cámara');
       btnCam.classList.toggle('active', camOn);
       const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
-      if (camOn && pub?.track) stage.setTrack(identity, `${identity} (tú)`, 'camera', pub.track, { muted: true });
-      else stage.removeTrack(identity, 'camera');
+      if (camOn && pub?.track) {
+        stage.setTrack(identity, `${identity} (tú)`, 'camera', pub.track, { muted: true });
+        await reapplyBackgroundEffect();
+      } else {
+        stage.removeTrack(identity, 'camera');
+      }
+    };
+
+    // --- Camera background blur / virtual background ---
+    const btnBg = document.getElementById('btnBg');
+    const bgPicker = document.getElementById('bgPicker');
+    const bgImageInput = document.getElementById('bgImageInput');
+    let currentBgEffect = { type: 'none', imageUrl: null };
+
+    btnBg.onclick = () => { bgPicker.hidden = !bgPicker.hidden; };
+    document.addEventListener('click', (ev) => {
+      if (!bgPicker.hidden && !bgPicker.contains(ev.target) && ev.target !== btnBg) bgPicker.hidden = true;
+    });
+
+    async function reapplyBackgroundEffect() {
+      const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+      const track = pub?.track;
+      if (!track) return;
+      try {
+        if (currentBgEffect.type === 'blur') {
+          await track.setProcessor(TrackProcessors.BackgroundBlur(10));
+        } else if (currentBgEffect.type === 'image' && currentBgEffect.imageUrl) {
+          await track.setProcessor(TrackProcessors.VirtualBackground(currentBgEffect.imageUrl));
+        } else {
+          await track.stopProcessor?.();
+        }
+      } catch (err) {
+        console.error('background effect error', err);
+        alert('No se pudo aplicar el efecto de fondo: ' + err.message);
+      }
+    }
+
+    document.querySelectorAll('.bg-option[data-bg]').forEach((btn) => {
+      btn.onclick = async () => {
+        if (!camOn) { alert('Activa la cámara primero.'); return; }
+        currentBgEffect = { type: btn.dataset.bg, imageUrl: null };
+        bgPicker.hidden = true;
+        await reapplyBackgroundEffect();
+      };
+    });
+
+    bgImageInput.onchange = async () => {
+      const file = bgImageInput.files[0];
+      bgImageInput.value = '';
+      if (!file) return;
+      if (!camOn) { alert('Activa la cámara primero.'); return; }
+      const reader = new FileReader();
+      reader.onload = async () => {
+        currentBgEffect = { type: 'image', imageUrl: reader.result };
+        bgPicker.hidden = true;
+        await reapplyBackgroundEffect();
+      };
+      reader.readAsDataURL(file);
     };
 
     btnMic.onclick = async () => {
@@ -257,8 +341,7 @@
       await room.localParticipant.setScreenShareEnabled(screenOn);
       setLabel(btnScreen, screenOn ? 'Detener' : 'Pantalla');
       btnScreen.classList.toggle('active', screenOn);
-      const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
-      if (screenOn && pub?.track) stage.setTrack(identity, `${identity} (pantalla)`, 'screen', pub.track);
+      if (screenOn) stage.setSelfSharePlaceholder(identity, `${identity} (pantalla)`);
       else stage.removeTrack(identity, 'screen');
     };
 

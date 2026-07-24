@@ -59,6 +59,7 @@ function setupChat(room, myIdentity, opts = {}) {
       const msg = JSON.parse(decoder.decode(payload));
       if (msg.kind !== 'chat') return; // other kinds (e.g. recording-status) are handled elsewhere
       render(participant?.identity || 'desconocido', msg, false);
+      opts.onMessage?.(participant?.identity, msg);
     } catch (e) {
       console.error('chat decode error', e);
     }

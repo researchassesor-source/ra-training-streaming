@@ -48,6 +48,23 @@ function createStage(containerEl, placeholderText, onSpotlightChange) {
     layout();
   }
 
+  // For your OWN screen share: deliberately never attach the live video
+  // locally. If your captured screen includes this browser tab, rendering
+  // your own share back to yourself creates an infinite "hall of mirrors"
+  // zoom tunnel. Everyone else still gets the real live video as normal.
+  function setSelfSharePlaceholder(identity, label) {
+    const entry = getOrCreateTile(identity, 'screen', label);
+    entry.video.style.display = 'none';
+    if (!entry.placeholderEl) {
+      const p = document.createElement('div');
+      p.className = 'tile-self-placeholder';
+      p.innerHTML = '<span class="big">🖥️</span><span>Estás compartiendo tu pantalla</span><span class="hint">Los demás ven tu pantalla en vivo</span>';
+      entry.root.appendChild(p);
+      entry.placeholderEl = p;
+    }
+    layout();
+  }
+
   function removeTrack(identity, source) {
     const key = `${identity}|${source}`;
     const entry = tileEls.get(key);
@@ -97,7 +114,7 @@ function createStage(containerEl, placeholderText, onSpotlightChange) {
   }
 
   layout();
-  return { setTrack, removeTrack, removeParticipant };
+  return { setTrack, setSelfSharePlaceholder, removeTrack, removeParticipant };
 }
 
 // Wires up a stage to every REMOTE participant's camera/screen tracks.
