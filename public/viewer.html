@@ -19,6 +19,9 @@
     <div class="stage">
       <div class="stage-grid" id="stageGrid"></div>
       <div class="controls">
+        <button id="btnRaiseHand" class="accent">✋ Pedir la palabra</button>
+        <button id="btnCam" hidden>Activar cámara</button>
+        <button id="btnMic" class="secondary" hidden>Activar micrófono</button>
         <button id="btnLeave" class="danger">Salir</button>
       </div>
     </div>
@@ -49,14 +52,21 @@
     renderBrand(document.getElementById('brand'), { tagline: false });
     const params = new URLSearchParams(location.search);
     const roomName = params.get('room') || 'webinar-demo';
-    const identity = params.get('name') || ('Espectador-' + Math.floor(Math.random() * 1000));
+    let identity = params.get('name') || '';
     const initialCode = params.get('code') || '';
 
     const statusBadge = document.getElementById('statusBadge');
     const countBadge = document.getElementById('countBadge');
     const btnLeave = document.getElementById('btnLeave');
+    const btnRaiseHand = document.getElementById('btnRaiseHand');
+    const btnCam = document.getElementById('btnCam');
+    const btnMic = document.getElementById('btnMic');
 
     const stage = createStage(document.getElementById('stageGrid'), 'Esperando a que el presentador inicie…');
+
+    let camOn = false;
+    let micOn = false;
+    let canSpeak = false;
 
     const room = new LivekitClient.Room();
     attachRemoteStageEvents(room, stage);
@@ -65,7 +75,56 @@
       return `conectado · sala "${roomName}"`;
     }
 
+    function onPermissionsChanged() {
+      const allowed = Boolean(room.localParticipant.permissions?.canPublish);
+      if (allowed === canSpeak) return;
+      canSpeak = allowed;
+      if (allowed) {
+        btnRaiseHand.hidden = true;
+        btnCam.hidden = false;
+        btnMic.hidden = false;
+      } else {
+        btnRaiseHand.hidden = false;
+        btnRaiseHand.textContent = '✋ Pedir la palabra';
+        btnRaiseHand.disabled = false;
+        btnCam.hidden = true;
+        btnMic.hidden = true;
+        if (camOn) { camOn = false; room.localParticipant.setCameraEnabled(false); stage.removeTrack(identity, 'camera'); btnCam.textContent = 'Activar cámara'; }
+        if (micOn) { micOn = false; room.localParticipant.setMicrophoneEnabled(false); btnMic.textContent = 'Activar micrófono'; }
+      }
+    }
+
+    room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, (prev, participant) => {
+      if (participant.identity === identity) onPermissionsChanged();
+    });
+
+    btnRaiseHand.onclick = () => {
+      const encoder = new TextEncoder();
+      room.localParticipant.publishData(
+        encoder.encode(JSON.stringify({ kind: 'hand-raise', identity })),
+        { reliable: true }
+      );
+      btnRaiseHand.textContent = '✋ Solicitud enviada…';
+      btnRaiseHand.disabled = true;
+    };
+
+    btnCam.onclick = async () => {
+      camOn = !camOn;
+      await room.localParticipant.setCameraEnabled(camOn);
+      btnCam.textContent = camOn ? 'Apagar cámara' : 'Activar cámara';
+      const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+      if (camOn && pub?.track) stage.setTrack(identity, `${identity} (tú)`, 'camera', pub.track, { muted: true });
+      else stage.removeTrack(identity, 'camera');
+    };
+
+    btnMic.onclick = async () => {
+      micOn = !micOn;
+      await room.localParticipant.setMicrophoneEnabled(micOn);
+      btnMic.textContent = micOn ? 'Silenciar micrófono' : 'Activar micrófono';
+    };
+
     async function main() {
+      if (!identity) identity = await promptName('espectadores');
       const data = await requestToken({ room: roomName, identity, role: 'viewer', initialCode });
       await room.connect(data.wsUrl, data.token);
       statusBadge.textContent = label();
@@ -75,6 +134,7 @@
       onRecordingStatus(room, (active) => {
         document.getElementById('recordingBadge').style.display = active ? 'inline' : 'none';
       });
+      onPermissionsChanged();
     }
 
     btnLeave.onclick = async () => {

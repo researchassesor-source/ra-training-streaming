@@ -9,7 +9,7 @@
 <body>
   <div class="topbar">
     <div class="brand" id="brand"></div>
-    <a href="index.html" class="badge" style="text-decoration:none;">← volver</a>
+    <a href="dashboard.html" class="badge" style="text-decoration:none;">← volver al panel</a>
   </div>
   <div class="recordings-page">
     <p class="status-line" style="margin: 16px 0;">Filtrar por sala (déjalo vacío para ver todas):</p>
@@ -23,6 +23,10 @@
   <script src="brand.js"></script>
   <script>
     renderBrand(document.getElementById('brand'), { tagline: false });
+
+    const token = localStorage.getItem('ratToken');
+    if (!token) window.location.href = 'index.html';
+
     const params = new URLSearchParams(location.search);
     const listEl = document.getElementById('list');
     const roomFilter = document.getElementById('roomFilter');
@@ -38,7 +42,7 @@
       const room = roomFilter.value.trim();
       const qs = room ? `?room=${encodeURIComponent(room)}` : '';
       try {
-        const res = await fetch(`/api/recordings${qs}`);
+        const res = await fetch(`/api/recordings${qs}`, { headers: { Authorization: `Bearer ${token}` } });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'error desconocido');
         if (data.items.length === 0) {

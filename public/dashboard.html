@@ -10,6 +10,7 @@
   <div class="topbar">
     <div class="brand" id="brand"></div>
     <div class="topbar-right">
+      <a href="recordings.html" class="badge" style="text-decoration:none;">🎬 Grabaciones</a>
       <span class="badge" id="userBadge"></span>
       <button id="btnLogout" class="secondary">Salir</button>
     </div>
@@ -68,7 +69,7 @@
     renderBrand(document.getElementById('brand'), { tagline: false });
 
     const token = localStorage.getItem('ratToken');
-    if (!token) window.location.href = 'login.html';
+    if (!token) window.location.href = 'index.html';
 
     function authHeaders(extra = {}) {
       return { Authorization: `Bearer ${token}`, ...extra };
@@ -118,7 +119,7 @@
       const res = await fetch('/api/auth/me', { headers: authHeaders() });
       if (!res.ok) {
         localStorage.removeItem('ratToken');
-        window.location.href = 'login.html';
+        window.location.href = 'index.html';
         return;
       }
       const data = await res.json();
@@ -186,7 +187,7 @@
     document.getElementById('btnLogout').onclick = () => {
       localStorage.removeItem('ratToken');
       localStorage.removeItem('ratUsername');
-      window.location.href = 'login.html';
+      window.location.href = 'index.html';
     };
 
     loadMe();

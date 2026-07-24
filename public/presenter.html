@@ -17,6 +17,7 @@
   <div class="layout">
     <div class="stage">
       <div class="stage-grid" id="stageGrid"></div>
+      <div class="hand-requests" id="handRequests" hidden></div>
       <div class="controls">
         <button id="btnCam">Activar cámara</button>
         <button id="btnMic" class="secondary">Activar micrófono</button>
@@ -52,7 +53,7 @@
     renderBrand(document.getElementById('brand'), { tagline: false });
     const params = new URLSearchParams(location.search);
     const roomName = params.get('room') || 'webinar-demo';
-    const identity = params.get('name') || ('Panelista-' + Math.floor(Math.random() * 1000));
+    let identity = params.get('name') || '';
     const initialCode = params.get('code') || '';
 
     const statusBadge = document.getElementById('statusBadge');
@@ -74,6 +75,88 @@
     const room = new LivekitClient.Room();
     attachRemoteStageEvents(room, stage);
 
+    // --- Raise-hand requests ---
+    const handRequestsEl = document.getElementById('handRequests');
+    const pendingHands = new Map(); // identity -> name
+    const grantedSpeakers = new Set(); // identity
+
+    function renderHandRequests() {
+      handRequestsEl.innerHTML = '';
+      const hasContent = pendingHands.size > 0 || grantedSpeakers.size > 0;
+      handRequestsEl.hidden = !hasContent;
+      if (!hasContent) return;
+
+      for (const [pid, name] of pendingHands) {
+        const chip = document.createElement('div');
+        chip.className = 'hand-chip';
+        chip.innerHTML = `<span>✋ ${name}</span>`;
+        const btn = document.createElement('button');
+        btn.textContent = 'Aprobar';
+        btn.className = 'accent';
+        btn.onclick = () => promote(pid);
+        chip.appendChild(btn);
+        handRequestsEl.appendChild(chip);
+      }
+      for (const pid of grantedSpeakers) {
+        const chip = document.createElement('div');
+        chip.className = 'hand-chip granted';
+        chip.innerHTML = `<span>🎤 ${pid}</span>`;
+        const btn = document.createElement('button');
+        btn.textContent = 'Quitar palabra';
+        btn.className = 'secondary';
+        btn.onclick = () => demote(pid);
+        chip.appendChild(btn);
+        handRequestsEl.appendChild(chip);
+      }
+    }
+
+    async function promote(targetIdentity) {
+      try {
+        const res = await fetch('/api/participants/promote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room: roomName, panelistIdentity: identity, targetIdentity }),
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'error desconocido');
+        pendingHands.delete(targetIdentity);
+        grantedSpeakers.add(targetIdentity);
+        renderHandRequests();
+      } catch (err) {
+        alert('No se pudo aprobar: ' + err.message);
+      }
+    }
+
+    async function demote(targetIdentity) {
+      try {
+        const res = await fetch('/api/participants/demote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room: roomName, panelistIdentity: identity, targetIdentity }),
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'error desconocido');
+        grantedSpeakers.delete(targetIdentity);
+        renderHandRequests();
+      } catch (err) {
+        alert('No se pudo quitar la palabra: ' + err.message);
+      }
+    }
+
+    room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
+      try {
+        const msg = JSON.parse(new TextDecoder().decode(payload));
+        if (msg.kind === 'hand-raise') {
+          pendingHands.set(msg.identity, participant?.identity || msg.identity);
+          renderHandRequests();
+        }
+      } catch (e) { /* not our message, ignore */ }
+    });
+
+    room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+      pendingHands.delete(participant.identity);
+      grantedSpeakers.delete(participant.identity);
+      renderHandRequests();
+    });
+
     room.on(LivekitClient.RoomEvent.LocalTrackUnpublished, (publication) => {
       // Catches the browser's native "Stop sharing" button, not just our own toggle.
       if (publication.source === LivekitClient.Track.Source.ScreenShare && screenOn) {
@@ -88,6 +171,7 @@
     }
 
     async function main() {
+      if (!identity) identity = await promptName('panelistas');
       const data = await requestToken({ room: roomName, identity, role: 'presenter', initialCode });
       await room.connect(data.wsUrl, data.token);
       statusBadge.textContent = label();

@@ -20,6 +20,20 @@ function createStage(containerEl, placeholderText) {
     labelEl.textContent = label;
     root.appendChild(video);
     root.appendChild(labelEl);
+
+    if (source === 'screen') {
+      const fsBtn = document.createElement('button');
+      fsBtn.type = 'button';
+      fsBtn.className = 'tile-fullscreen';
+      fsBtn.title = 'Pantalla completa';
+      fsBtn.textContent = '⛶';
+      fsBtn.onclick = () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else root.requestFullscreen?.();
+      };
+      root.appendChild(fsBtn);
+    }
+
     const entry = { root, video, labelEl };
     tileEls.set(key, entry);
     return entry;

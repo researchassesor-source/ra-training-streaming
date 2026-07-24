@@ -96,6 +96,47 @@ async function assertIsPresenter(room, identity) {
   return Boolean(participant?.permission?.canPublish);
 }
 
+// Grants a viewer publish rights (camera/mic) after a panelist approves their
+// raised hand. Only someone who already holds canPublish in the room may do this.
+app.post('/api/participants/promote', async (req, res) => {
+  const { room, panelistIdentity, targetIdentity } = req.body || {};
+  if (!room || !panelistIdentity || !targetIdentity) {
+    return res.status(400).json({ error: 'room, panelistIdentity y targetIdentity son requeridos' });
+  }
+  try {
+    const isPresenter = await assertIsPresenter(room, panelistIdentity);
+    if (!isPresenter) return res.status(403).json({ error: 'Solo un panelista puede conceder la palabra' });
+
+    await roomService.updateParticipant(room, targetIdentity, {
+      permission: { canPublish: true, canSubscribe: true, canPublishData: true },
+    });
+    res.json({ promoted: true });
+  } catch (err) {
+    console.error('participants/promote error', err);
+    res.status(500).json({ error: 'No se pudo conceder la palabra' });
+  }
+});
+
+// Reverses a promotion — back to view-only.
+app.post('/api/participants/demote', async (req, res) => {
+  const { room, panelistIdentity, targetIdentity } = req.body || {};
+  if (!room || !panelistIdentity || !targetIdentity) {
+    return res.status(400).json({ error: 'room, panelistIdentity y targetIdentity son requeridos' });
+  }
+  try {
+    const isPresenter = await assertIsPresenter(room, panelistIdentity);
+    if (!isPresenter) return res.status(403).json({ error: 'Solo un panelista puede quitar la palabra' });
+
+    await roomService.updateParticipant(room, targetIdentity, {
+      permission: { canPublish: false, canSubscribe: true, canPublishData: true },
+    });
+    res.json({ demoted: true });
+  } catch (err) {
+    console.error('participants/demote error', err);
+    res.status(500).json({ error: 'No se pudo quitar la palabra' });
+  }
+});
+
 app.post('/api/recording/start', async (req, res) => {
   if (!recordingConfigured) {
     return res.status(400).json({ error: 'La grabación no está configurada (faltan credenciales S3 en el servidor).' });
@@ -183,7 +224,8 @@ app.post('/api/chat/upload', upload.single('file'), async (req, res) => {
 });
 
 // Lists recordings for a room from the bucket, with a signed download URL for each.
-app.get('/api/recordings', async (req, res) => {
+// Organizer-only — recordings can contain sensitive session content.
+app.get('/api/recordings', auth.requireAuth, async (req, res) => {
   if (!storageConfigured) {
     return res.status(400).json({ error: 'El almacenamiento no está configurado en el servidor.' });
   }

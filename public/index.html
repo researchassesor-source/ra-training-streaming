@@ -8,39 +8,19 @@
 </head>
 <body>
   <div class="landing">
+    <img id="mascot" class="mascot" alt="" hidden />
     <div class="brand" id="brand"></div>
-    <h1>Sala de Webinar</h1>
-    <p class="status-line">Varios panelistas (cámara + pantalla) → hasta 1000 espectadores + chat en vivo.</p>
+    <h1>Panel de organizador</h1>
+    <p class="status-line" id="msg">Las sesiones son exclusivas: solo un organizador puede crearlas y compartir el enlace de acceso.</p>
 
-    <label for="room">Sala</label>
-    <input id="room" value="webinar-demo" />
+    <label for="username">Usuario</label>
+    <input id="username" autocomplete="username" />
 
-    <label for="name">Tu nombre</label>
-    <input id="name" placeholder="Ej. Eddy" />
-
-    <label for="code">Código de acceso <span class="hint">(si la sala lo requiere)</span></label>
-    <input id="code" placeholder="Déjalo vacío si no aplica" />
+    <label for="password">Contraseña</label>
+    <input id="password" type="password" autocomplete="current-password" />
 
     <div class="actions">
-      <button id="goPresenter">Entrar como panelista</button>
-      <button id="goViewer" class="secondary">Entrar como espectador</button>
-    </div>
-
-    <details class="advanced">
-      <summary>Crear sala rápida con contraseñas</summary>
-      <label for="hostCode">Código de host <span class="hint">(lo necesitan los panelistas)</span></label>
-      <input id="hostCode" placeholder="Opcional" />
-      <label for="viewerPassword">Contraseña de espectador <span class="hint">(opcional, deja vacío = pública)</span></label>
-      <input id="viewerPassword" placeholder="Opcional" />
-      <div class="actions">
-        <button id="createRoom" class="secondary">Crear sala</button>
-      </div>
-      <p class="status-line" id="createStatus"></p>
-    </details>
-
-    <div class="actions" style="margin-top: 10px;">
-      <a href="recordings.html" id="viewRecordings">Ver grabaciones</a>
-      <a href="login.html" style="margin-left:auto;">Panel de organizador →</a>
+      <button id="btnLogin">Entrar</button>
     </div>
   </div>
 
@@ -48,48 +28,47 @@
   <script>
     renderBrand(document.getElementById('brand'));
 
-    function currentRoom() {
-      return document.getElementById('room').value.trim() || 'webinar-demo';
+    const mascot = document.getElementById('mascot');
+    mascot.onerror = () => { mascot.hidden = true; };
+    mascot.onload = () => { mascot.hidden = false; };
+    mascot.src = 'assets/mascot.png';
+
+    if (localStorage.getItem('ratToken')) {
+      window.location.href = 'dashboard.html';
     }
 
-    function go(role) {
-      const room = currentRoom();
-      const name = document.getElementById('name').value.trim() || ('Invitado-' + Math.floor(Math.random() * 1000));
-      const code = document.getElementById('code').value.trim();
-      const page = role === 'presenter' ? 'presenter.html' : 'viewer.html';
-      const params = new URLSearchParams({ room, name });
-      if (code) params.set('code', code);
-      window.location.href = `${page}?${params.toString()}`;
-    }
+    const msg = document.getElementById('msg');
+    const defaultMsg = msg.textContent;
 
-    document.getElementById('goPresenter').onclick = () => go('presenter');
-    document.getElementById('goViewer').onclick = () => go('viewer');
-
-    document.getElementById('createRoom').onclick = async () => {
-      const room = currentRoom();
-      const hostCode = document.getElementById('hostCode').value.trim();
-      const viewerPassword = document.getElementById('viewerPassword').value.trim();
-      const statusEl = document.getElementById('createStatus');
-      statusEl.textContent = 'Creando…';
+    async function login() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      if (!username || !password) {
+        msg.textContent = 'Completa usuario y contraseña.';
+        return;
+      }
+      msg.textContent = 'Ingresando…';
       try {
-        const res = await fetch('/api/rooms', {
+        const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ room, hostCode, viewerPassword }),
+          body: JSON.stringify({ username, password }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'error desconocido');
-        statusEl.textContent = `Sala "${room}" creada. Usa el código de host para entrar como panelista.`;
-        if (hostCode) document.getElementById('code').value = hostCode;
+        localStorage.setItem('ratToken', data.token);
+        localStorage.setItem('ratUsername', data.username);
+        window.location.href = 'dashboard.html';
       } catch (err) {
-        statusEl.textContent = 'Error: ' + err.message;
+        msg.textContent = 'Error: ' + err.message;
+        setTimeout(() => { msg.textContent = defaultMsg; }, 4000);
       }
-    };
+    }
 
-    document.getElementById('viewRecordings').onclick = (ev) => {
-      ev.preventDefault();
-      window.location.href = `recordings.html?room=${encodeURIComponent(currentRoom())}`;
-    };
+    document.getElementById('btnLogin').onclick = login;
+    document.getElementById('password').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') login();
+    });
   </script>
 </body>
 </html>
