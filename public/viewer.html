@@ -8,15 +8,15 @@
 <body>
   <div class="topbar">
     <h1>👀 Sala de espectador</h1>
-    <span class="badge" id="recordingBadge" style="display:none; background:#5c1a1a; color:#ff8a8a;">🔴 esta sesión se está grabando</span>
-    <span class="badge" id="statusBadge">conectando…</span>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <span class="badge" id="recordingBadge" style="display:none; background:#5c1a1a; color:#ff8a8a;">🔴 esta sesión se está grabando</span>
+      <span class="badge" id="countBadge">1 conectado</span>
+      <span class="badge" id="statusBadge">conectando…</span>
+    </div>
   </div>
   <div class="layout">
     <div class="stage">
-      <div class="video-wrap">
-        <video id="remoteVideo" autoplay playsinline></video>
-        <div class="placeholder" id="placeholder">Esperando a que el presentador inicie…</div>
-      </div>
+      <div class="stage-grid" id="stageGrid"></div>
       <div class="controls">
         <button id="btnLeave" class="danger">Salir</button>
       </div>
@@ -24,62 +24,51 @@
     <div class="chat">
       <h2>Chat en vivo</h2>
       <div class="chat-messages" id="chatMessages"></div>
+      <p class="upload-progress" id="uploadStatus"></p>
       <form class="chat-form" id="chatForm">
         <input id="chatInput" autocomplete="off" placeholder="Escribe un mensaje…" />
+        <div class="chat-tools">
+          <button type="button" id="emojiBtn" title="Emoji">😀</button>
+          <button type="button" id="fileBtn" title="Adjuntar archivo">📎</button>
+          <input type="file" id="fileInput" hidden />
+          <div class="emoji-picker" id="emojiPicker" hidden></div>
+        </div>
         <button type="submit">Enviar</button>
       </form>
     </div>
   </div>
 
   <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
+  <script src="access.js"></script>
+  <script src="stage.js"></script>
+  <script src="connection.js"></script>
   <script src="chat.js"></script>
   <script>
     const params = new URLSearchParams(location.search);
     const roomName = params.get('room') || 'webinar-demo';
     const identity = params.get('name') || ('Espectador-' + Math.floor(Math.random() * 1000));
+    const initialCode = params.get('code') || '';
 
     const statusBadge = document.getElementById('statusBadge');
-    const remoteVideo = document.getElementById('remoteVideo');
-    const placeholder = document.getElementById('placeholder');
+    const countBadge = document.getElementById('countBadge');
     const btnLeave = document.getElementById('btnLeave');
 
-    const room = new LivekitClient.Room();
-    let screenTrack = null;
-    let camTrack = null;
+    const stage = createStage(document.getElementById('stageGrid'), 'Esperando a que el presentador inicie…');
 
-    function refreshView() {
-      const track = screenTrack || camTrack;
-      if (track) {
-        track.attach(remoteVideo);
-        placeholder.style.display = 'none';
-      } else {
-        remoteVideo.srcObject = null;
-        placeholder.style.display = 'block';
-      }
+    const room = new LivekitClient.Room();
+    attachRemoteStageEvents(room, stage);
+
+    function label() {
+      return `conectado · sala "${roomName}"`;
     }
 
-    room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      if (track.kind === 'audio') {
-        track.attach(); // plays automatically via a hidden audio element
-        return;
-      }
-      if (publication.source === LivekitClient.Track.Source.ScreenShare) screenTrack = track;
-      if (publication.source === LivekitClient.Track.Source.Camera) camTrack = track;
-      refreshView();
-    });
-
-    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication) => {
-      if (publication.source === LivekitClient.Track.Source.ScreenShare) screenTrack = null;
-      if (publication.source === LivekitClient.Track.Source.Camera) camTrack = null;
-      refreshView();
-    });
-
     async function main() {
-      const res = await fetch(`/api/token?room=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(identity)}&role=viewer`);
-      const { token, wsUrl } = await res.json();
-      await room.connect(wsUrl, token);
-      statusBadge.textContent = `conectado · sala "${roomName}"`;
-      setupChat(room, identity);
+      const data = await requestToken({ room: roomName, identity, role: 'viewer', initialCode });
+      await room.connect(data.wsUrl, data.token);
+      statusBadge.textContent = label();
+      statusBadge.className = 'badge live';
+      attachConnectionUI(room, { statusBadge, countBadge, getLabel: label });
+      setupChat(room, identity, { roomName });
       onRecordingStatus(room, (active) => {
         document.getElementById('recordingBadge').style.display = active ? 'inline' : 'none';
       });

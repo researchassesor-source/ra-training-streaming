@@ -8,7 +8,7 @@
 <body>
   <div class="landing">
     <h1>Prototipo de Webinar</h1>
-    <p class="status-line">1 presentador (cámara + pantalla) → hasta 1000 espectadores + chat en vivo.</p>
+    <p class="status-line">Varios panelistas (cámara + pantalla) → hasta 1000 espectadores + chat en vivo.</p>
 
     <label for="room">Sala</label>
     <input id="room" value="webinar-demo" />
@@ -16,21 +16,74 @@
     <label for="name">Tu nombre</label>
     <input id="name" placeholder="Ej. Eddy" />
 
+    <label for="code">Código de acceso <span class="hint">(si la sala lo requiere)</span></label>
+    <input id="code" placeholder="Déjalo vacío si no aplica" />
+
     <div class="actions">
-      <button id="goPresenter">Entrar como presentador</button>
+      <button id="goPresenter">Entrar como panelista</button>
       <button id="goViewer" class="secondary">Entrar como espectador</button>
+    </div>
+
+    <details class="advanced">
+      <summary>Crear sala nueva con contraseñas</summary>
+      <label for="hostCode">Código de host <span class="hint">(lo necesitan los panelistas)</span></label>
+      <input id="hostCode" placeholder="Opcional" />
+      <label for="viewerPassword">Contraseña de espectador <span class="hint">(opcional, deja vacío = pública)</span></label>
+      <input id="viewerPassword" placeholder="Opcional" />
+      <div class="actions">
+        <button id="createRoom" class="secondary">Crear sala</button>
+      </div>
+      <p class="status-line" id="createStatus"></p>
+    </details>
+
+    <div class="actions" style="margin-top: 10px;">
+      <a href="recordings.html" id="viewRecordings">Ver grabaciones</a>
     </div>
   </div>
 
   <script>
-    function go(role) {
-      const room = document.getElementById('room').value.trim() || 'webinar-demo';
-      const name = document.getElementById('name').value.trim() || ('Invitado-' + Math.floor(Math.random() * 1000));
-      const page = role === 'presenter' ? 'presenter.html' : 'viewer.html';
-      window.location.href = `${page}?room=${encodeURIComponent(room)}&name=${encodeURIComponent(name)}`;
+    function currentRoom() {
+      return document.getElementById('room').value.trim() || 'webinar-demo';
     }
+
+    function go(role) {
+      const room = currentRoom();
+      const name = document.getElementById('name').value.trim() || ('Invitado-' + Math.floor(Math.random() * 1000));
+      const code = document.getElementById('code').value.trim();
+      const page = role === 'presenter' ? 'presenter.html' : 'viewer.html';
+      const params = new URLSearchParams({ room, name });
+      if (code) params.set('code', code);
+      window.location.href = `${page}?${params.toString()}`;
+    }
+
     document.getElementById('goPresenter').onclick = () => go('presenter');
     document.getElementById('goViewer').onclick = () => go('viewer');
+
+    document.getElementById('createRoom').onclick = async () => {
+      const room = currentRoom();
+      const hostCode = document.getElementById('hostCode').value.trim();
+      const viewerPassword = document.getElementById('viewerPassword').value.trim();
+      const statusEl = document.getElementById('createStatus');
+      statusEl.textContent = 'Creando…';
+      try {
+        const res = await fetch('/api/rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room, hostCode, viewerPassword }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'error desconocido');
+        statusEl.textContent = `Sala "${room}" creada. Usa el código de host para entrar como panelista.`;
+        if (hostCode) document.getElementById('code').value = hostCode;
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+      }
+    };
+
+    document.getElementById('viewRecordings').onclick = (ev) => {
+      ev.preventDefault();
+      window.location.href = `recordings.html?room=${encodeURIComponent(currentRoom())}`;
+    };
   </script>
 </body>
 </html>

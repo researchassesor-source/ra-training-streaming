@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Grabaciones · Webinar</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1>🎬 Grabaciones</h1>
+    <a href="index.html" class="badge" style="text-decoration:none;">← volver</a>
+  </div>
+  <div class="recordings-page">
+    <p class="status-line" style="margin: 16px 0;">Filtrar por sala (déjalo vacío para ver todas):</p>
+    <div class="actions" style="display:flex; gap:10px; margin-bottom: 20px;">
+      <input id="roomFilter" placeholder="Nombre de sala" style="flex:1; padding:10px; border-radius:8px; border:1px solid #262a33; background:#1a1d24; color:#eaeaea;" />
+      <button id="btnFilter">Buscar</button>
+    </div>
+    <div id="list"></div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const listEl = document.getElementById('list');
+    const roomFilter = document.getElementById('roomFilter');
+    roomFilter.value = params.get('room') || '';
+
+    function formatSize(bytes) {
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    async function load() {
+      listEl.innerHTML = '<p class="status-line">Cargando…</p>';
+      const room = roomFilter.value.trim();
+      const qs = room ? `?room=${encodeURIComponent(room)}` : '';
+      try {
+        const res = await fetch(`/api/recordings${qs}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'error desconocido');
+        if (data.items.length === 0) {
+          listEl.innerHTML = '<p class="status-line">No hay grabaciones todavía.</p>';
+          return;
+        }
+        listEl.innerHTML = '';
+        for (const item of data.items) {
+          const row = document.createElement('div');
+          row.className = 'recording-item';
+          const date = new Date(item.lastModified).toLocaleString();
+          row.innerHTML = `
+            <div>
+              <div>${item.key.split('/').pop()}</div>
+              <div class="meta">${date} · ${formatSize(item.size)}</div>
+            </div>
+          `;
+          const link = document.createElement('a');
+          link.href = item.url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = '▶ Ver / Descargar';
+          link.style.color = '#7fb0ff';
+          row.appendChild(link);
+          listEl.appendChild(row);
+        }
+      } catch (err) {
+        listEl.innerHTML = `<p class="status-line">Error: ${err.message}</p>`;
+      }
+    }
+
+    document.getElementById('btnFilter').onclick = load;
+    load();
+  </script>
+</body>
+</html>

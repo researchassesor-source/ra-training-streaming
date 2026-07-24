@@ -1,7 +1,12 @@
 require('dotenv').config({ quiet: true });
 const path = require('path');
 const express = require('express');
+const multer = require('multer');
+const { PutObjectCommand, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { AccessToken, RoomServiceClient, EgressClient, EncodedFileType } = require('livekit-server-sdk');
+const { s3, storageConfigured, bucket } = require('./s3');
+const roomRegistry = require('./rooms');
 
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'devkey';
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'secret';
@@ -22,14 +27,41 @@ app.use('/vendor/livekit-client', express.static(path.join(__dirname, '..', 'nod
 
 const roomService = new RoomServiceClient(LIVEKIT_HTTP_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
 const egressClient = new EgressClient(LIVEKIT_HTTP_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+// Registers a room with an optional host code (required to join as panelist)
+// and/or viewer password. Rooms that are never registered stay open.
+app.post('/api/rooms', (req, res) => {
+  const { room, hostCode, viewerPassword } = req.body || {};
+  if (!room) return res.status(400).json({ error: 'room es requerido' });
+  const config = roomRegistry.createRoom(String(room), { hostCode, viewerPassword });
+  res.json({ room, requiresHostCode: Boolean(config.hostCode), requiresViewerPassword: Boolean(config.viewerPassword) });
+});
+
+// Lets the join screen know whether to show a code/password field before
+// it even tries to fetch a token.
+app.get('/api/rooms/:room', (req, res) => {
+  const config = roomRegistry.getRoom(req.params.room);
+  res.json({
+    exists: Boolean(config),
+    requiresHostCode: Boolean(config?.hostCode),
+    requiresViewerPassword: Boolean(config?.viewerPassword),
+  });
+});
 
 // Issues a LiveKit access token scoped to a role.
-// presenter: can publish camera/screen-share and send chat data.
+// presenter: can publish camera/screen-share and send chat data (multiple people may hold this role at once).
 // viewer: can only subscribe to tracks and send chat data.
 app.get('/api/token', async (req, res) => {
   const room = String(req.query.room || 'webinar-demo');
   const identity = String(req.query.identity || `user-${Math.random().toString(36).slice(2, 8)}`);
   const role = req.query.role === 'presenter' ? 'presenter' : 'viewer';
+  const code = req.query.code ? String(req.query.code) : undefined;
+
+  const access = roomRegistry.checkAccess(room, role, code);
+  if (!access.allowed) {
+    return res.status(403).json({ error: 'Código o contraseña incorrectos', requiresCode: true });
+  }
 
   const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
     identity,
@@ -110,6 +142,63 @@ app.post('/api/recording/stop', async (req, res) => {
   } catch (err) {
     console.error('recording/stop error', err);
     res.status(500).json({ error: 'No se pudo detener la grabación' });
+  }
+});
+
+// Chat file sharing: uploads go straight to R2/S3 under chat-uploads/{room}/...
+// and we hand back a time-limited signed URL instead of making the bucket public.
+app.post('/api/chat/upload', upload.single('file'), async (req, res) => {
+  if (!storageConfigured) {
+    return res.status(400).json({ error: 'El almacenamiento no está configurado en el servidor.' });
+  }
+  const room = String(req.body?.room || 'webinar-demo');
+  if (!req.file) return res.status(400).json({ error: 'No se recibió ningún archivo' });
+
+  const safeName = req.file.originalname.replace(/[^\w.\-() ]/g, '_');
+  const key = `chat-uploads/${room}/${Date.now()}-${safeName}`;
+
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype,
+      })
+    );
+    const url = await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: 60 * 60 * 24 * 7 });
+    res.json({ url, filename: req.file.originalname, size: req.file.size, mimetype: req.file.mimetype });
+  } catch (err) {
+    console.error('chat/upload error', err);
+    res.status(500).json({ error: 'No se pudo subir el archivo' });
+  }
+});
+
+// Lists recordings for a room from the bucket, with a signed download URL for each.
+app.get('/api/recordings', async (req, res) => {
+  if (!storageConfigured) {
+    return res.status(400).json({ error: 'El almacenamiento no está configurado en el servidor.' });
+  }
+  const room = req.query.room ? String(req.query.room) : null;
+  const prefix = room ? `recordings/${room}/` : 'recordings/';
+
+  try {
+    const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
+    const items = await Promise.all(
+      (listing.Contents || [])
+        .filter((obj) => obj.Key.endsWith('.mp4'))
+        .map(async (obj) => ({
+          key: obj.Key,
+          size: obj.Size,
+          lastModified: obj.LastModified,
+          url: await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: obj.Key }), { expiresIn: 60 * 60 * 24 }),
+        }))
+    );
+    items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+    res.json({ items });
+  } catch (err) {
+    console.error('recordings list error', err);
+    res.status(500).json({ error: 'No se pudieron listar las grabaciones' });
   }
 });
 
