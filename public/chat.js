@@ -32,11 +32,14 @@ function setupChat(room, myIdentity, opts = {}) {
       who.textContent = from;
       row.appendChild(who);
       if (msg.mimetype && msg.mimetype.startsWith('image/')) {
+        const frame = document.createElement('div');
+        frame.className = 'file-preview-frame';
         const img = document.createElement('img');
         img.className = 'file-preview';
         img.src = msg.url;
         img.alt = msg.filename;
-        row.appendChild(img);
+        frame.appendChild(img);
+        row.appendChild(frame);
       }
       const link = document.createElement('a');
       link.className = 'file-link';

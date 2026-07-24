@@ -16,6 +16,12 @@ function createStage(containerEl, placeholderText, onSpotlightChange) {
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
+    video.setAttribute('webkit-playsinline', 'true');
+    // Muted by default: mobile browsers block autoplay of unmuted video, which
+    // was making shared screens simply never start playing on phones. No audio
+    // is lost — LiveKit delivers audio tracks through their own hidden <audio>
+    // elements (see the TrackSubscribed handler below), never through this tag.
+    video.muted = true;
     const labelEl = document.createElement('div');
     labelEl.className = 'tile-label';
     labelEl.textContent = label;
@@ -43,8 +49,8 @@ function createStage(containerEl, placeholderText, onSpotlightChange) {
   function setTrack(identity, label, source, track, opts = {}) {
     const entry = getOrCreateTile(identity, source, label);
     entry.labelEl.textContent = label;
-    if (opts.muted) entry.video.muted = true;
     track.attach(entry.video);
+    entry.video.play?.().catch(() => {}); // nudge past strict mobile autoplay gating
     layout();
   }
 
@@ -120,6 +126,15 @@ function createStage(containerEl, placeholderText, onSpotlightChange) {
 // Wires up a stage to every REMOTE participant's camera/screen tracks.
 // (Local tracks never fire TrackSubscribed, so callers manage those themselves.)
 function attachRemoteStageEvents(room, stage) {
+  // Some mobile browsers (notably iOS Safari) only allow starting playback
+  // from inside a user-gesture handler — retry any stalled media on the
+  // next tap/click anywhere on the page rather than staying silent forever.
+  document.addEventListener('click', () => {
+    document.querySelectorAll('video, audio').forEach((el) => {
+      if (el.paused) el.play?.().catch(() => {});
+    });
+  });
+
   room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
     if (track.kind === 'audio') {
       track.attach(); // plays automatically via a hidden audio element

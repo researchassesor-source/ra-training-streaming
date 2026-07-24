@@ -21,6 +21,8 @@
       <div class="stage-grid" id="stageGrid"></div>
       <div class="hand-requests" id="handRequests" hidden></div>
       <div class="controls" id="controlsPanel">
+        <span class="drag-handle" id="controlsDragHandle" title="Arrastrar">⠿</span>
+        <button id="btnPinTop" class="icon-btn secondary drag-only" type="button">📌<span class="label">Fijar encima</span></button>
         <button id="btnCam" class="icon-btn"><span class="icon">📷</span><span class="label">Cámara</span></button>
         <button id="btnMic" class="icon-btn secondary"><span class="icon">🎤</span><span class="label">Micrófono</span></button>
         <div style="position:relative;">
@@ -30,6 +32,7 @@
             <button type="button" class="bg-option" data-bg="blur">💫<span>Difuminar</span></button>
             <label class="bg-option bg-upload">🖼️<span>Subir imagen</span><input type="file" id="bgImageInput" accept="image/*" hidden /></label>
           </div>
+          <div class="bg-status" id="bgStatus" hidden></div>
         </div>
         <button id="btnScreen" class="icon-btn secondary"><span class="icon">🖥️</span><span class="label">Pantalla</span></button>
         <button id="btnRecord" class="icon-btn secondary"><span class="icon">⏺️</span><span class="label">Grabar</span></button>
@@ -55,6 +58,7 @@
 
   <script src="brand.js"></script>
   <script src="sounds.js"></script>
+  <script src="floating-bar.js"></script>
   <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
   <script src="/vendor/track-processors.bundle.js"></script>
   <script src="access.js"></script>
@@ -94,14 +98,53 @@
     };
 
     const controlsPanel = document.getElementById('controlsPanel');
+
+    // Floating panels are appended straight to <body> instead of relying on
+    // position:fixed while nested in the layout — more robust against any
+    // ancestor stacking-context surprises (same trick as the participants
+    // panel). Native fullscreen is a separate case handled below, since
+    // browsers only render the fullscreened element's own subtree.
+    function floatToBody(el) {
+      if (el.dataset.floated) return;
+      el.dataset.floated = '1';
+      el._floatOrigParent = el.parentElement;
+      el._floatOrigNext = el.nextElementSibling;
+      document.body.appendChild(el);
+      el.classList.add('floating');
+    }
+    function unfloatFromBody(el) {
+      if (!el.dataset.floated) return;
+      delete el.dataset.floated;
+      el.classList.remove('floating');
+      el.style.left = '';
+      el.style.top = '';
+      el.style.right = '';
+      el.style.bottom = '';
+      el.style.transform = '';
+      if (el._floatOrigNext) el._floatOrigParent.insertBefore(el, el._floatOrigNext);
+      else el._floatOrigParent.appendChild(el);
+    }
+
+    let inNativeFullscreen = false;
+
     const stage = createStage(
       document.getElementById('stageGrid'),
       'Activa la cámara o comparte pantalla para empezar',
       (spotlight) => {
-        chatPanel.classList.toggle('floating', spotlight);
-        controlsPanel.classList.toggle('floating', spotlight);
+        if (inNativeFullscreen) return; // fullscreenchange handler owns positioning then
+        if (spotlight) {
+          floatToBody(chatPanel);
+          floatToBody(controlsPanel);
+          chatPanel.classList.toggle('chat-hidden', !chatVisible);
+        } else {
+          unfloatFromBody(chatPanel);
+          unfloatFromBody(controlsPanel);
+        }
       }
     );
+
+    makeDraggable(controlsPanel, document.getElementById('controlsDragHandle'));
+    attachPinOnTop(document.getElementById('btnPinTop'), controlsPanel);
 
     let camOn = false;
     let micOn = false;
@@ -204,6 +247,9 @@
     document.addEventListener('fullscreenchange', () => {
       const fsEl = document.fullscreenElement;
       if (fsEl && fsEl.classList.contains('tile')) {
+        inNativeFullscreen = true;
+        unfloatFromBody(chatPanel); // reset to their normal slot first, fsEl.appendChild below relocates them
+        unfloatFromBody(controlsPanel);
         fsEl.appendChild(handRequestsEl);
         fsEl.appendChild(chatPanel);
         fsEl.appendChild(controlsPanel);
@@ -212,15 +258,19 @@
         chatPanel.classList.remove('chat-hidden');
         controlsPanel.classList.add('floating', 'in-fullscreen');
       } else {
+        inNativeFullscreen = false;
         document.getElementById('stageGrid').insertAdjacentElement('afterend', handRequestsEl);
         document.querySelector('.layout').appendChild(chatPanel);
         document.querySelector('.stage').appendChild(controlsPanel);
         handRequestsEl.classList.remove('in-fullscreen');
-        chatPanel.classList.remove('in-fullscreen');
-        chatPanel.classList.toggle('floating', document.getElementById('stageGrid').classList.contains('has-spotlight'));
+        chatPanel.classList.remove('in-fullscreen', 'floating');
+        controlsPanel.classList.remove('in-fullscreen', 'floating');
+        const spotlight = document.getElementById('stageGrid').classList.contains('has-spotlight');
+        if (spotlight) {
+          floatToBody(chatPanel);
+          floatToBody(controlsPanel);
+        }
         chatPanel.classList.toggle('chat-hidden', !chatVisible);
-        controlsPanel.classList.remove('in-fullscreen');
-        controlsPanel.classList.toggle('floating', document.getElementById('stageGrid').classList.contains('has-spotlight'));
       }
     });
 
@@ -281,7 +331,13 @@
     const btnBg = document.getElementById('btnBg');
     const bgPicker = document.getElementById('bgPicker');
     const bgImageInput = document.getElementById('bgImageInput');
+    const bgStatus = document.getElementById('bgStatus');
     let currentBgEffect = { type: 'none', imageUrl: null };
+
+    if (typeof TrackProcessors === 'undefined' || !TrackProcessors.supportsBackgroundProcessors()) {
+      btnBg.disabled = true;
+      btnBg.title = 'Tu navegador no soporta efectos de fondo (usa Chrome/Edge actualizado)';
+    }
 
     btnBg.onclick = () => { bgPicker.hidden = !bgPicker.hidden; };
     document.addEventListener('click', (ev) => {
@@ -292,6 +348,8 @@
       const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
       const track = pub?.track;
       if (!track) return;
+      bgStatus.hidden = false;
+      bgStatus.textContent = currentBgEffect.type === 'none' ? 'Quitando efecto…' : 'Aplicando efecto (puede tardar unos segundos la primera vez)…';
       try {
         if (currentBgEffect.type === 'blur') {
           await track.setProcessor(TrackProcessors.BackgroundBlur(10));
@@ -300,9 +358,11 @@
         } else {
           await track.stopProcessor?.();
         }
+        bgStatus.textContent = currentBgEffect.type === 'none' ? '✅ Sin efecto' : '✅ Efecto aplicado';
+        setTimeout(() => { bgStatus.hidden = true; }, 2500);
       } catch (err) {
         console.error('background effect error', err);
-        alert('No se pudo aplicar el efecto de fondo: ' + err.message);
+        bgStatus.textContent = '❌ No se pudo aplicar: ' + err.message;
       }
     }
 
@@ -338,7 +398,9 @@
 
     btnScreen.onclick = async () => {
       screenOn = !screenOn;
-      await room.localParticipant.setScreenShareEnabled(screenOn);
+      // audio:true also captures tab/system audio where the browser supports it
+      // (e.g. sharing a video), so viewers hear it along with the screen.
+      await room.localParticipant.setScreenShareEnabled(screenOn, { audio: true });
       setLabel(btnScreen, screenOn ? 'Detener' : 'Pantalla');
       btnScreen.classList.toggle('active', screenOn);
       if (screenOn) stage.setSelfSharePlaceholder(identity, `${identity} (pantalla)`);
