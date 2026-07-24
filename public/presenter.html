@@ -10,6 +10,7 @@
   <div class="topbar">
     <div class="brand" id="brand"></div>
     <div class="topbar-right">
+      <button id="btnSoundToggle" class="secondary badge-btn" title="Silenciar sonidos">🔊</button>
       <button id="btnChatToggle" class="secondary badge-btn" title="Mostrar/ocultar chat">💬</button>
       <span class="badge clickable" id="countBadge">👥 1 conectado</span>
       <span class="badge" id="statusBadge">conectando…</span>
@@ -45,6 +46,7 @@
   </div>
 
   <script src="brand.js"></script>
+  <script src="sounds.js"></script>
   <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
   <script src="access.js"></script>
   <script src="stage.js"></script>
@@ -52,6 +54,7 @@
   <script src="chat.js"></script>
   <script>
     renderBrand(document.getElementById('brand'), { tagline: false });
+    attachSoundToggle(document.getElementById('btnSoundToggle'));
     const params = new URLSearchParams(location.search);
     const roomName = params.get('room') || 'webinar-demo';
     let identity = params.get('name') || '';
@@ -225,6 +228,7 @@
       statusBadge.className = 'badge live';
       attachConnectionUI(room, { statusBadge, countBadge, getLabel: label });
       setupChat(room, identity, { roomName });
+      playConnectedSound();
       if (!data.recordingConfigured) {
         btnRecord.disabled = true;
         btnRecord.title = 'Configura las credenciales S3 en el servidor para habilitar la grabación';

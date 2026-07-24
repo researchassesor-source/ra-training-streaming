@@ -62,8 +62,14 @@ function attachConnectionUI(room, { statusBadge, countBadge, getLabel }) {
     countBadge.onclick = togglePanel;
   }
 
-  room.on(LivekitClient.RoomEvent.ParticipantConnected, renderPanel);
-  room.on(LivekitClient.RoomEvent.ParticipantDisconnected, renderPanel);
+  room.on(LivekitClient.RoomEvent.ParticipantConnected, () => {
+    renderPanel();
+    if (typeof playJoinSound === 'function') playJoinSound();
+  });
+  room.on(LivekitClient.RoomEvent.ParticipantDisconnected, () => {
+    renderPanel();
+    if (typeof playLeaveSound === 'function') playLeaveSound();
+  });
   room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, renderPanel);
 
   room.on(LivekitClient.RoomEvent.Reconnecting, () => {
