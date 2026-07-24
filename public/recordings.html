@@ -2,24 +2,27 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8" />
-<title>Grabaciones · Webinar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Grabaciones · Research Assesor & Training</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="topbar">
-    <h1>🎬 Grabaciones</h1>
+    <div class="brand" id="brand"></div>
     <a href="index.html" class="badge" style="text-decoration:none;">← volver</a>
   </div>
   <div class="recordings-page">
     <p class="status-line" style="margin: 16px 0;">Filtrar por sala (déjalo vacío para ver todas):</p>
     <div class="actions" style="display:flex; gap:10px; margin-bottom: 20px;">
-      <input id="roomFilter" placeholder="Nombre de sala" style="flex:1; padding:10px; border-radius:8px; border:1px solid #262a33; background:#1a1d24; color:#eaeaea;" />
+      <input id="roomFilter" placeholder="Nombre de sala" style="flex:1; padding:12px; border-radius:10px; border:1px solid var(--border); background:var(--bg-panel-2); color:var(--text); font-size:15px; min-height:46px;" />
       <button id="btnFilter">Buscar</button>
     </div>
     <div id="list"></div>
   </div>
 
+  <script src="brand.js"></script>
   <script>
+    renderBrand(document.getElementById('brand'), { tagline: false });
     const params = new URLSearchParams(location.search);
     const listEl = document.getElementById('list');
     const roomFilter = document.getElementById('roomFilter');

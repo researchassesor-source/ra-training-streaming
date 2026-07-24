@@ -1,5 +1,6 @@
 require('dotenv').config({ quiet: true });
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const { PutObjectCommand, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
@@ -7,6 +8,8 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { AccessToken, RoomServiceClient, EgressClient, EncodedFileType } = require('livekit-server-sdk');
 const { s3, storageConfigured, bucket } = require('./s3');
 const roomRegistry = require('./rooms');
+const auth = require('./auth');
+const meetings = require('./meetings');
 
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'devkey';
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'secret';
@@ -204,6 +207,78 @@ app.get('/api/recordings', async (req, res) => {
   } catch (err) {
     console.error('recordings list error', err);
     res.status(500).json({ error: 'No se pudieron listar las grabaciones' });
+  }
+});
+
+// --- Organizer auth ---
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username y password son requeridos' });
+  const ok = await auth.verifyLogin(String(username), String(password));
+  if (!ok) return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
+  res.json({ token: auth.signSession(String(username)), username });
+});
+
+app.get('/api/auth/me', auth.requireAuth, (req, res) => {
+  res.json({ username: req.username });
+});
+
+// Creates additional organizer credentials. Any logged-in organizer can do
+// this for now — there's no separate "admin-only" tier yet.
+app.post('/api/auth/users', auth.requireAuth, async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username y password son requeridos' });
+  if (String(password).length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+  try {
+    const user = await auth.createUser(String(username), String(password));
+    res.json(user);
+  } catch (err) {
+    console.error('auth/users error', err);
+    res.status(500).json({ error: err.message || 'No se pudo crear el usuario' });
+  }
+});
+
+app.get('/api/auth/users', auth.requireAuth, async (req, res) => {
+  res.json({ users: await auth.listUsers() });
+});
+
+// --- Scheduled meetings (organizer dashboard) ---
+app.post('/api/meetings', auth.requireAuth, async (req, res) => {
+  const { title, room, scheduledAt } = req.body || {};
+  if (!title) return res.status(400).json({ error: 'title es requerido' });
+
+  const roomName = String(room || title)
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // strip accents
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || `sala-${Date.now()}`;
+
+  const hostCode = crypto.randomBytes(4).toString('hex');
+  const viewerPassword = crypto.randomBytes(4).toString('hex');
+
+  try {
+    await roomRegistry.createRoom(roomName, { hostCode, viewerPassword });
+    const record = await meetings.createMeeting({
+      room: roomName,
+      title: String(title),
+      scheduledAt: scheduledAt || null,
+      hostCode,
+      viewerPassword,
+      createdBy: req.username,
+    });
+    res.json(record);
+  } catch (err) {
+    console.error('meetings/create error', err);
+    res.status(500).json({ error: 'No se pudo crear la reunión' });
+  }
+});
+
+app.get('/api/meetings', auth.requireAuth, async (req, res) => {
+  try {
+    res.json({ items: await meetings.listMeetings() });
+  } catch (err) {
+    console.error('meetings/list error', err);
+    res.status(500).json({ error: 'No se pudieron listar las reuniones' });
   }
 });
 

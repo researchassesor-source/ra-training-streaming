@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Panel de organizador · Research Assesor & Training</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand" id="brand"></div>
+    <div class="topbar-right">
+      <span class="badge" id="userBadge"></span>
+      <button id="btnLogout" class="secondary">Salir</button>
+    </div>
+  </div>
+
+  <div class="dashboard-page">
+    <div class="card">
+      <h2>📅 Programar nueva reunión</h2>
+      <div class="field-row">
+        <div>
+          <label for="mTitle">Título</label>
+          <input id="mTitle" placeholder="Ej. Clase de inglés — Nivel 2" />
+        </div>
+        <div>
+          <label for="mDate">Fecha</label>
+          <input id="mDate" type="date" />
+        </div>
+        <div>
+          <label for="mTime">Hora</label>
+          <input id="mTime" type="time" />
+        </div>
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <button id="btnCreateMeeting">Crear reunión y generar enlaces</button>
+      </div>
+      <p class="status-line" id="createMsg"></p>
+    </div>
+
+    <div class="card">
+      <h2>🎤 Reuniones programadas</h2>
+      <div id="meetingsList"><p class="status-line">Cargando…</p></div>
+    </div>
+
+    <div class="card">
+      <h2>🔑 Crear credenciales de acceso</h2>
+      <p class="status-line">Da acceso a otro organizador para que también pueda programar reuniones.</p>
+      <div class="field-row">
+        <div>
+          <label for="newUser">Usuario nuevo</label>
+          <input id="newUser" />
+        </div>
+        <div>
+          <label for="newPass">Contraseña</label>
+          <input id="newPass" type="password" placeholder="Mínimo 6 caracteres" />
+        </div>
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <button id="btnCreateUser" class="secondary">Crear credencial</button>
+      </div>
+      <p class="status-line" id="userMsg"></p>
+    </div>
+  </div>
+
+  <script src="brand.js"></script>
+  <script>
+    renderBrand(document.getElementById('brand'), { tagline: false });
+
+    const token = localStorage.getItem('ratToken');
+    if (!token) window.location.href = 'login.html';
+
+    function authHeaders(extra = {}) {
+      return { Authorization: `Bearer ${token}`, ...extra };
+    }
+
+    function copyToClipboard(text, btn) {
+      navigator.clipboard.writeText(text).then(() => {
+        const original = btn.textContent;
+        btn.textContent = '✓ Copiado';
+        setTimeout(() => { btn.textContent = original; }, 1500);
+      });
+    }
+
+    function linkRow(label, url) {
+      const row = document.createElement('div');
+      row.className = 'link-row';
+      const labelEl = document.createElement('span');
+      labelEl.className = 'link-label';
+      labelEl.textContent = label;
+      const input = document.createElement('input');
+      input.readOnly = true;
+      input.value = url;
+      input.style.cssText = 'flex:1; min-width:180px; padding:8px; border-radius:8px; border:1px solid var(--border); background:var(--bg-panel); color:var(--text); font-size:12px;';
+      const btn = document.createElement('button');
+      btn.textContent = 'Copiar';
+      btn.className = 'secondary';
+      btn.onclick = () => copyToClipboard(url, btn);
+      row.appendChild(labelEl);
+      row.appendChild(input);
+      row.appendChild(btn);
+      return row;
+    }
+
+    function meetingCard(m) {
+      const div = document.createElement('div');
+      div.className = 'meeting-item';
+      const when = m.scheduledAt ? new Date(m.scheduledAt).toLocaleString() : 'Sin fecha (disponible ya)';
+      div.innerHTML = `<div class="title">${m.title}</div><div class="meta">${when} · sala "${m.room}"</div>`;
+      const presenterUrl = `${location.origin}/presenter.html?room=${encodeURIComponent(m.room)}&code=${encodeURIComponent(m.hostCode)}`;
+      const viewerUrl = `${location.origin}/viewer.html?room=${encodeURIComponent(m.room)}&code=${encodeURIComponent(m.viewerPassword)}`;
+      div.appendChild(linkRow('Panelistas', presenterUrl));
+      div.appendChild(linkRow('Espectadores', viewerUrl));
+      return div;
+    }
+
+    async function loadMe() {
+      const res = await fetch('/api/auth/me', { headers: authHeaders() });
+      if (!res.ok) {
+        localStorage.removeItem('ratToken');
+        window.location.href = 'login.html';
+        return;
+      }
+      const data = await res.json();
+      document.getElementById('userBadge').textContent = `👤 ${data.username}`;
+    }
+
+    async function loadMeetings() {
+      const listEl = document.getElementById('meetingsList');
+      const res = await fetch('/api/meetings', { headers: authHeaders() });
+      if (!res.ok) { listEl.innerHTML = '<p class="status-line">Error al cargar reuniones.</p>'; return; }
+      const data = await res.json();
+      if (data.items.length === 0) {
+        listEl.innerHTML = '<p class="status-line">Aún no hay reuniones programadas.</p>';
+        return;
+      }
+      listEl.innerHTML = '';
+      for (const m of data.items) listEl.appendChild(meetingCard(m));
+    }
+
+    document.getElementById('btnCreateMeeting').onclick = async () => {
+      const title = document.getElementById('mTitle').value.trim();
+      const date = document.getElementById('mDate').value;
+      const time = document.getElementById('mTime').value;
+      const msgEl = document.getElementById('createMsg');
+      if (!title) { msgEl.textContent = 'Escribe un título para la reunión.'; return; }
+      const scheduledAt = date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
+      msgEl.textContent = 'Creando…';
+      try {
+        const res = await fetch('/api/meetings', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ title, scheduledAt }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'error desconocido');
+        msgEl.textContent = `Reunión "${data.title}" creada.`;
+        document.getElementById('mTitle').value = '';
+        await loadMeetings();
+      } catch (err) {
+        msgEl.textContent = 'Error: ' + err.message;
+      }
+    };
+
+    document.getElementById('btnCreateUser').onclick = async () => {
+      const username = document.getElementById('newUser').value.trim();
+      const password = document.getElementById('newPass').value;
+      const msgEl = document.getElementById('userMsg');
+      msgEl.textContent = 'Creando…';
+      try {
+        const res = await fetch('/api/auth/users', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'error desconocido');
+        msgEl.textContent = `Credencial "${username}" creada.`;
+        document.getElementById('newUser').value = '';
+        document.getElementById('newPass').value = '';
+      } catch (err) {
+        msgEl.textContent = 'Error: ' + err.message;
+      }
+    };
+
+    document.getElementById('btnLogout').onclick = () => {
+      localStorage.removeItem('ratToken');
+      localStorage.removeItem('ratUsername');
+      window.location.href = 'login.html';
+    };
+
+    loadMe();
+    loadMeetings();
+  </script>
+</body>
+</html>

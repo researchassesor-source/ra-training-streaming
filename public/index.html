@@ -2,12 +2,14 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8" />
-<title>Webinar Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Research Assesor & Training · Webinars</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="landing">
-    <h1>Prototipo de Webinar</h1>
+    <div class="brand" id="brand"></div>
+    <h1>Sala de Webinar</h1>
     <p class="status-line">Varios panelistas (cámara + pantalla) → hasta 1000 espectadores + chat en vivo.</p>
 
     <label for="room">Sala</label>
@@ -25,7 +27,7 @@
     </div>
 
     <details class="advanced">
-      <summary>Crear sala nueva con contraseñas</summary>
+      <summary>Crear sala rápida con contraseñas</summary>
       <label for="hostCode">Código de host <span class="hint">(lo necesitan los panelistas)</span></label>
       <input id="hostCode" placeholder="Opcional" />
       <label for="viewerPassword">Contraseña de espectador <span class="hint">(opcional, deja vacío = pública)</span></label>
@@ -38,10 +40,14 @@
 
     <div class="actions" style="margin-top: 10px;">
       <a href="recordings.html" id="viewRecordings">Ver grabaciones</a>
+      <a href="login.html" style="margin-left:auto;">Panel de organizador →</a>
     </div>
   </div>
 
+  <script src="brand.js"></script>
   <script>
+    renderBrand(document.getElementById('brand'));
+
     function currentRoom() {
       return document.getElementById('room').value.trim() || 'webinar-demo';
     }
