@@ -5,6 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server/index.js",
+    "test": "node --test --test-concurrency=1",
+    "test:watch": "node --test --watch --test-concurrency=1",
     "build:track-processors": "esbuild node_modules/@livekit/track-processors/dist/index.mjs --bundle --format=iife --global-name=TrackProcessors --alias:livekit-client=./build-tools/livekit-client-shim.mjs --outfile=public/vendor/track-processors.bundle.js --minify"
   },
   "dependencies": {
