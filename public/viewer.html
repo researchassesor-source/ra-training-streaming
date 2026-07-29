@@ -1,53 +1,112 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Espectador · Research Assessor & Training Streaming</title>
-<link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Asistente · R.A. Training Streaming</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
-<body>
-  <div class="topbar">
-    <div class="brand" id="brand"></div>
-    <div class="topbar-right">
-      <span class="badge" id="recordingBadge" style="display:none; background:#5c1a1a; color:#ff8a8a;">🔴 grabando</span>
-      <button id="btnSoundToggle" class="secondary badge-btn" title="Silenciar sonidos">🔊</button>
-      <button id="btnChatToggle" class="secondary badge-btn" title="Mostrar/ocultar chat">💬</button>
-      <span class="badge clickable" id="countBadge">👥 1 conectado</span>
-      <span class="badge" id="statusBadge">conectando…</span>
-    </div>
-  </div>
-  <div class="layout">
-    <div class="stage">
-      <div class="stage-grid" id="stageGrid"></div>
-      <div class="controls" id="controlsPanel">
-        <span class="drag-handle" id="controlsDragHandle" title="Arrastrar">⠿</span>
-        <button id="btnPinTop" class="icon-btn secondary drag-only" type="button">📌<span class="label">Fijar encima</span></button>
-        <button id="btnRaiseHand" class="icon-btn accent"><span class="icon">✋</span><span class="label">Pedir palabra</span></button>
-        <button id="btnLowerHand" class="icon-btn secondary" hidden><span class="icon">🖐️⬇</span><span class="label">Bajar mano</span></button>
-        <button id="btnCam" class="icon-btn" hidden><span class="icon">📷</span><span class="label">Cámara</span></button>
-        <button id="btnMic" class="icon-btn secondary" hidden><span class="icon">🎤</span><span class="label">Micrófono</span></button>
-        <button id="btnLeave" class="icon-btn danger"><span class="icon">🚪</span><span class="label">Salir</span></button>
+<body class="room-body" data-page-role="viewer">
+  <header class="room-topbar">
+    <div id="brand"></div>
+    <div class="room-title-block"><strong id="meetingTitle">Reunión</strong><span id="trainerName"></span></div>
+    <div class="room-statuses"><span id="recordingBadge" class="recording-badge" hidden>Grabando</span><span id="participantCount">1 participante</span><span id="connectionStatus" class="connection-status" aria-live="polite">Validando invitación…</span></div>
+  </header>
+  <main class="room-layout">
+    <section class="room-stage" aria-label="Escenario de video">
+      <div id="stageGrid" class="stage-grid"></div>
+    </section>
+    <aside id="sidePanel" class="room-side-panel" aria-label="Panel de colaboración">
+      <div class="room-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected="true" data-room-tab="chat">Chat <span id="chatUnread" class="tab-count" hidden></span></button>
+        <button type="button" role="tab" aria-selected="false" data-room-tab="questions">Preguntas <span id="questionUnread" class="tab-count" hidden></span></button>
+        <button type="button" role="tab" aria-selected="false" data-room-tab="participants">Participantes <span id="handCount" class="tab-count" hidden></span></button>
       </div>
+      <section class="room-tab-panel active" data-room-panel="chat">
+        <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+      </section>
+      <section class="room-tab-panel" data-room-panel="questions">
+        <div id="questionMessages" class="chat-messages" aria-live="polite"></div>
+      </section>
+      <section class="room-tab-panel" data-room-panel="participants">
+        <div id="handQueue" class="hand-queue"></div>
+        <div id="participantsList" class="participants-list"></div>
+      </section>
+      <div class="room-chat-composer">
+        <p id="uploadStatus" class="upload-progress" aria-live="polite"></p>
+        <form id="chatForm">
+          <select id="chatKind" aria-label="Tipo de mensaje"><option value="chat">Chat</option><option value="question">Pregunta</option></select>
+          <input id="chatInput" autocomplete="off" maxlength="2000" placeholder="Escribe un mensaje…" aria-label="Mensaje" />
+          <button id="emojiBtn" class="composer-icon" type="button" aria-label="Abrir reacciones">Reacción</button>
+          <button id="fileBtn" class="composer-icon" type="button" aria-label="Adjuntar archivo">Adjuntar</button>
+          <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,.txt" hidden />
+          <button class="primary compact" type="submit">Enviar</button>
+          <div id="emojiPicker" class="emoji-picker" hidden></div>
+        </form>
+      </div>
+    </aside>
+  </main>
+  <nav id="roomControls" class="room-controls" aria-label="Controles de reunión">
+    <button id="btnMic" type="button" aria-pressed="false"><span class="control-symbol" aria-hidden="true">M</span><span>Micrófono</span></button>
+    <button id="btnCam" type="button" aria-pressed="false"><span class="control-symbol" aria-hidden="true">C</span><span>Cámara</span></button>
+    <button id="btnChat" type="button" aria-pressed="true"><span class="control-symbol" aria-hidden="true">Ch</span><span>Chat</span></button>
+    <button id="btnHand" type="button" aria-pressed="false"><span class="control-symbol" aria-hidden="true">↑</span><span>Mano</span></button>
+    <button id="btnMore" type="button" aria-expanded="false"><span class="control-symbol" aria-hidden="true">···</span><span>Más</span></button>
+    <button id="btnLeave" class="danger-control" type="button"><span class="control-symbol" aria-hidden="true">×</span><span>Salir</span></button>
+  </nav>
+  <div id="morePanel" class="more-panel" hidden>
+    <div class="panel-heading"><h2>Más opciones</h2><button id="closeMore" class="icon-action" type="button" aria-label="Cerrar opciones">×</button></div>
+    <div class="more-grid">
+      <button id="btnScreen" type="button">Compartir pantalla</button>
+      <button id="btnEffects" type="button">Efectos de cámara</button>
+      <button id="btnParticipants" type="button">Participantes</button>
+      <button id="btnFloat" type="button" aria-pressed="false">Panel siempre encima</button>
+      <button id="btnRecord" class="organizer-control" type="button">Iniciar grabación</button>
+      <button id="btnEnd" class="organizer-control danger" type="button">Finalizar para todos</button>
+      <button id="btnNotifications" type="button">Activar notificaciones</button>
+      <button id="btnSoundToggle" type="button" aria-pressed="true">Sonido activo</button>
     </div>
-    <div class="chat" id="chatPanel">
-      <h2>Chat en vivo</h2>
-      <div class="chat-messages" id="chatMessages"></div>
-      <p class="upload-progress" id="uploadStatus"></p>
-      <form class="chat-form" id="chatForm">
-        <input id="chatInput" autocomplete="off" placeholder="Escribe un mensaje…" />
-        <div class="chat-tools">
-          <button type="button" id="emojiBtn" title="Emoji">😀</button>
-          <button type="button" id="fileBtn" title="Adjuntar archivo">📎</button>
-          <input type="file" id="fileInput" hidden />
-          <div class="emoji-picker" id="emojiPicker" hidden></div>
-        </div>
-        <button type="submit">Enviar</button>
-      </form>
+    <div id="effectsPanel" class="effects-panel" hidden>
+      <button type="button" data-camera-effect="none">Sin efecto</button>
+      <button type="button" data-camera-effect="blur">Desenfoque</button>
+      <label class="button secondary compact">Fondo personalizado<input id="backgroundImageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden /></label>
     </div>
+    <div class="device-grid">
+      <label>Cámara<select id="cameraSelect"></select></label>
+      <label>Micrófono<select id="microphoneSelect"></select></label>
+      <label>Altavoz<select id="speakerSelect"></select></label>
+    </div>
+    <details><summary>Preferencias de alertas</summary><div id="soundSettings" class="sound-settings"></div></details>
+    <p id="featureMessage" class="muted" aria-live="polite"></p>
   </div>
-
+  <dialog id="preflightDialog" class="app-dialog preflight-dialog">
+    <form id="preflightForm" method="dialog">
+      <p class="eyebrow">Sala de preparación</p>
+      <h1 id="preflightTitle">Antes de entrar</h1>
+      <p id="preflightMeeting" class="muted"></p>
+      <div class="preflight-grid">
+        <div class="preview-wrap"><video id="previewVideo" autoplay muted playsinline></video><div id="previewPlaceholder">La vista previa aparecerá aquí.</div></div>
+        <div class="preflight-fields">
+          <label>Nombre visible<input id="displayNameInput" maxlength="80" autocomplete="name" required /></label>
+          <button id="previewButton" class="secondary" type="button">Activar vista previa y probar micrófono</button>
+          <label>Cámara<select id="preflightCamera"></select></label>
+          <label>Micrófono<select id="preflightMicrophone"></select></label>
+          <label>Altavoz<select id="preflightSpeaker"></select></label>
+          <div class="meter" aria-label="Nivel de micrófono"><span id="microphoneMeter"></span></div>
+          <p id="networkStatus" class="muted"></p>
+          <label class="check-row presenter-option"><input id="joinCamera" type="checkbox" /> Entrar con cámara</label>
+          <label class="check-row presenter-option"><input id="joinMicrophone" type="checkbox" /> Entrar con micrófono</label>
+          <label class="check-row viewer-option"><input id="privacyConsent" type="checkbox" required /> Leí el aviso de privacidad y acepto participar.</label>
+          <label class="check-row viewer-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label>
+        </div>
+      </div>
+      <p id="preflightError" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><a class="button secondary" href="/index.html">Cancelar</a><button id="enterRoomButton" class="primary" type="submit">Entrar a la reunión</button></div>
+    </form>
+  </dialog>
   <script src="brand.js"></script>
+  <script src="app-core.js"></script>
   <script src="sounds.js"></script>
   <script src="floating-bar.js"></script>
   <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
@@ -55,241 +114,6 @@
   <script src="stage.js"></script>
   <script src="connection.js"></script>
   <script src="chat.js"></script>
-  <script>
-    renderBrand(document.getElementById('brand'), { tagline: false });
-    attachSoundToggle(document.getElementById('btnSoundToggle'));
-    const params = new URLSearchParams(location.search);
-    const roomName = params.get('room') || 'webinar-demo';
-    let identity = params.get('name') || '';
-    const initialCode = params.get('code') || '';
-
-    const statusBadge = document.getElementById('statusBadge');
-    const countBadge = document.getElementById('countBadge');
-    const btnLeave = document.getElementById('btnLeave');
-    const btnRaiseHand = document.getElementById('btnRaiseHand');
-    const btnLowerHand = document.getElementById('btnLowerHand');
-    const btnCam = document.getElementById('btnCam');
-    const btnMic = document.getElementById('btnMic');
-
-    const chatPanel = document.getElementById('chatPanel');
-    const btnChatToggle = document.getElementById('btnChatToggle');
-    let chatVisible = true;
-    let unreadChat = 0;
-    function updateChatBadge() {
-      btnChatToggle.textContent = unreadChat > 0 ? `💬 ${unreadChat}` : '💬';
-    }
-    btnChatToggle.onclick = () => {
-      chatVisible = !chatVisible;
-      chatPanel.classList.toggle('chat-hidden', !chatVisible);
-      if (chatVisible) { unreadChat = 0; updateChatBadge(); }
-    };
-
-    const controlsPanel = document.getElementById('controlsPanel');
-
-    function floatToBody(el) {
-      if (el.dataset.floated) return;
-      el.dataset.floated = '1';
-      el._floatOrigParent = el.parentElement;
-      el._floatOrigNext = el.nextElementSibling;
-      document.body.appendChild(el);
-      el.classList.add('floating');
-    }
-    function unfloatFromBody(el) {
-      if (!el.dataset.floated) return;
-      delete el.dataset.floated;
-      el.classList.remove('floating');
-      el.style.left = '';
-      el.style.top = '';
-      el.style.right = '';
-      el.style.bottom = '';
-      el.style.transform = '';
-      if (el._floatOrigNext) el._floatOrigParent.insertBefore(el, el._floatOrigNext);
-      else el._floatOrigParent.appendChild(el);
-    }
-
-    let inNativeFullscreen = false;
-
-    const stage = createStage(
-      document.getElementById('stageGrid'),
-      'Esperando a que el presentador inicie…',
-      (spotlight) => {
-        if (inNativeFullscreen) return;
-        if (spotlight) {
-          floatToBody(chatPanel);
-          floatToBody(controlsPanel);
-          chatPanel.classList.toggle('chat-hidden', !chatVisible);
-        } else {
-          unfloatFromBody(chatPanel);
-          unfloatFromBody(controlsPanel);
-        }
-      }
-    );
-
-    makeDraggable(controlsPanel, document.getElementById('controlsDragHandle'));
-    attachPinOnTop(document.getElementById('btnPinTop'), controlsPanel);
-
-    // Mirrors presenter.html: if a viewer fullscreens the shared-screen tile,
-    // chat and controls move inside it so they stay usable.
-    document.addEventListener('fullscreenchange', () => {
-      const fsEl = document.fullscreenElement;
-      if (fsEl && fsEl.classList.contains('tile')) {
-        inNativeFullscreen = true;
-        unfloatFromBody(chatPanel);
-        unfloatFromBody(controlsPanel);
-        fsEl.appendChild(chatPanel);
-        fsEl.appendChild(controlsPanel);
-        chatPanel.classList.add('floating', 'in-fullscreen');
-        chatPanel.classList.remove('chat-hidden');
-        controlsPanel.classList.add('floating', 'in-fullscreen');
-      } else {
-        inNativeFullscreen = false;
-        document.querySelector('.layout').appendChild(chatPanel);
-        document.querySelector('.stage').appendChild(controlsPanel);
-        chatPanel.classList.remove('in-fullscreen', 'floating');
-        controlsPanel.classList.remove('in-fullscreen', 'floating');
-        const spotlight = document.getElementById('stageGrid').classList.contains('has-spotlight');
-        if (spotlight) {
-          floatToBody(chatPanel);
-          floatToBody(controlsPanel);
-        }
-        chatPanel.classList.toggle('chat-hidden', !chatVisible);
-      }
-    });
-
-    let camOn = false;
-    let micOn = false;
-    let canSpeak = false;
-    let handState = 'idle'; // idle | pending | granted
-
-    const room = new LivekitClient.Room();
-    attachRemoteStageEvents(room, stage);
-
-    function label() {
-      return `conectado · sala "${roomName}"`;
-    }
-
-    function setLabel(btn, text) {
-      const el = btn.querySelector('.label');
-      if (el) el.textContent = text;
-    }
-
-    function renderHandState() {
-      if (handState === 'granted') {
-        btnRaiseHand.hidden = true;
-        btnLowerHand.hidden = false;
-        btnCam.hidden = false;
-        btnMic.hidden = false;
-      } else {
-        btnRaiseHand.hidden = false;
-        btnLowerHand.hidden = true;
-        btnCam.hidden = true;
-        btnMic.hidden = true;
-        btnRaiseHand.disabled = false;
-        if (handState === 'pending') {
-          setLabel(btnRaiseHand, 'Cancelar');
-          btnRaiseHand.classList.add('active');
-        } else {
-          setLabel(btnRaiseHand, 'Pedir palabra');
-          btnRaiseHand.classList.remove('active');
-        }
-      }
-    }
-
-    function onPermissionsChanged() {
-      const allowed = Boolean(room.localParticipant.permissions?.canPublish);
-      canSpeak = allowed;
-      handState = allowed ? 'granted' : 'idle';
-      if (!allowed) {
-        if (camOn) { camOn = false; room.localParticipant.setCameraEnabled(false); stage.removeTrack(identity, 'camera'); setLabel(btnCam, 'Cámara'); btnCam.classList.remove('active'); }
-        if (micOn) { micOn = false; room.localParticipant.setMicrophoneEnabled(false); setLabel(btnMic, 'Micrófono'); btnMic.classList.remove('active'); }
-      }
-      renderHandState();
-    }
-
-    room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, (prev, participant) => {
-      if (participant.identity === identity) onPermissionsChanged();
-    });
-
-    btnRaiseHand.onclick = () => {
-      const encoder = new TextEncoder();
-      if (handState === 'idle') {
-        room.localParticipant.publishData(
-          encoder.encode(JSON.stringify({ kind: 'hand-raise', identity })),
-          { reliable: true }
-        );
-        handState = 'pending';
-      } else if (handState === 'pending') {
-        room.localParticipant.publishData(
-          encoder.encode(JSON.stringify({ kind: 'hand-lower', identity })),
-          { reliable: true }
-        );
-        handState = 'idle';
-      }
-      renderHandState();
-    };
-
-    btnLowerHand.onclick = async () => {
-      btnLowerHand.disabled = true;
-      try {
-        await fetch('/api/participants/demote', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ room: roomName, panelistIdentity: identity, targetIdentity: identity }),
-        });
-        // The server-side permission change fires ParticipantPermissionsChanged, which updates the UI.
-      } catch (err) {
-        console.error(err);
-      } finally {
-        btnLowerHand.disabled = false;
-      }
-    };
-
-    btnCam.onclick = async () => {
-      camOn = !camOn;
-      await room.localParticipant.setCameraEnabled(camOn);
-      setLabel(btnCam, camOn ? 'Apagar' : 'Cámara');
-      btnCam.classList.toggle('active', camOn);
-      const pub = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
-      if (camOn && pub?.track) stage.setTrack(identity, `${identity} (tú)`, 'camera', pub.track, { muted: true });
-      else stage.removeTrack(identity, 'camera');
-    };
-
-    btnMic.onclick = async () => {
-      micOn = !micOn;
-      await room.localParticipant.setMicrophoneEnabled(micOn);
-      setLabel(btnMic, micOn ? 'Silenciar' : 'Micrófono');
-      btnMic.classList.toggle('active', micOn);
-    };
-
-    async function main() {
-      if (!identity) identity = await promptName('espectadores');
-      const data = await requestToken({ room: roomName, identity, role: 'viewer', initialCode });
-      await room.connect(data.wsUrl, data.token);
-      statusBadge.textContent = label();
-      statusBadge.className = 'badge live';
-      attachConnectionUI(room, { statusBadge, countBadge, getLabel: label });
-      setupChat(room, identity, {
-        roomName,
-        onMessage: () => {
-          if (!chatVisible) { unreadChat++; updateChatBadge(); }
-        },
-      });
-      playConnectedSound();
-      onRecordingStatus(room, (active) => {
-        document.getElementById('recordingBadge').style.display = active ? 'inline' : 'none';
-      });
-      onPermissionsChanged();
-    }
-
-    btnLeave.onclick = async () => {
-      await room.disconnect();
-      window.location.href = 'index.html';
-    };
-
-    main().catch((err) => {
-      console.error(err);
-      statusBadge.textContent = 'error de conexión';
-    });
-  </script>
+  <script src="room-ui.js"></script>
 </body>
 </html>

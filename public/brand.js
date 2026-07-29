@@ -1,6 +1,6 @@
-const APP_NAME_HTML = 'Research Assessor <span class="accent">&amp;</span>Training';
+const APP_NAME_HTML = 'Research Assessor <span class="accent">&amp;</span> Training';
 const APP_PRODUCT = 'Streaming';
-const APP_TAGLINE = 'Excelencia en Educación en Línea';
+const APP_TAGLINE = 'Excelencia en educación en línea';
 
 function renderBrand(container, { tagline = true } = {}) {
   if (!container) return;
@@ -11,6 +11,5 @@ function renderBrand(container, { tagline = true } = {}) {
       <span class="brand-name">${APP_NAME_HTML}</span>
       <span class="brand-product">${APP_PRODUCT}</span>
       ${tagline ? `<span class="brand-tagline">${APP_TAGLINE}</span>` : ''}
-    </div>
-  `;
+    </div>`;
 }

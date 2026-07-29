@@ -1,157 +1,76 @@
-// Renders a grid of video tiles for however many panelists are publishing.
-// When any tile is a screen-share, it takes the main spotlight and every
-// other tile (cameras, including the sharer's own) drops into a thumbnail strip.
-function createStage(containerEl, placeholderText, onSpotlightChange) {
-  const tileEls = new Map(); // `${identity}|${source}` -> { root, video, labelEl }
+function createStage(containerElement, placeholderText, onSpotlightChange) {
+  const tiles = new Map();
   const placeholder = document.createElement('div');
   placeholder.className = 'placeholder';
   placeholder.textContent = placeholderText || 'Esperando participantes…';
-  let lastSpotlight = false;
+  let spotlightActive = false;
 
-  function getOrCreateTile(identity, source, label) {
+  function tile(identity, source, label) {
     const key = `${identity}|${source}`;
-    if (tileEls.has(key)) return tileEls.get(key);
-    const root = document.createElement('div');
-    root.className = 'tile' + (source === 'screen' ? ' screen' : '');
-    const video = document.createElement('video');
-    video.autoplay = true;
-    video.playsInline = true;
-    video.setAttribute('webkit-playsinline', 'true');
-    // Muted by default: mobile browsers block autoplay of unmuted video, which
-    // was making shared screens simply never start playing on phones. No audio
-    // is lost — LiveKit delivers audio tracks through their own hidden <audio>
-    // elements (see the TrackSubscribed handler below), never through this tag.
-    video.muted = true;
-    const labelEl = document.createElement('div');
-    labelEl.className = 'tile-label';
-    labelEl.textContent = label;
-    root.appendChild(video);
-    root.appendChild(labelEl);
-
+    if (tiles.has(key)) return tiles.get(key);
+    const root = document.createElement('article'); root.className = `tile${source === 'screen' ? ' screen' : ''}`;
+    const video = document.createElement('video'); video.autoplay = true; video.playsInline = true; video.muted = true;
+    const labelElement = document.createElement('div'); labelElement.className = 'tile-label'; labelElement.textContent = label;
+    root.append(video, labelElement);
     if (source === 'screen') {
-      const fsBtn = document.createElement('button');
-      fsBtn.type = 'button';
-      fsBtn.className = 'tile-fullscreen';
-      fsBtn.title = 'Pantalla completa';
-      fsBtn.textContent = '⛶';
-      fsBtn.onclick = () => {
-        if (document.fullscreenElement) document.exitFullscreen();
-        else root.requestFullscreen?.();
-      };
-      root.appendChild(fsBtn);
+      const fullscreen = document.createElement('button'); fullscreen.type = 'button'; fullscreen.className = 'tile-fullscreen'; fullscreen.textContent = 'Pantalla completa'; fullscreen.setAttribute('aria-label', 'Mostrar pantalla compartida en pantalla completa');
+      fullscreen.onclick = () => document.fullscreenElement ? document.exitFullscreen() : root.requestFullscreen?.(); root.appendChild(fullscreen);
     }
-
-    const entry = { root, video, labelEl };
-    tileEls.set(key, entry);
-    return entry;
+    const entry = { root, video, labelElement }; tiles.set(key, entry); return entry;
   }
 
-  function setTrack(identity, label, source, track, opts = {}) {
-    const entry = getOrCreateTile(identity, source, label);
-    entry.labelEl.textContent = label;
-    track.attach(entry.video);
-    entry.video.play?.().catch(() => {}); // nudge past strict mobile autoplay gating
-    layout();
+  function setTrack(identity, label, source, track) {
+    const entry = tile(identity, source, label); entry.labelElement.textContent = label;
+    track.attach(entry.video); entry.video.play?.().catch(() => {}); layout();
   }
 
-  // For your OWN screen share: deliberately never attach the live video
-  // locally. If your captured screen includes this browser tab, rendering
-  // your own share back to yourself creates an infinite "hall of mirrors"
-  // zoom tunnel. Everyone else still gets the real live video as normal.
   function setSelfSharePlaceholder(identity, label) {
-    const entry = getOrCreateTile(identity, 'screen', label);
-    entry.video.style.display = 'none';
-    if (!entry.placeholderEl) {
-      const p = document.createElement('div');
-      p.className = 'tile-self-placeholder';
-      p.innerHTML = '<span class="big">🖥️</span><span>Estás compartiendo tu pantalla</span><span class="hint">Los demás ven tu pantalla en vivo</span>';
-      entry.root.appendChild(p);
-      entry.placeholderEl = p;
-    }
+    const entry = tile(identity, 'screen', label); entry.video.hidden = true;
+    let message = entry.root.querySelector('.tile-self-placeholder');
+    if (!message) { message = document.createElement('div'); message.className = 'tile-self-placeholder'; message.textContent = 'Estás compartiendo tu pantalla. Los demás la ven en vivo.'; entry.root.appendChild(message); }
     layout();
   }
 
   function removeTrack(identity, source) {
-    const key = `${identity}|${source}`;
-    const entry = tileEls.get(key);
-    if (entry) {
-      entry.root.remove();
-      tileEls.delete(key);
-    }
+    const key = `${identity}|${source}`; const entry = tiles.get(key);
+    if (entry) { entry.video.srcObject = null; entry.root.remove(); tiles.delete(key); }
     layout();
   }
-
-  function removeParticipant(identity) {
-    removeTrack(identity, 'camera');
-    removeTrack(identity, 'screen');
-  }
-
-  function notifySpotlight(active) {
-    if (active === lastSpotlight) return;
-    lastSpotlight = active;
-    onSpotlightChange?.(active);
-  }
+  function removeParticipant(identity) { removeTrack(identity, 'camera'); removeTrack(identity, 'screen'); }
 
   function layout() {
-    containerEl.innerHTML = '';
-    if (tileEls.size === 0) {
-      containerEl.classList.remove('has-spotlight');
-      containerEl.appendChild(placeholder);
-      notifySpotlight(false);
-      return;
-    }
-    const screenEntry = [...tileEls.entries()].find(([key]) => key.endsWith('|screen'));
+    containerElement.replaceChildren();
+    if (!tiles.size) { containerElement.classList.remove('has-spotlight'); containerElement.appendChild(placeholder); notify(false); return; }
+    const screenEntry = [...tiles.entries()].find(([key]) => key.endsWith('|screen'));
     if (screenEntry) {
-      containerEl.classList.add('has-spotlight');
-      containerEl.appendChild(screenEntry[1].root);
-      const thumbs = document.createElement('div');
-      thumbs.className = 'spotlight-thumbs';
-      for (const [key, entry] of tileEls) {
-        if (key === screenEntry[0]) continue;
-        thumbs.appendChild(entry.root);
-      }
-      if (thumbs.children.length) containerEl.appendChild(thumbs);
-      notifySpotlight(true);
+      containerElement.classList.add('has-spotlight'); containerElement.appendChild(screenEntry[1].root);
+      const thumbnails = document.createElement('div'); thumbnails.className = 'spotlight-thumbs';
+      for (const [key, entry] of tiles) if (key !== screenEntry[0]) thumbnails.appendChild(entry.root);
+      if (thumbnails.children.length) containerElement.appendChild(thumbnails); notify(true);
     } else {
-      containerEl.classList.remove('has-spotlight');
-      for (const entry of tileEls.values()) containerEl.appendChild(entry.root);
-      notifySpotlight(false);
+      containerElement.classList.remove('has-spotlight'); for (const entry of tiles.values()) containerElement.appendChild(entry.root); notify(false);
     }
   }
 
+  function notify(active) { if (active !== spotlightActive) { spotlightActive = active; onSpotlightChange?.(active); } }
   layout();
   return { setTrack, setSelfSharePlaceholder, removeTrack, removeParticipant };
 }
 
-// Wires up a stage to every REMOTE participant's camera/screen tracks.
-// (Local tracks never fire TrackSubscribed, so callers manage those themselves.)
 function attachRemoteStageEvents(room, stage) {
-  // Some mobile browsers (notably iOS Safari) only allow starting playback
-  // from inside a user-gesture handler — retry any stalled media on the
-  // next tap/click anywhere on the page rather than staying silent forever.
-  document.addEventListener('click', () => {
-    document.querySelectorAll('video, audio').forEach((el) => {
-      if (el.paused) el.play?.().catch(() => {});
-    });
-  });
-
+  if (!document.documentElement.dataset.mediaResumeBound) {
+    document.documentElement.dataset.mediaResumeBound = 'true';
+    document.addEventListener('click', () => document.querySelectorAll('video, audio').forEach((media) => { if (media.paused) media.play?.().catch(() => {}); }));
+  }
   room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-    if (track.kind === 'audio') {
-      track.attach(); // plays automatically via a hidden audio element
-      return;
-    }
+    if (track.kind === 'audio') { const element = track.attach(); const speaker = document.getElementById('speakerSelect')?.value; if (speaker) element.setSinkId?.(speaker).catch(() => {}); return; }
     const source = publication.source === LivekitClient.Track.Source.ScreenShare ? 'screen' : 'camera';
-    const label = source === 'screen' ? `${participant.identity} (pantalla)` : participant.identity;
-    stage.setTrack(participant.identity, label, source, track);
+    const label = participant.name || participant.identity;
+    stage.setTrack(participant.identity, source === 'screen' ? `${label} (pantalla)` : label, source, track);
   });
-
   room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-    if (track.kind === 'audio') return;
-    const source = publication.source === LivekitClient.Track.Source.ScreenShare ? 'screen' : 'camera';
-    stage.removeTrack(participant.identity, source);
+    if (track.kind !== 'audio') stage.removeTrack(participant.identity, publication.source === LivekitClient.Track.Source.ScreenShare ? 'screen' : 'camera');
+    track.detach?.().forEach?.((element) => element.remove());
   });
-
-  room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
-    stage.removeParticipant(participant.identity);
-  });
+  room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => stage.removeParticipant(participant.identity));
 }

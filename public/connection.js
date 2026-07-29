@@ -1,89 +1,60 @@
-// Shared connection-state UI: live participant count + reconnect banner +
-// a floating "who's connected" panel toggled by clicking the count badge.
-// `getLabel()` should return whatever text the page normally wants in the
-// status badge (e.g. "en vivo · sala X" or "🔴 grabando · sala X") so we can
-// restore it once a reconnect succeeds.
-function attachConnectionUI(room, { statusBadge, countBadge, getLabel }) {
-  function updateCount() {
-    if (!countBadge) return;
-    const n = room.remoteParticipants.size + 1;
-    countBadge.textContent = `👥 ${n} conectado${n === 1 ? '' : 's'}`;
-  }
-
-  function restoreLabel() {
-    if (!statusBadge) return;
-    statusBadge.textContent = getLabel ? getLabel() : 'en vivo';
-    statusBadge.className = 'badge live';
-  }
-
-  // --- Floating participants panel ---
-  let panel = null;
-
-  function participantRow(p, isLocal) {
-    const canPublish = Boolean((p.permissions || p.permission || {}).canPublish);
-    const icon = canPublish ? '🎙️' : '👀';
-    const row = document.createElement('div');
-    row.className = 'participant-row';
-    row.textContent = `${icon} ${p.identity}${isLocal ? ' (tú)' : ''}`;
-    return row;
-  }
-
-  function renderPanel() {
-    if (!panel) return;
-    updateCount();
-    const list = panel.querySelector('.participants-list');
-    list.innerHTML = '';
-    list.appendChild(participantRow(room.localParticipant, true));
-    for (const p of room.remoteParticipants.values()) list.appendChild(participantRow(p, false));
-  }
-
-  function togglePanel() {
-    if (panel) {
-      panel.remove();
-      panel = null;
-      return;
+function attachConnectionUI(room, { statusBadge, countBadge, floatingModel, onParticipantsChanged }) {
+  const machine = new RATCore.ConnectionStateMachine((snapshot) => {
+    if (statusBadge) {
+      statusBadge.textContent = snapshot.label;
+      statusBadge.dataset.state = snapshot.state;
+      statusBadge.className = `connection-status state-${snapshot.state}`;
     }
-    panel = document.createElement('div');
-    panel.className = 'floating-panel';
-    panel.innerHTML = `
-      <div class="floating-panel-header">
-        <span>Participantes</span>
-        <button type="button" class="close-btn">✕</button>
-      </div>
-      <div class="participants-list"></div>
-    `;
-    document.body.appendChild(panel);
-    panel.querySelector('.close-btn').onclick = togglePanel;
-    renderPanel();
+    floatingModel?.update({ connection: snapshot.state, live: snapshot.connected });
+  });
+
+  function participants() {
+    return [room.localParticipant, ...room.remoteParticipants.values()];
   }
 
-  if (countBadge) {
-    countBadge.classList.add('clickable');
-    countBadge.onclick = togglePanel;
+  function updateCount() {
+    const count = participants().length;
+    if (countBadge) countBadge.textContent = `${count} participante${count === 1 ? '' : 's'}`;
+    floatingModel?.update({ participants: count });
+    onParticipantsChanged?.(participants());
   }
 
-  room.on(LivekitClient.RoomEvent.ParticipantConnected, () => {
-    renderPanel();
-    if (typeof playJoinSound === 'function') playJoinSound();
-  });
-  room.on(LivekitClient.RoomEvent.ParticipantDisconnected, () => {
-    renderPanel();
-    if (typeof playLeaveSound === 'function') playLeaveSound();
-  });
-  room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, renderPanel);
+  const handlers = {
+    participantConnected() { updateCount(); playJoinSound(); },
+    participantDisconnected() { updateCount(); playLeaveSound(); },
+    permissionsChanged() { onParticipantsChanged?.(participants()); },
+    reconnecting() { machine.set('reconnecting'); playAlert('unstable'); systemNotification('Problema de conexión', 'Intentando reconectar con la reunión.'); },
+    reconnected() { machine.set('connected'); playAlert('reconnected'); },
+    disconnected(reason) { machine.set(String(reason || '').toLowerCase().includes('removed') ? 'removed' : 'disconnected'); playAlert('critical'); },
+    qualityChanged(quality, participant) {
+      if (participant?.isLocal && String(quality).toLowerCase().includes('poor')) machine.set('poor_connection');
+    },
+  };
 
-  room.on(LivekitClient.RoomEvent.Reconnecting, () => {
-    if (!statusBadge) return;
-    statusBadge.textContent = '⚠️ reconectando…';
-    statusBadge.className = 'badge warn';
-  });
-  room.on(LivekitClient.RoomEvent.Reconnected, restoreLabel);
-  room.on(LivekitClient.RoomEvent.Disconnected, () => {
-    if (!statusBadge) return;
-    statusBadge.textContent = '🔌 desconectado — intenta recargar la página';
-    statusBadge.className = 'badge warn';
-  });
-
+  room.on(LivekitClient.RoomEvent.ParticipantConnected, handlers.participantConnected);
+  room.on(LivekitClient.RoomEvent.ParticipantDisconnected, handlers.participantDisconnected);
+  room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, handlers.permissionsChanged);
+  room.on(LivekitClient.RoomEvent.Reconnecting, handlers.reconnecting);
+  room.on(LivekitClient.RoomEvent.Reconnected, handlers.reconnected);
+  room.on(LivekitClient.RoomEvent.Disconnected, handlers.disconnected);
+  if (LivekitClient.RoomEvent.ConnectionQualityChanged) room.on(LivekitClient.RoomEvent.ConnectionQualityChanged, handlers.qualityChanged);
   updateCount();
-  return { updateCount, restoreLabel };
+  return {
+    machine,
+    updateCount,
+    dispose() {
+      for (const [name, handler] of Object.entries(handlers)) {
+        const eventName = {
+          participantConnected: LivekitClient.RoomEvent.ParticipantConnected,
+          participantDisconnected: LivekitClient.RoomEvent.ParticipantDisconnected,
+          permissionsChanged: LivekitClient.RoomEvent.ParticipantPermissionsChanged,
+          reconnecting: LivekitClient.RoomEvent.Reconnecting,
+          reconnected: LivekitClient.RoomEvent.Reconnected,
+          disconnected: LivekitClient.RoomEvent.Disconnected,
+          qualityChanged: LivekitClient.RoomEvent.ConnectionQualityChanged,
+        }[name];
+        if (eventName) room.off(eventName, handler);
+      }
+    },
+  };
 }

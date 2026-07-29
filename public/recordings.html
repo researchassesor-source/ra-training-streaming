@@ -1,81 +1,21 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Grabaciones · Research Assessor & Training Streaming</title>
-<link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grabaciones · R.A. Training</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
-<body>
-  <div class="topbar">
-    <div class="brand" id="brand"></div>
-    <a href="dashboard.html" class="badge" style="text-decoration:none;">← volver al panel</a>
-  </div>
-  <div class="recordings-page">
-    <p class="status-line" style="margin: 16px 0;">Filtrar por sala (déjalo vacío para ver todas):</p>
-    <div class="actions" style="display:flex; gap:10px; margin-bottom: 20px;">
-      <input id="roomFilter" placeholder="Nombre de sala" style="flex:1; padding:12px; border-radius:10px; border:1px solid var(--border); background:var(--bg-panel-2); color:var(--text); font-size:15px; min-height:46px;" />
-      <button id="btnFilter">Buscar</button>
-    </div>
-    <div id="list"></div>
-  </div>
-
+<body class="dashboard-body standalone-recordings">
+  <header class="dashboard-topbar"><div id="brand"></div><a class="button secondary" href="/dashboard.html">Volver al panel</a></header>
+  <main class="dashboard-main">
+    <section class="dashboard-section active">
+      <div class="section-heading"><div><p class="eyebrow">Contenido almacenado</p><h1>Grabaciones</h1></div></div>
+      <div class="toolbar"><input id="roomFilter" placeholder="Filtrar por sala" /><button id="searchButton" class="secondary" type="button">Buscar</button></div>
+      <div id="recordingList" class="recordings-list" aria-live="polite"></div>
+    </section>
+  </main>
   <script src="brand.js"></script>
-  <script>
-    renderBrand(document.getElementById('brand'), { tagline: false });
-
-    const token = localStorage.getItem('ratToken');
-    if (!token) window.location.href = 'index.html';
-
-    const params = new URLSearchParams(location.search);
-    const listEl = document.getElementById('list');
-    const roomFilter = document.getElementById('roomFilter');
-    roomFilter.value = params.get('room') || '';
-
-    function formatSize(bytes) {
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    }
-
-    async function load() {
-      listEl.innerHTML = '<p class="status-line">Cargando…</p>';
-      const room = roomFilter.value.trim();
-      const qs = room ? `?room=${encodeURIComponent(room)}` : '';
-      try {
-        const res = await fetch(`/api/recordings${qs}`, { headers: { Authorization: `Bearer ${token}` } });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'error desconocido');
-        if (data.items.length === 0) {
-          listEl.innerHTML = '<p class="status-line">No hay grabaciones todavía.</p>';
-          return;
-        }
-        listEl.innerHTML = '';
-        for (const item of data.items) {
-          const row = document.createElement('div');
-          row.className = 'recording-item';
-          const date = new Date(item.lastModified).toLocaleString();
-          row.innerHTML = `
-            <div>
-              <div>${item.key.split('/').pop()}</div>
-              <div class="meta">${date} · ${formatSize(item.size)}</div>
-            </div>
-          `;
-          const link = document.createElement('a');
-          link.href = item.url;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.textContent = '▶ Ver / Descargar';
-          link.style.color = '#7fb0ff';
-          row.appendChild(link);
-          listEl.appendChild(row);
-        }
-      } catch (err) {
-        listEl.innerHTML = `<p class="status-line">Error: ${err.message}</p>`;
-      }
-    }
-
-    document.getElementById('btnFilter').onclick = load;
-    load();
-  </script>
+  <script src="recordings.js"></script>
 </body>
 </html>

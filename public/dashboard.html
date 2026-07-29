@@ -1,311 +1,188 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Panel de organizador · Research Assessor & Training Streaming</title>
-<link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Panel organizador · R.A. Training</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
-<body>
-  <div class="topbar">
-    <div class="brand" id="brand"></div>
-    <div class="topbar-right">
-      <a href="recordings.html" class="badge" style="text-decoration:none;">🎬 Grabaciones</a>
-      <span class="badge" id="userBadge"></span>
-      <button id="btnLogout" class="secondary">Salir</button>
+<body class="dashboard-body">
+  <header class="dashboard-topbar">
+    <button id="menuToggle" class="icon-action mobile-only" type="button" aria-label="Abrir navegación" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+    </button>
+    <div id="brand"></div>
+    <div class="topbar-account">
+      <span id="currentUser" class="muted"></span>
+      <span id="currentRole" class="role-pill"></span>
+      <button id="logoutButton" class="secondary compact" type="button">Cerrar sesión</button>
     </div>
+  </header>
+
+  <div class="dashboard-layout">
+    <aside id="dashboardSidebar" class="dashboard-sidebar" aria-label="Navegación principal">
+      <nav id="dashboardNav">
+        <button class="nav-item active" data-section="summary" type="button"><span aria-hidden="true">▦</span>Resumen</button>
+        <button class="nav-item" data-section="calendar" type="button"><span aria-hidden="true">□</span>Calendario</button>
+        <button class="nav-item" data-section="meetings" type="button"><span aria-hidden="true">▷</span>Reuniones</button>
+        <button class="nav-item" data-section="recordings" type="button"><span aria-hidden="true">◉</span>Grabaciones</button>
+        <button class="nav-item admin-only" data-section="users" type="button"><span aria-hidden="true">◎</span>Usuarios</button>
+        <button class="nav-item admin-only" data-section="audit" type="button"><span aria-hidden="true">≡</span>Auditoría</button>
+        <button class="nav-item" data-section="settings" type="button"><span aria-hidden="true">◇</span>Configuración</button>
+      </nav>
+      <div class="sidebar-help">
+        <strong>Entorno protegido</strong>
+        <span>Invitaciones expirables y sesiones HttpOnly activas.</span>
+      </div>
+    </aside>
+
+    <main class="dashboard-main" id="dashboardMain">
+      <div id="globalNotice" class="notice" hidden role="status" aria-live="polite"></div>
+
+      <section class="dashboard-section active" data-section-panel="summary" aria-labelledby="summaryTitle">
+        <div class="section-heading">
+          <div><p class="eyebrow">Vista operativa</p><h1 id="summaryTitle">Resumen</h1></div>
+          <button class="primary" type="button" data-open-meeting>Nueva reunión</button>
+        </div>
+        <div id="summaryCards" class="summary-grid" aria-live="polite"></div>
+        <div class="dashboard-columns">
+          <article class="dashboard-card">
+            <div class="card-heading"><h2>Próximas reuniones</h2><button class="text-button" data-go="meetings">Ver todas</button></div>
+            <div id="upcomingList" class="compact-list"></div>
+          </article>
+          <article class="dashboard-card">
+            <div class="card-heading"><h2>Estado de servicios</h2></div>
+            <div id="serviceStatus" class="service-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="dashboard-section" data-section-panel="calendar" aria-labelledby="calendarTitle">
+        <div class="section-heading">
+          <div><p class="eyebrow">Programación</p><h1 id="calendarTitle">Calendario</h1></div>
+          <button class="primary" type="button" data-open-meeting>Nueva reunión</button>
+        </div>
+        <div class="toolbar calendar-toolbar">
+          <div class="segmented" role="group" aria-label="Vista de calendario">
+            <button type="button" data-calendar-view="month" class="active">Mes</button>
+            <button type="button" data-calendar-view="week">Semana</button>
+            <button type="button" data-calendar-view="day">Día</button>
+          </div>
+          <button id="calendarPrev" class="secondary compact" type="button" aria-label="Periodo anterior">Anterior</button>
+          <button id="calendarToday" class="secondary compact" type="button">Hoy</button>
+          <button id="calendarNext" class="secondary compact" type="button" aria-label="Periodo siguiente">Siguiente</button>
+          <strong id="calendarLabel"></strong>
+        </div>
+        <div class="filters-grid">
+          <label>Capacitador<input id="filterTrainer" placeholder="Todos" /></label>
+          <label>Estado<select id="filterStatus"><option value="">Todos</option></select></label>
+          <label>Tipo<select id="filterType"><option value="">Todos</option></select></label>
+          <label>Fecha<input id="filterDate" type="date" /></label>
+        </div>
+        <div id="calendarGrid" class="calendar-grid"></div>
+      </section>
+
+      <section class="dashboard-section" data-section-panel="meetings" aria-labelledby="meetingsTitle">
+        <div class="section-heading">
+          <div><p class="eyebrow">Ciclo de vida completo</p><h1 id="meetingsTitle">Reuniones</h1></div>
+          <button class="primary" type="button" data-open-meeting>Nueva reunión</button>
+        </div>
+        <div class="toolbar">
+          <input id="meetingSearch" type="search" placeholder="Buscar por título, sala o capacitador" aria-label="Buscar reuniones" />
+          <select id="meetingStatusFilter" aria-label="Filtrar reuniones por estado"><option value="">Todos los estados</option></select>
+          <label class="check-row admin-only"><input id="includeDeleted" type="checkbox" /> Incluir eliminadas</label>
+        </div>
+        <div id="meetingsList" class="meeting-list"></div>
+      </section>
+
+      <section class="dashboard-section" data-section-panel="recordings" aria-labelledby="recordingsTitle">
+        <div class="section-heading"><div><p class="eyebrow">Contenido almacenado</p><h1 id="recordingsTitle">Grabaciones</h1></div></div>
+        <div class="toolbar"><input id="recordingRoomFilter" placeholder="Filtrar por sala" /><button id="loadRecordings" class="secondary" type="button">Buscar</button></div>
+        <div id="recordingsList" class="recordings-list"></div>
+      </section>
+
+      <section class="dashboard-section admin-only" data-section-panel="users" aria-labelledby="usersTitle">
+        <div class="section-heading">
+          <div><p class="eyebrow">Acceso y credenciales</p><h1 id="usersTitle">Usuarios y credenciales</h1></div>
+          <button id="openUserModal" class="primary" type="button">Nuevo usuario</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Creado</th><th>Último acceso</th><th>Acciones</th></tr></thead>
+            <tbody id="usersTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="dashboard-section admin-only" data-section-panel="audit" aria-labelledby="auditTitle">
+        <div class="section-heading"><div><p class="eyebrow">Trazabilidad</p><h1 id="auditTitle">Auditoría</h1></div><button id="refreshAudit" class="secondary" type="button">Actualizar</button></div>
+        <div class="table-wrap">
+          <table class="data-table"><thead><tr><th>Fecha</th><th>Actor</th><th>Acción</th><th>Objetivo</th><th>Sala</th></tr></thead><tbody id="auditTable"></tbody></table>
+        </div>
+      </section>
+
+      <section class="dashboard-section" data-section-panel="settings" aria-labelledby="settingsTitle">
+        <div class="section-heading"><div><p class="eyebrow">Diagnóstico local</p><h1 id="settingsTitle">Configuración</h1></div></div>
+        <article class="dashboard-card settings-card">
+          <h2>Seguridad activa</h2>
+          <ul>
+            <li>Sesión administrativa en cookie HttpOnly.</li>
+            <li>Operaciones mutables protegidas con token anti-CSRF.</li>
+            <li>Invitaciones con expiración, revocación y límite de usos.</li>
+            <li>Salas cerradas por defecto; modo abierto solo mediante variable explícita de desarrollo.</li>
+          </ul>
+          <h2>Integraciones</h2>
+          <p id="settingsIntegrations" class="muted">Cargando estado…</p>
+        </article>
+      </section>
+    </main>
   </div>
 
-  <div class="dashboard-page">
-    <div class="card">
-      <h2>📅 Programar nueva reunión</h2>
-      <div class="field-row">
-        <div>
-          <label for="mTitle">Título</label>
-          <input id="mTitle" placeholder="Ej. Clase de inglés — Nivel 2" />
-        </div>
-        <div>
-          <label for="mDate">Fecha</label>
-          <input id="mDate" type="date" />
-        </div>
-        <div>
-          <label for="mTime">Hora</label>
-          <input id="mTime" type="time" />
-        </div>
+  <dialog id="meetingDialog" class="app-dialog">
+    <form id="meetingForm" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Programación</p><h2 id="meetingDialogTitle">Nueva reunión</h2></div><button class="icon-action" type="button" data-close-dialog aria-label="Cerrar">×</button></div>
+      <input id="meetingOriginalRoom" type="hidden" />
+      <div class="form-grid">
+        <label class="span-2">Título<input id="meetingTitle" maxlength="140" required /></label>
+        <label class="span-2">Descripción<textarea id="meetingDescription" maxlength="2000" rows="3"></textarea></label>
+        <label>Slug de sala<input id="meetingRoom" maxlength="80" placeholder="se genera desde el título" /></label>
+        <label>Capacitador<input id="meetingTrainer" maxlength="100" required /></label>
+        <label>Fecha y hora<input id="meetingScheduledAt" type="datetime-local" /></label>
+        <label>Duración (minutos)<input id="meetingDuration" type="number" min="1" max="1440" value="60" required /></label>
+        <label>Tipo<select id="meetingType"><option>WEBINAR</option><option>SESSION</option><option>CLASS</option></select></label>
+        <label>Estado<select id="meetingStatus"></select></label>
+        <label>Capacidad<input id="meetingCapacity" type="number" min="0" max="100000" value="500" /></label>
+        <label>Acceso asistentes<select id="meetingViewerAccess"><option>INVITATION</option><option>AUTHENTICATED</option><option>CLOSED</option></select></label>
+        <label>Acceso panelistas<select id="meetingPanelistAccess"><option>INVITATION</option><option>AUTHENTICATED</option><option>CLOSED</option></select></label>
       </div>
-      <div class="actions" style="margin-top: 14px;">
-        <button id="btnCreateMeeting">Crear reunión y generar enlaces</button>
-      </div>
-      <p class="status-line" id="createMsg"></p>
-    </div>
+      <fieldset class="options-fieldset"><legend>Funciones permitidas</legend>
+        <label><input id="meetingAllowChat" type="checkbox" checked /> Chat</label>
+        <label><input id="meetingAllowFiles" type="checkbox" checked /> Archivos</label>
+        <label><input id="meetingAllowReactions" type="checkbox" checked /> Reacciones</label>
+        <label><input id="meetingAllowRaiseHand" type="checkbox" checked /> Mano levantada</label>
+        <label><input id="meetingAllowRecording" type="checkbox" checked /> Grabación</label>
+        <label><input id="meetingConsent" type="checkbox" checked /> Consentimiento de grabación</label>
+      </fieldset>
+      <p id="meetingFormError" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancelar</button><button id="saveMeeting" class="primary" type="submit">Guardar reunión</button></div>
+    </form>
+  </dialog>
 
-    <div class="card">
-      <h2>🎤 Reuniones programadas</h2>
-      <div id="meetingsList"><p class="status-line">Cargando…</p></div>
-    </div>
-
-    <div class="card">
-      <h2>🔑 Crear credenciales de acceso</h2>
-      <p class="status-line">Da acceso a otro organizador para que también pueda programar reuniones.</p>
-      <div class="field-row">
-        <div>
-          <label for="newUser">Usuario nuevo</label>
-          <input id="newUser" />
-        </div>
-        <div>
-          <label for="newPass">Contraseña</label>
-          <input id="newPass" type="password" placeholder="Mínimo 6 caracteres" />
-        </div>
-      </div>
-      <div class="actions" style="margin-top: 14px;">
-        <button id="btnCreateUser" class="secondary">Crear credencial</button>
-      </div>
-      <p class="status-line" id="userMsg"></p>
-    </div>
-  </div>
+  <dialog id="userDialog" class="app-dialog small-dialog">
+    <form id="userForm" method="dialog">
+      <div class="dialog-heading"><h2 id="userDialogTitle">Nuevo usuario</h2><button class="icon-action" type="button" data-close-user aria-label="Cerrar">×</button></div>
+      <input id="userOriginalUsername" type="hidden" />
+      <label>Usuario<input id="userUsername" minlength="3" maxlength="50" required /></label>
+      <label>Rol<select id="userRole"><option>ADMIN</option><option>ORGANIZER</option><option>PANELIST</option><option>VIEWER</option></select></label>
+      <label id="userPasswordLabel">Contraseña<input id="userPassword" type="password" minlength="10" maxlength="128" autocomplete="new-password" /></label>
+      <label class="check-row"><input id="userActive" type="checkbox" checked /> Usuario activo</label>
+      <p id="userFormError" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="secondary" data-close-user>Cancelar</button><button class="primary" type="submit">Guardar</button></div>
+    </form>
+  </dialog>
 
   <script src="brand.js"></script>
-  <script>
-    renderBrand(document.getElementById('brand'), { tagline: false });
-
-    const token = localStorage.getItem('ratToken');
-    if (!token) window.location.href = 'index.html';
-
-    function authHeaders(extra = {}) {
-      return { Authorization: `Bearer ${token}`, ...extra };
-    }
-
-    function copyToClipboard(text, btn) {
-      navigator.clipboard.writeText(text).then(() => {
-        const original = btn.textContent;
-        btn.textContent = '✓ Copiado';
-        setTimeout(() => { btn.textContent = original; }, 1500);
-      });
-    }
-
-    function linkRow(label, url) {
-      const row = document.createElement('div');
-      row.className = 'link-row';
-      const labelEl = document.createElement('span');
-      labelEl.className = 'link-label';
-      labelEl.textContent = label;
-      const input = document.createElement('input');
-      input.readOnly = true;
-      input.value = url;
-      input.style.cssText = 'flex:1; min-width:180px; padding:8px; border-radius:8px; border:1px solid var(--border); background:var(--bg-panel); color:var(--text); font-size:12px;';
-      const btn = document.createElement('button');
-      btn.textContent = 'Copiar';
-      btn.className = 'secondary';
-      btn.onclick = () => copyToClipboard(url, btn);
-      row.appendChild(labelEl);
-      row.appendChild(input);
-      row.appendChild(btn);
-      return row;
-    }
-
-    function buildWhatsAppMessage(m, viewerUrl) {
-      const when = m.scheduledAt
-        ? new Date(m.scheduledAt).toLocaleString('es', { dateStyle: 'full', timeStyle: 'short' })
-        : 'disponible ahora';
-      return `📅 *${m.title}*\n🗓️ ${when}\n\n👉 Únete aquí: ${viewerUrl}\n\n_Research Assessor & Training Streaming_`;
-    }
-
-    function meetingCard(m) {
-      const div = document.createElement('div');
-      div.className = 'meeting-item';
-
-      const header = document.createElement('div');
-      header.style.cssText = 'display:flex; justify-content:space-between; align-items:flex-start; gap:10px;';
-      const when = m.scheduledAt ? new Date(m.scheduledAt).toLocaleString() : 'Sin fecha (disponible ya)';
-      const info = document.createElement('div');
-      info.innerHTML = `<div class="title">${m.title}</div><div class="meta">${when} · sala "${m.room}"</div>`;
-      const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex; gap:6px; flex-shrink:0;';
-      const editBtn = document.createElement('button');
-      editBtn.className = 'secondary';
-      editBtn.style.cssText = 'padding:8px 12px; min-height:36px; font-size:13px;';
-      editBtn.textContent = '✏️ Editar';
-      const delBtn = document.createElement('button');
-      delBtn.className = 'danger';
-      delBtn.style.cssText = 'padding:8px 12px; min-height:36px; font-size:13px;';
-      delBtn.textContent = '🗑️ Eliminar';
-      actions.appendChild(editBtn);
-      actions.appendChild(delBtn);
-      header.appendChild(info);
-      header.appendChild(actions);
-      div.appendChild(header);
-
-      const presenterUrl = `${location.origin}/presenter.html?room=${encodeURIComponent(m.room)}&code=${encodeURIComponent(m.hostCode)}`;
-      const viewerUrl = `${location.origin}/viewer.html?room=${encodeURIComponent(m.room)}&code=${encodeURIComponent(m.viewerPassword)}`;
-      div.appendChild(linkRow('Panelistas', presenterUrl));
-      div.appendChild(linkRow('Espectadores', viewerUrl));
-
-      const waMessage = buildWhatsAppMessage(m, viewerUrl);
-      const waRow = document.createElement('div');
-      waRow.className = 'link-row';
-      const waLabel = document.createElement('span');
-      waLabel.className = 'link-label';
-      waLabel.textContent = 'WhatsApp';
-      const waCopyBtn = document.createElement('button');
-      waCopyBtn.className = 'secondary';
-      waCopyBtn.textContent = '📋 Copiar mensaje';
-      waCopyBtn.onclick = () => copyToClipboard(waMessage, waCopyBtn);
-      const waSendLink = document.createElement('a');
-      waSendLink.href = `https://wa.me/?text=${encodeURIComponent(waMessage)}`;
-      waSendLink.target = '_blank';
-      waSendLink.rel = 'noopener noreferrer';
-      waSendLink.textContent = '🟢 Enviar por WhatsApp';
-      waSendLink.className = 'secondary';
-      waSendLink.style.cssText = 'display:inline-flex; align-items:center; padding:8px 12px; font-size:13px; text-decoration:none; color:var(--text); border-radius:8px;';
-      waRow.appendChild(waLabel);
-      waRow.appendChild(waCopyBtn);
-      waRow.appendChild(waSendLink);
-      div.appendChild(waRow);
-
-      const editForm = document.createElement('div');
-      editForm.className = 'field-row';
-      editForm.style.cssText = 'margin-top:12px; display:none;';
-      editForm.innerHTML = `
-        <div><label>Título</label><input class="editTitle" value="${m.title.replace(/"/g, '&quot;')}" /></div>
-        <div><label>Fecha</label><input class="editDate" type="date" value="${m.scheduledAt ? new Date(m.scheduledAt).toISOString().slice(0, 10) : ''}" /></div>
-        <div><label>Hora</label><input class="editTime" type="time" value="${m.scheduledAt ? new Date(m.scheduledAt).toTimeString().slice(0, 5) : ''}" /></div>
-      `;
-      const editActions = document.createElement('div');
-      editActions.className = 'actions';
-      editActions.style.cssText = 'margin-top:10px; display:none;';
-      const saveBtn = document.createElement('button');
-      saveBtn.textContent = 'Guardar cambios';
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'secondary';
-      cancelBtn.textContent = 'Cancelar';
-      editActions.appendChild(saveBtn);
-      editActions.appendChild(cancelBtn);
-      div.appendChild(editForm);
-      div.appendChild(editActions);
-
-      editBtn.onclick = () => {
-        editForm.style.display = editForm.style.display === 'none' ? 'flex' : 'none';
-        editActions.style.display = editActions.style.display === 'none' ? 'flex' : 'none';
-      };
-      cancelBtn.onclick = () => {
-        editForm.style.display = 'none';
-        editActions.style.display = 'none';
-      };
-      saveBtn.onclick = async () => {
-        const title = editForm.querySelector('.editTitle').value.trim();
-        const date = editForm.querySelector('.editDate').value;
-        const time = editForm.querySelector('.editTime').value;
-        const scheduledAt = date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
-        saveBtn.disabled = true;
-        try {
-          const res = await fetch(`/api/meetings/${encodeURIComponent(m.room)}`, {
-            method: 'PATCH',
-            headers: authHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ title, scheduledAt }),
-          });
-          if (!res.ok) throw new Error((await res.json()).error || 'error desconocido');
-          await loadMeetings();
-        } catch (err) {
-          alert('No se pudo guardar: ' + err.message);
-          saveBtn.disabled = false;
-        }
-      };
-      delBtn.onclick = async () => {
-        if (!confirm(`¿Eliminar la reunión "${m.title}"? Los enlaces compartidos dejarán de funcionar.`)) return;
-        delBtn.disabled = true;
-        try {
-          const res = await fetch(`/api/meetings/${encodeURIComponent(m.room)}`, {
-            method: 'DELETE',
-            headers: authHeaders(),
-          });
-          if (!res.ok) throw new Error((await res.json()).error || 'error desconocido');
-          await loadMeetings();
-        } catch (err) {
-          alert('No se pudo eliminar: ' + err.message);
-          delBtn.disabled = false;
-        }
-      };
-
-      return div;
-    }
-
-    async function loadMe() {
-      const res = await fetch('/api/auth/me', { headers: authHeaders() });
-      if (!res.ok) {
-        localStorage.removeItem('ratToken');
-        window.location.href = 'index.html';
-        return;
-      }
-      const data = await res.json();
-      document.getElementById('userBadge').textContent = `👤 ${data.username}`;
-    }
-
-    async function loadMeetings() {
-      const listEl = document.getElementById('meetingsList');
-      const res = await fetch('/api/meetings', { headers: authHeaders() });
-      if (!res.ok) { listEl.innerHTML = '<p class="status-line">Error al cargar reuniones.</p>'; return; }
-      const data = await res.json();
-      if (data.items.length === 0) {
-        listEl.innerHTML = '<p class="status-line">Aún no hay reuniones programadas.</p>';
-        return;
-      }
-      listEl.innerHTML = '';
-      for (const m of data.items) listEl.appendChild(meetingCard(m));
-    }
-
-    document.getElementById('btnCreateMeeting').onclick = async () => {
-      const title = document.getElementById('mTitle').value.trim();
-      const date = document.getElementById('mDate').value;
-      const time = document.getElementById('mTime').value;
-      const msgEl = document.getElementById('createMsg');
-      if (!title) { msgEl.textContent = 'Escribe un título para la reunión.'; return; }
-      const scheduledAt = date ? new Date(`${date}T${time || '00:00'}`).toISOString() : null;
-      msgEl.textContent = 'Creando…';
-      try {
-        const res = await fetch('/api/meetings', {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ title, scheduledAt }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'error desconocido');
-        msgEl.textContent = `Reunión "${data.title}" creada.`;
-        document.getElementById('mTitle').value = '';
-        await loadMeetings();
-      } catch (err) {
-        msgEl.textContent = 'Error: ' + err.message;
-      }
-    };
-
-    document.getElementById('btnCreateUser').onclick = async () => {
-      const username = document.getElementById('newUser').value.trim();
-      const password = document.getElementById('newPass').value;
-      const msgEl = document.getElementById('userMsg');
-      msgEl.textContent = 'Creando…';
-      try {
-        const res = await fetch('/api/auth/users', {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ username, password }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'error desconocido');
-        msgEl.textContent = `Credencial "${username}" creada.`;
-        document.getElementById('newUser').value = '';
-        document.getElementById('newPass').value = '';
-      } catch (err) {
-        msgEl.textContent = 'Error: ' + err.message;
-      }
-    };
-
-    document.getElementById('btnLogout').onclick = () => {
-      localStorage.removeItem('ratToken');
-      localStorage.removeItem('ratUsername');
-      window.location.href = 'index.html';
-    };
-
-    loadMe();
-    loadMeetings();
-  </script>
+  <script src="dashboard.js"></script>
 </body>
 </html>
