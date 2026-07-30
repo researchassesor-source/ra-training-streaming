@@ -97,7 +97,7 @@ test('chat keyboard rules support Enter, Shift+Enter and IME composition safely'
 });
 
 test('official logo and optimized derivatives exist and all required surfaces reference them', () => {
-  const assets = ['streaming-app-logo.png', 'streaming-app-logo-32.png', 'streaming-app-logo-180.png', 'streaming-app-logo-192.png', 'streaming-app-logo-512.png'];
+  const assets = ['streaming-app-logo.png', 'favicon-16.png', 'favicon-32.png', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'mascot-original.png', 'mascot-login.png', 'mascot-login.webp'];
   for (const asset of assets) assert.ok(fs.statSync(path.join(publicDir, 'assets', asset)).size > 0, asset);
   const references = {
     login: fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8'),
@@ -106,27 +106,38 @@ test('official logo and optimized derivatives exist and all required surfaces re
     floating: fs.readFileSync(path.join(publicDir, 'floating-bar.js'), 'utf8'),
     recordings: fs.readFileSync(path.join(publicDir, 'recordings.html'), 'utf8'),
   };
-  for (const [surface, source] of Object.entries(references)) assert.match(source, /streaming-app-logo/, surface);
-  assert.match(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'), /streaming-app-logo-512\.png/);
+  for (const [surface, source] of Object.entries(references)) assert.match(source, /icon-192|favicon-32|mascot-login/, surface);
+  assert.match(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'), /icon-512\.png/);
   const brandSource = fs.readFileSync(path.join(publicDir, 'brand.js'), 'utf8');
   const visibleBrandSources = [brandSource, fs.readFileSync(path.join(publicDir, 'sounds.js'), 'utf8'), references.login].join('\n');
-  assert.doesNotMatch(visibleBrandSources, /assets\/logo\.png|mascot\.png/);
+  assert.doesNotMatch(visibleBrandSources, /assets\/logo\.png|assets\/mascot\.png/);
   assert.equal((brandSource.match(/<img/g) || []).length, 1);
 });
 
-test('mobile login isolates the form and hidden controls cannot reappear through layout CSS', () => {
+test('mobile login keeps the form first and renders a compact non-overlapping mascot', () => {
   const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
-  assert.match(css, /@media \(max-width: 860px\)[\s\S]*?\.login-visual\s*\{\s*display:\s*none/);
-  assert.match(css, /\.login-card\s*\{\s*width:\s*min\(520px, calc\(100% - 32px\)\)/);
+  assert.match(css, /@media \(max-width: 1024px\)[\s\S]*?\.login-card\s*\{\s*grid-row:\s*1/);
+  assert.match(css, /@media \(max-width: 1024px\)[\s\S]*?\.login-mascot\s*\{/);
+  assert.match(css, /\.login-mascot img\s*\{[^}]*object-fit:\s*contain/);
   assert.match(css, /\.empty-state\s*\{[^}]*overflow-wrap:\s*anywhere/);
 });
 
 test('room reconnection re-queries real recording status and zero counters stay hidden', () => {
   const roomUi = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
   assert.match(roomUi, /onReconnected: \(\) => queryRecordingStatus\(\)/);
+  assert.match(roomUi, /ui\.roomUi\.updateCount\(\)/);
   assert.match(roomUi, /element\.hidden = count < 1/);
   assert.doesNotMatch(roomUi, /setRecordingIndicator\(Boolean/);
+});
+
+test('media controls time out safely and block duplicate screen-share requests', () => {
+  const roomUi = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
+  assert.match(roomUi, /function withMediaTimeout/);
+  assert.match(roomUi, /setMicrophoneEnabled[\s\S]*withMediaTimeout|withMediaTimeout\(ui\.room\.localParticipant\.setMicrophoneEnabled/);
+  assert.match(roomUi, /withMediaTimeout\(ui\.room\.localParticipant\.setCameraEnabled/);
+  assert.match(roomUi, /if \(ui\.screenBusy\) return/);
+  assert.match(roomUi, /withMediaTimeout\(ui\.room\.localParticipant\.setScreenShareEnabled/);
 });
 
 test('preflight stays visible until LiveKit connects and exposes a retry on failure', () => {
@@ -145,8 +156,22 @@ test('credential forms expose accessible password toggles and meeting fields use
   assert.match(login, /data-password-toggle="password"/);
   assert.match(dashboard, /data-password-toggle="userPassword"/);
   assert.match(dashboard, /data-password-toggle="resetUserPassword"/);
+  assert.match(dashboard, /id="userPasswordConfirm"/);
+  assert.match(dashboard, /id="resetUserPasswordConfirm"/);
   assert.match(dashboard, /required-note[\s\S]*Campos obligatorios/);
   assert.match(dashboard, /Identificador de sala \(slug\)/);
   assert.match(dashboard, /value="WEBINAR">Webinar/);
   assert.match(dashboard, /value="INVITATION">Invitación/);
+});
+
+test('titles, visible branding and preflight structure have no legacy naming regressions', () => {
+  const sources = fs.readdirSync(publicDir).filter((name) => /\.(?:html|js|webmanifest)$/.test(name)).map((name) => fs.readFileSync(path.join(publicDir, name), 'utf8')).join('\n');
+  assert.doesNotMatch(sources, /Finance|Panel organizado(?!r)|Research Assessor/);
+  assert.match(fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8'), /<title>Iniciar sesión \| R\.A\. Training Streaming<\/title>/);
+  assert.match(fs.readFileSync(path.join(publicDir, 'dashboard.html'), 'utf8'), /<title>Panel organizador \| R\.A\. Training Streaming<\/title>/);
+  const room = fs.readFileSync(path.join(publicDir, 'presenter.html'), 'utf8');
+  assert.match(room, /preflight-header/);
+  assert.match(room, /preflight-scroll/);
+  assert.match(room, /preflight-footer/);
+  assert.match(room, /id="livekitStatus"/);
 });

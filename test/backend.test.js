@@ -12,7 +12,7 @@ process.env.ADMIN_USERNAME = 'rootadmin';
 process.env.ADMIN_PASSWORD = 'Bootstrap-password-123';
 process.env.COOKIE_SECURE = 'false';
 process.env.ALLOW_OPEN_DEV_ROOMS = 'false';
-process.env.LOGIN_RATE_LIMIT_MAX = '5';
+process.env.LOGIN_RATE_LIMIT_MAX = '8';
 process.env.LOGIN_RATE_LIMIT_WINDOW = '60';
 process.env.CHAT_RATE_LIMIT_MAX = '2';
 
@@ -40,6 +40,7 @@ const mockEgressClient = {
   async stopEgress() {},
   async startRoomCompositeEgress() { return { egressId: 'egress-test' }; },
 };
+let mockLivekitAvailable = true;
 
 let server;
 let baseUrl;
@@ -70,7 +71,10 @@ async function login(username = 'rootadmin', password = 'Bootstrap-password-123'
 
 test.before(async () => {
   await fs.rm(testDataDir, { recursive: true, force: true });
-  const app = createApp({ services: { roomService: mockRoomService, egressClient: mockEgressClient } });
+  const app = createApp({
+    services: { roomService: mockRoomService, egressClient: mockEgressClient },
+    livekitProbe: async () => ({ configured: true, available: mockLivekitAvailable, state: mockLivekitAvailable ? 'AVAILABLE' : 'UNAVAILABLE', mode: 'local', checkedAt: new Date().toISOString(), errorCode: mockLivekitAvailable ? undefined : 'LIVEKIT_UNREACHABLE' }),
+  });
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -103,7 +107,7 @@ test('inactive users cannot authenticate', async () => {
 });
 
 test('login rate limiting returns 429 without leaking credential details', async () => {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     const result = await request('/api/auth/login', { method: 'POST', body: { username: 'rate-user', password: 'wrong' } });
     assert.equal(result.response.status, 401);
   }
@@ -284,6 +288,41 @@ test('meeting endpoints require both session and CSRF and preserve unique rooms'
   assert.equal(untrustedRoom.response.status, 401);
   const securedRoom = await request('/api/rooms', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: { room: 'api-meeting' } });
   assert.equal(securedRoom.response.status, 200);
+});
+
+test('LiveKit unavailable never marks a scheduled meeting live or writes a real start event', async () => {
+  const admin = await login();
+  const before = await request('/api/dashboard/summary', { cookie: admin.cookie });
+  mockLivekitAvailable = false;
+  const launch = await request('/api/meetings/api-meeting/launch', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(launch.response.status, 503);
+  assert.equal(launch.data.code, 'LIVEKIT_UNAVAILABLE');
+  assert.equal((await meetings.getMeeting('api-meeting')).status, 'SCHEDULED');
+  const after = await request('/api/dashboard/summary', { cookie: admin.cookie });
+  assert.equal(after.data.activeMeetings, before.data.activeMeetings);
+  const events = await audit.listEvents({ room: 'api-meeting', limit: 100 });
+  assert.equal(events.filter((item) => ['ROOM_CONNECTED', 'MEETING_STARTED'].includes(item.action)).length, 0);
+  assert.equal(events.filter((item) => item.action === 'ROOM_CONNECTION_FAILED').length, 1);
+  mockLivekitAvailable = true;
+});
+
+test('a confirmed LiveKit participant marks the meeting live once and does not duplicate audit', async () => {
+  const admin = await login();
+  const launch = await request('/api/meetings/api-meeting/launch', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(launch.response.status, 200, JSON.stringify(launch.data));
+  assert.equal((await meetings.getMeeting('api-meeting')).status, 'SCHEDULED');
+  const roomSession = await request('/api/room-session', { cookie: launch.cookie });
+  assert.equal(roomSession.response.status, 200);
+  mockRoomService.participants = [{ identity: roomSession.data.identity }];
+  const connected = await request('/api/room/connection', { method: 'POST', cookie: launch.cookie, roomCsrf: roomSession.data.csrfToken, body: { event: 'connected' } });
+  assert.equal(connected.response.status, 200, JSON.stringify(connected.data));
+  assert.equal(connected.data.meetingStatus, 'LIVE');
+  assert.equal((await meetings.getMeeting('api-meeting')).status, 'LIVE');
+  const duplicate = await request('/api/room/connection', { method: 'POST', cookie: launch.cookie, roomCsrf: roomSession.data.csrfToken, body: { event: 'connected' } });
+  assert.equal(duplicate.response.status, 200);
+  const events = await audit.listEvents({ room: 'api-meeting', limit: 100 });
+  assert.equal(events.filter((item) => item.action === 'ROOM_CONNECTED').length, 1);
+  mockRoomService.participants = [];
 });
 
 test('invitation redemption removes the token from the URL and creates a room cookie', async () => {

@@ -10,6 +10,9 @@ const {
   roleLabel,
   roomConnectionErrorMessage,
   safeHttpUrl,
+  calendarRange,
+  meetingsForLocalDay,
+  upcomingMeetings,
 } = require('../public/app-core');
 const { nextPasswordType } = require('../public/password-toggle');
 
@@ -88,4 +91,27 @@ test('visible roles and room connection failures are translated safely', () => {
 test('password visibility toggles between secure and readable input types', () => {
   assert.equal(nextPasswordType('password'), 'text');
   assert.equal(nextPasswordType('text'), 'password');
+});
+
+test('calendar ranges keep meetings synchronized across month, week and day views', () => {
+  const meeting = { title: 'Reunión calendario', scheduledAt: '2032-07-14T15:30:00-05:00', status: 'SCHEDULED' };
+  const anchor = new Date('2032-07-14T12:00:00-05:00');
+  for (const view of ['month', 'week', 'day']) {
+    const days = calendarRange(anchor, view);
+    assert.ok(days.some((day) => meetingsForLocalDay([meeting], day).length === 1), view);
+  }
+  assert.equal(calendarRange(anchor, 'month').length, 42);
+  assert.equal(calendarRange(anchor, 'week').length, 7);
+  assert.equal(calendarRange(anchor, 'day').length, 1);
+});
+
+test('upcoming meetings are sorted, exclude past and terminal states', () => {
+  const now = new Date('2035-01-10T12:00:00.000Z');
+  const items = [
+    { title: 'Pasada', scheduledAt: '2035-01-09T12:00:00.000Z', status: 'SCHEDULED' },
+    { title: 'Futura dos', scheduledAt: '2035-01-12T12:00:00.000Z', status: 'SCHEDULED' },
+    { title: 'Cancelada', scheduledAt: '2035-01-11T12:00:00.000Z', status: 'CANCELLED' },
+    { title: 'Futura uno', scheduledAt: '2035-01-11T10:00:00.000Z', status: 'SCHEDULED' },
+  ];
+  assert.deepEqual(upcomingMeetings(items, now).map((item) => item.title), ['Futura uno', 'Futura dos']);
 });
