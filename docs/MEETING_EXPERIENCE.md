@@ -2,6 +2,8 @@
 
 Esta guía describe la sala de R.A. Training Streaming. Los controles se ejecutan sobre una única sesión LiveKit; abrir paneles o Picture-in-Picture no reconstruye la sala ni duplica tracks.
 
+Cada pestaña conserva un selector opaco de sesión de sala. Por eso un organizador y un asistente pueden permanecer abiertos simultáneamente en el mismo perfil del navegador sin sobrescribir identidad ni CSRF. El selector no autentica por sí solo: el servidor siempre exige la cookie HttpOnly firmada correspondiente.
+
 ## Roles y modos
 
 | Función | Organizador | Panelista | Asistente |
@@ -26,11 +28,13 @@ La pantalla compartida ocupa el spotlight. La cámara local permanece como minia
 
 El navegador decide si comparte pestaña, ventana o pantalla completa. La aplicación solicita audio, pero solo muestra **Audio de pantalla incluido** cuando LiveKit publica el track `ScreenShareAudio`. El evento `ended` restaura escenario, botones, aviso y auditoría aunque la captura termine desde el indicador nativo.
 
+El estado visual procede del track publicado y sus eventos, no del clic ni de la mera existencia de una publicación. Cámara activa requiere un track de vídeo vivo y no silenciado; al silenciarse, terminar o despublicarse vuelve el avatar. `ScreenShare` y `ScreenShareAudio` se adjuntan por separado: el vídeo entra al spotlight y el audio remoto se monta como elemento no visual. Nunca se prueba `video.src`, porque LiveKit adjunta streams mediante `srcObject`.
+
 ## Controles flotantes
 
 Al iniciar pantalla aparece un toast **Mantén los controles visibles mientras presentas**. La preferencia local **Abrir panel flotante al compartir** permite solicitar apertura automática desde ese gesto.
 
-Cuando `documentPictureInPicture` funciona se abre una ventana Document PiP con logo, título, temporizador, conexión, calidad, bloqueo, participantes, manos, mensajes, preguntas pendientes, reacción reciente y grabación real. Incluye micrófono, cámara, detener pantalla, chat, preguntas, participantes, mano/ver manos, Más, Salir y volver.
+Cuando `documentPictureInPicture` funciona se abre inicialmente una barra compacta de aproximadamente 760×110 con estado, temporizador y acciones esenciales. El usuario puede expandirla a la vista detallada con logo, título, conexión, calidad, bloqueo, participantes, manos, mensajes, preguntas pendientes, reacción reciente y grabación real. Incluye micrófono, cámara, detener pantalla, chat, preguntas, participantes, mano/ver manos, Más, Salir y volver. La preferencia compacta/expandida se conserva mientras vive la instancia.
 
 Cerrar la ventana no altera reunión ni medios y el botón permite reabrirla. Si la API no existe, falla o cierra inmediatamente, se abre un panel arrastrable dentro de la reunión. Ese fallback conserva todos los controles, pero no puede permanecer sobre otra aplicación. No se promete “siempre encima” fuera de navegadores compatibles.
 
@@ -51,6 +55,8 @@ Solo se retransmite `question-changed`/`question-deleted`; cada cliente vuelve a
 Participantes muestra nombre, rol humano, micrófono, cámara, pantalla, mano, hora de entrada y calidad disponible. Al estar solo, el organizador ve enlaces de invitación de asistente y panelista.
 
 El organizador puede silenciar una pista publicada, pedir activación de micrófono, pedir apagar cámara, dar/quitar palabra, expulsar o bloquear. Las solicitudes aparecen como toast con decisión del participante: la plataforma nunca enciende cámara o micrófono remoto. Bloquear revoca la invitación asociada cuando existe.
+
+Una petición de micrófono tiene identificador, caducidad y deduplicación. El asistente elige **Activar micrófono** o **Ahora no**. Solo después de aceptar, el servidor concede temporalmente publicación y el cliente intenta publicar el track; el organizador recibe estados distintos para aceptación, activación real, rechazo o fallo. La concesión se conserva al reconectar y **Quitar palabra** la revoca explícitamente. La UI no anuncia micrófono activo si el dispositivo o la publicación fallan.
 
 La cola de manos conserva orden y hora. En Webinar organizador/panelista revisa la cola; solo organizador cambia permisos de publicación. Sonido, toast, contador, notificación y modelo flotante comparten el mismo evento.
 

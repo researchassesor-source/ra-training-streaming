@@ -22,6 +22,9 @@
 - Bloqueo reversible validado antes del consumo de invitación; participantes existentes continúan sin convertir el bloqueo en revocación.
 - Q&A con autor e identidad derivados de sesión, edición propia solo mientras está pendiente y moderación autorizada en servidor.
 - Solicitar micrófono o apagar cámara se comunica al participante; nunca se intenta encender remotamente un dispositivo sin consentimiento.
+- Cada acceso a sala emite una cookie HttpOnly firmada con nombre único y un selector opaco por pestaña. `X-Room-Session-ID` solo selecciona la cookie; no reemplaza firma, expiración, rol, sala ni CSRF.
+- Los errores de sesión y CSRF distinguen ausencia, expiración e incompatibilidad de token sin incluir cookies, firmas ni valores CSRF en respuestas o logs.
+- Conceder palabra persiste una autorización de publicación limitada a esa identidad y sala para que sobreviva a una reconexión; quitar palabra, expulsar o bloquear la revoca.
 
 ## Políticas de roles
 
@@ -41,7 +44,7 @@ Express emite `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `P
 
 ## Auditoría de reunión
 
-Se registran entrada, salida explícita, reconexión, pantalla iniciada/detenida, micrófono silenciado, promoción, degradación, expulsión/bloqueo, bloqueo de sala, preguntas creadas/respondidas/descartadas, grabación y finalización. No se guardan textos completos del chat ni de las preguntas en auditoría. Una salida abrupta sin petición HTTP depende de futura integración de webhooks LiveKit para quedar registrada de forma autoritativa.
+Se registran entrada, salida explícita, reconexión, pantalla iniciada/detenida, micrófono silenciado, petición/aceptación/rechazo/fallo de micrófono, concesión/revocación de palabra, rechazo de mano, promoción, degradación, expulsión/bloqueo, bloqueo de sala, preguntas creadas/respondidas/descartadas, grabación y finalización. No se guardan textos completos del chat ni de las preguntas en auditoría. Una salida abrupta sin petición HTTP depende de futura integración de webhooks LiveKit para quedar registrada de forma autoritativa.
 
 ## Respuesta a incidentes
 

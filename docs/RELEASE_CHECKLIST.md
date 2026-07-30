@@ -27,6 +27,7 @@ No ejecutar sin aprobación humana.
 - [ ] Login correcto, incorrecto, rate limit y logout.
 - [ ] Crear, editar, reprogramar, duplicar, cancelar, archivar, eliminar lógicamente y restaurar reunión.
 - [ ] Crear/revocar invitaciones; probar expiración, uso único y URL limpia.
+- [ ] Mantener organizador y asistente en dos pestañas del mismo perfil; cada una conserva identidad y CSRF al alternar chat, Q&A y moderación.
 - [ ] Crear/editar/desactivar usuario, cambiar contraseña y revocar sesiones.
 - [ ] Confirmar que ORGANIZER no administra ADMIN y VIEWER no se autopromueve.
 - [ ] Abrir panelista y asistente con cámara/micrófono permitidos y denegados.
@@ -34,6 +35,8 @@ No ejecutar sin aprobación humana.
 - [ ] Chat, preguntas, archivo permitido/rechazado, rate limit, no leídos y reintento.
 - [ ] Q&A persistente: editar propia pendiente, votar, ordenar, fijar, responder por escrito/en vivo y descartar.
 - [ ] Mano: levantar, cancelar, rechazar, dar/quitar palabra y expulsar.
+- [ ] Solicitud de micrófono: aceptar y publicar, rechazar con “Ahora no”, fallar por dispositivo y recibir cada estado específico en organizador.
+- [ ] Conceder palabra, recargar/reconectar asistente, comprobar que el permiso continúa y luego revocarlo.
 - [ ] Compartir pantalla y evento `ended`.
 - [ ] Salir no finaliza; **Finalizar para todos** sí desconecta y completa.
 - [ ] Grabación: consentimiento, inicio, aviso, stop, listado y enlace firmado.
@@ -43,9 +46,9 @@ No ejecutar sin aprobación humana.
 - [ ] Transcripción: crear, procesar, completar, fallar, reintentar, cancelar, editar con conflicto, eliminar y exportar TXT/JSON/VTT/SRT.
 - [ ] PANELIST respeta el permiso de consulta; VIEWER recibe 403; ninguna respuesta o log expone claves ni `providerJobId`.
 - [ ] Probar búsqueda, filtro de participante, timestamps, confianza, nombres desconocidos y cambios sin guardar.
-- [ ] Document PiP: mic/cámara/pantalla/paneles/salida, cierre sin desconectar y reapertura; fallback interno completo y mensaje honesto.
+- [ ] Document PiP abre compacto, expande/contrae, controla mic/cámara/pantalla/paneles/salida, cierra sin desconectar y reabre compacto; fallback interno completo y mensaje honesto.
 - [ ] Cerrar Chat/Preguntas/Participantes elimina la columna y expande inmediatamente el escenario.
-- [ ] Pantalla en spotlight, miniatura local arrastrable/avatar, audio veraz y recuperación al terminar desde el navegador.
+- [ ] Pantalla real en spotlight, vídeo con `srcObject`, miniatura local arrastrable/avatar, audio veraz y recuperación al silenciar, despublicar o terminar desde el navegador.
 - [ ] Bloquear/desbloquear: una invitación no se consume al rechazar; la sesión existente continúa.
 - [ ] Invitaciones de asistente/panelista desde sala muestran confirmación sin exponer el token en UI persistente.
 - [ ] Calidad, temporizador y estado de grabación real coinciden en header y panel flotante.

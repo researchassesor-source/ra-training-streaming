@@ -63,6 +63,8 @@ El instalador descarga `livekit_1.13.1_windows_amd64.zip` desde la publicación 
 10. Comprueba auditoría: entradas, reconexión, medios relevantes, preguntas respondidas, bloqueo y finalización.
 11. Detén Node con `Ctrl+C` y ejecuta `npm run livekit:down`.
 
+Para reproducir el caso que antes mezclaba identidades, también se permite usar dos pestañas del mismo perfil: abre primero al organizador, canjea después la invitación de asistente y confirma que ambos siguen enviando mutaciones. La URL debe limpiarse después del canje; cada pestaña mantiene su selector en `sessionStorage`, mientras la credencial continúa exclusivamente en una cookie HttpOnly firmada.
+
 El dashboard distingue **configurado** de **disponible** mediante una consulta real a la API de LiveKit. Sin servicio, **Iniciar** devuelve un aviso, no crea un falso estado LIVE, no incrementa activas y no registra una reunión iniciada.
 
 ## Prueba manual de medios
@@ -71,6 +73,7 @@ El dashboard distingue **configurado** de **disponible** mediante una consulta r
 - Prueba permiso denegado, dispositivo inexistente y dispositivo ocupado.
 - Cambia orientación sin recargar; la instancia `Room` debe permanecer igual.
 - Termina la captura de pantalla desde el indicador del navegador y confirma que el botón vuelve a **Compartir pantalla**.
+- Confirma con otro participante que una publicación real `ScreenShare` crea un único spotlight con vídeo reproducible, conserva las cámaras y desaparece al despublicarse. Verifica `ScreenShareAudio` por separado cuando la fuente elegida lo ofrezca.
 - Prueba Document PiP y, si no está o la ventana se cierra al abrir, comprueba el panel flotante interno y su mensaje de compatibilidad.
 - Pon la pestaña en segundo plano después de activar notificaciones mediante el botón; valida mensaje, mano y fallo de conexión.
 
@@ -84,7 +87,7 @@ git diff --check
 
 Las pruebas usan una carpeta temporal mediante `LOCAL_DATA_DIR`, puerto efímero y servicios LiveKit simulados. No apuntan al `.env` productivo.
 
-La matriz automatizada incluye bloqueo sin consumo de invitación, sesión existente durante bloqueo, creación/voto/respuesta de Q&A, permisos, sincronización del modelo flotante, fallback, agrupación anti-spam, limpieza de listeners y contratos responsive.
+La matriz automatizada incluye sesiones simultáneas con cookies separadas, CSRF correcto e incorrecto, consentimiento y persistencia de palabra, bloqueo sin consumo de invitación, sesión existente durante bloqueo, creación/voto/respuesta de Q&A, tracks vivos/muteados/terminados, ScreenShare y audio, sincronización del modelo flotante compacto/expandido, fallback, agrupación anti-spam, limpieza de listeners y contratos responsive.
 
 ## Limpieza
 
