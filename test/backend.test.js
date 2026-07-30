@@ -234,6 +234,15 @@ test('invitations are long, stored only as hashes, expire, revoke and enforce us
   expiringRecord.expiresAt = new Date(Date.now() - 1_000).toISOString();
   await localStore.writeJson('invitations', hash, expiringRecord);
   await assert.rejects(() => invitations.consumeInvitation(expiring.token), /expiró/);
+
+  const legacyToken = 'legacy-'.padEnd(48, 'x');
+  const legacyRecord = {
+    id: 'legacy-invitation', tokenHash: invitations.legacyTokenHash(legacyToken), meetingId: 'legacy-meeting',
+    room: 'legacy-room', role: 'VIEWER', expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    status: 'ACTIVE', maxUses: null, uses: 0, createdAt: new Date().toISOString(), createdBy: 'legacy', revokedAt: null, lastUsedAt: null,
+  };
+  await localStore.writeJson('invitations', legacyRecord.tokenHash, legacyRecord);
+  assert.equal((await invitations.peekInvitation(legacyToken)).id, legacyRecord.id);
 });
 
 test('room access fails closed unless explicitly configured', async () => {
@@ -533,6 +542,9 @@ test('invitation redemption removes the token from the URL and creates a room co
   });
   assert.equal(invitation.response.status, 201, JSON.stringify(invitation.data));
   assert.match(invitation.data.path, /^\/i\/[A-Za-z0-9_-]{40,}$/);
+  assert.match(invitation.data.url, /^http:\/\/localhost:3000\/i\/[A-Za-z0-9_-]{40,}$/);
+  assert.match(invitation.data.message, /Te invitamos a participar/);
+  assert.equal(new URL(invitation.data.whatsappUrl).searchParams.get('text'), invitation.data.message);
   const redemption = await request(invitation.data.path, { redirect: 'manual' });
   assert.equal(redemption.response.status, 303);
   assert.match(redemption.response.headers.get('location'), /^\/viewer\.html\?roomSession=[a-f0-9-]{36}$/i);
@@ -551,6 +563,47 @@ test('invitation redemption removes the token from the URL and creates a room co
   const reused = await request(invitation.data.path, { redirect: 'manual' });
   assert.equal(reused.response.status, 410);
   mockRoomService.participants = [];
+});
+
+test('viewer consent is persisted and required before issuing a LiveKit token', async () => {
+  const meeting = await meetings.createMeeting({
+    title: 'Consentimiento verificable', room: 'consentimiento-verificable', trainerName: 'Trainer', scheduledAt: null,
+    durationMinutes: 60, status: 'LIVE', allowRecording: true, recordingConsentRequired: true,
+    allowTranscription: true, transcriptionConsentRequired: true, createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const viewer = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'VIEWER', displayName: 'Asistente' });
+  const cookie = roomCookie(viewer.token, viewer.session.sid).split(';')[0];
+  const denied = await request('/api/token', { cookie, roomSessionId: viewer.session.sid });
+  assert.equal(denied.response.status, 403);
+  assert.equal(denied.data.code, 'PRIVACY_CONSENT_REQUIRED');
+  const incomplete = await request('/api/room-session/consent', {
+    method: 'POST', cookie, roomSessionId: viewer.session.sid, roomCsrf: viewer.session.csrf,
+    body: { privacy: true, recording: false, transcription: true },
+  });
+  assert.equal(incomplete.response.status, 400);
+  assert.equal(incomplete.data.code, 'RECORDING_CONSENT_REQUIRED');
+  const accepted = await request('/api/room-session/consent', {
+    method: 'POST', cookie, roomSessionId: viewer.session.sid, roomCsrf: viewer.session.csrf,
+    body: { privacy: true, recording: true, transcription: true },
+  });
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.data));
+  assert.ok(accepted.data.consents.acceptedAt);
+  const token = await request('/api/token', { cookie: accepted.cookie, roomSessionId: viewer.session.sid });
+  assert.equal(token.response.status, 200, JSON.stringify(token.data));
+  const events = await audit.listEvents({ room: meeting.room, action: 'PARTICIPANT_CONSENT_RECORDED' });
+  assert.equal(events.length, 1);
+  assert.deepEqual({ privacy: events[0].metadata.privacy, recording: events[0].metadata.recording, transcription: events[0].metadata.transcription }, { privacy: true, recording: true, transcription: true });
+});
+
+test('health diagnostics expose identity and availability without credentials', async () => {
+  const health = await request('/health');
+  assert.equal(health.response.status, 200);
+  assert.equal(health.data.environment, 'test');
+  assert.equal(health.data.status, 'operational');
+  assert.equal(typeof health.data.services.livekit.available, 'boolean');
+  assert.ok(health.response.headers.get('x-request-id'));
+  assert.doesNotMatch(JSON.stringify(health.data), /devkey|secret|apiKey|ws:\/\//i);
 });
 
 test('audit records actions without secret-like metadata', async () => {
