@@ -1,4 +1,4 @@
-function attachConnectionUI(room, { statusBadge, countBadge, floatingModel, onParticipantsChanged, onReconnected }) {
+function attachConnectionUI(room, { statusBadge, countBadge, qualityBadge, floatingModel, onParticipantsChanged, onReconnected, onQualityChanged, onParticipantEvent }) {
   const machine = new RATCore.ConnectionStateMachine((snapshot) => {
     if (statusBadge) {
       statusBadge.textContent = snapshot.label;
@@ -20,14 +20,25 @@ function attachConnectionUI(room, { statusBadge, countBadge, floatingModel, onPa
   }
 
   const handlers = {
-    participantConnected() { updateCount(); playJoinSound(); },
-    participantDisconnected() { updateCount(); playLeaveSound(); },
+    participantConnected(participant) { updateCount(); playJoinSound(); onParticipantEvent?.('joined', participant); },
+    participantDisconnected(participant) { updateCount(); playLeaveSound(); onParticipantEvent?.('left', participant); },
     permissionsChanged() { onParticipantsChanged?.(participants()); },
     reconnecting() { machine.set('reconnecting'); playAlert('unstable'); systemNotification('Problema de conexión', 'Intentando reconectar con la reunión.'); },
     reconnected() { machine.set('connected'); updateCount(); playAlert('reconnected'); onReconnected?.(); },
     disconnected(reason) { machine.set(String(reason || '').toLowerCase().includes('removed') ? 'removed' : 'disconnected'); playAlert('critical'); },
     qualityChanged(quality, participant) {
-      if (participant?.isLocal && String(quality).toLowerCase().includes('poor')) machine.set('poor_connection');
+      if (!participant?.isLocal) return;
+      const value = String(quality || '').toLowerCase();
+      const normalized = value.includes('excellent') ? 'excellent' : value.includes('good') ? 'good' : value.includes('poor') ? 'poor' : 'unknown';
+      if (normalized === 'poor') machine.set('poor_connection');
+      else if (['good', 'excellent'].includes(normalized) && machine.state === 'poor_connection') machine.set('connected');
+      if (qualityBadge) {
+        const labels = { excellent: 'Red excelente', good: 'Red buena', poor: 'Red inestable', unknown: 'Red sin medir' };
+        qualityBadge.textContent = labels[normalized];
+        qualityBadge.className = `quality-badge quality-${normalized}`;
+      }
+      floatingModel?.update({ quality: normalized });
+      onQualityChanged?.(normalized);
     },
   };
 

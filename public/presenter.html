@@ -15,22 +15,26 @@
   <header class="room-topbar">
     <div id="brand"></div>
     <div class="room-title-block"><strong id="meetingTitle">Reunión</strong><span id="trainerName"></span></div>
-    <div class="room-statuses"><span id="recordingBadge" class="recording-badge" hidden>Grabando</span><span id="participantCount">1 participante</span><span id="connectionStatus" class="connection-status" aria-live="polite">Validando invitación…</span></div>
+    <div class="room-statuses"><span id="meetingTimer" title="Tiempo transcurrido">00:00</span><span id="recordingBadge" class="recording-badge" hidden>Grabando</span><span id="roomLockBadge" hidden>Sala bloqueada</span><span id="qualityBadge" class="quality-badge">Red sin medir</span><span id="participantCount">1 participante</span><span id="connectionStatus" class="connection-status" aria-live="polite">Validando invitación…</span></div>
   </header>
   <main class="room-layout">
     <section class="room-stage" aria-label="Escenario de video">
       <div id="stageGrid" class="stage-grid"></div>
+      <div id="reactionOverlay" class="reaction-overlay" aria-live="polite"></div>
+      <div id="screenShareNotice" class="screen-share-notice" hidden><strong>Estás compartiendo tu pantalla</strong><span id="screenShareAudioState">Audio de pantalla según la selección del navegador.</span><button id="stopShareNotice" type="button">Detener</button></div>
     </section>
     <aside id="sidePanel" class="room-side-panel" aria-label="Panel de colaboración">
       <div class="room-tabs" role="tablist">
         <button type="button" role="tab" aria-selected="true" data-room-tab="chat">Chat <span id="chatUnread" class="tab-count" hidden></span></button>
         <button type="button" role="tab" aria-selected="false" data-room-tab="questions">Preguntas <span id="questionUnread" class="tab-count" hidden></span></button>
         <button type="button" role="tab" aria-selected="false" data-room-tab="participants">Participantes <span id="handCount" class="tab-count" hidden></span></button>
+        <button id="closeSidePanel" class="icon-action close-side-panel" type="button" aria-label="Cerrar panel">×</button>
       </div>
       <section class="room-tab-panel active" data-room-panel="chat">
         <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
       </section>
       <section class="room-tab-panel" data-room-panel="questions">
+        <label class="question-sort">Ordenar preguntas<select id="questionSort"><option value="votes">Más votadas</option><option value="date">Más recientes</option></select></label>
         <div id="questionMessages" class="chat-messages" aria-live="polite"></div>
       </section>
       <section class="room-tab-panel" data-room-panel="participants">
@@ -57,23 +61,33 @@
   <nav id="roomControls" class="room-controls" aria-label="Controles de reunión">
     <button id="btnMic" type="button" aria-label="Micrófono" title="Micrófono" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z M5 11v1a7 7 0 0 0 14 0v-1 M12 19v3 M8 22h8" /></svg><span>Micrófono</span></button>
     <button id="btnCam" type="button" aria-label="Cámara" title="Cámara" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z M17 10l5-3v10l-5-3" /></svg><span>Cámara</span></button>
+    <button id="btnScreen" type="button" aria-label="Compartir pantalla" title="Compartir pantalla" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v13H3z M8 21h8 M12 17v4" /></svg><span>Pantalla</span></button>
     <button id="btnChat" type="button" aria-label="Chat" title="Chat" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /></svg><span>Chat</span></button>
     <button id="btnHand" type="button" aria-label="Mano" title="Levantar la mano" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V5a2 2 0 0 1 4 0v5 M11 10V3a2 2 0 0 1 4 0v7 M15 10V5a2 2 0 0 1 4 0v9c0 5-3 8-8 8-4 0-6-2-8-6l-1-3a2 2 0 0 1 4-1l1 2" /></svg><span>Mano</span></button>
+    <button id="btnParticipants" type="button" aria-label="Participantes" title="Participantes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75" /></svg><span>Personas</span></button>
     <button id="btnMore" type="button" aria-label="Más opciones" title="Más opciones" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg><span>Más</span></button>
     <button id="btnLeave" class="danger-control" type="button" aria-label="Salir de la reunión" title="Salir de la reunión"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H4v14h6 M14 8l4 4-4 4 M8 12h10" /></svg><span>Salir</span></button>
   </nav>
   <div id="morePanel" class="more-panel" hidden>
     <div class="panel-heading"><h2>Más opciones</h2><button id="closeMore" class="icon-action" type="button" aria-label="Cerrar opciones">×</button></div>
     <div class="more-grid">
-      <button id="btnScreen" type="button">Compartir pantalla</button>
+      <button id="btnScreenMore" class="mobile-only" type="button">Compartir pantalla</button>
+      <button id="btnParticipantsMore" class="mobile-only" type="button">Participantes</button>
       <button id="btnEffects" type="button">Efectos de cámara</button>
-      <button id="btnParticipants" type="button">Participantes</button>
       <button id="btnFloat" type="button" aria-pressed="false">Panel siempre encima</button>
+      <label class="check-row"><input id="autoFloatOnShare" type="checkbox" /> Abrir panel flotante al compartir</label>
+      <button id="btnToggleSelfView" type="button" aria-pressed="true">Ocultar mi miniatura</button>
+      <button id="btnLock" class="organizer-control" type="button" aria-pressed="false">Bloquear sala</button>
+      <button id="btnInviteViewer" class="organizer-control" type="button">Copiar invitación de asistente</button>
+      <button id="btnInvitePanelist" class="organizer-control" type="button">Copiar invitación de panelista</button>
       <button id="btnRecord" class="organizer-control" type="button">Iniciar grabación</button>
       <button id="btnEnd" class="organizer-control danger" type="button">Finalizar para todos</button>
       <button id="btnNotifications" type="button">Activar notificaciones</button>
       <button id="btnSoundToggle" type="button" aria-pressed="true">Sonido activo</button>
+      <button id="btnShortcuts" type="button">Atajos de teclado</button>
     </div>
+    <div id="reactionPicker" class="reaction-picker" aria-label="Reacciones"><button type="button" data-reaction="👏">👏</button><button type="button" data-reaction="👍">👍</button><button type="button" data-reaction="❤️">❤️</button><button type="button" data-reaction="😂">😂</button><button type="button" data-reaction="🎉">🎉</button><button type="button" data-reaction="✅">✅</button></div>
+    <div id="shortcutHelp" class="shortcut-help" hidden><strong>Atajos</strong><span><kbd>Ctrl/⌘ Shift M</kbd> micrófono</span><span><kbd>Ctrl/⌘ Shift V</kbd> cámara</span><span><kbd>Ctrl/⌘ Shift S</kbd> pantalla</span><span><kbd>Ctrl/⌘ Shift C</kbd> chat</span><span><kbd>Ctrl/⌘ Shift P</kbd> participantes</span><span><kbd>Ctrl/⌘ Shift H</kbd> mano</span><span><kbd>Esc</kbd> cerrar paneles</span></div>
     <p id="recordingHelp" class="muted small" aria-live="polite"></p>
     <div id="effectsPanel" class="effects-panel" hidden>
       <button type="button" data-camera-effect="none">Sin efecto</button>
@@ -88,6 +102,7 @@
     <details><summary>Preferencias de alertas</summary><div id="soundSettings" class="sound-settings"></div></details>
     <p id="featureMessage" class="muted" aria-live="polite"></p>
   </div>
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
   <dialog id="preflightDialog" class="app-dialog preflight-dialog">
     <form id="preflightForm" method="dialog">
       <header class="preflight-header">
@@ -119,12 +134,14 @@
   <script src="brand.js"></script>
   <script src="app-core.js"></script>
   <script src="sounds.js"></script>
+  <script src="meeting-notifications.js"></script>
   <script src="floating-bar.js"></script>
   <script src="/vendor/livekit-client/livekit-client.umd.js"></script>
   <script src="access.js"></script>
   <script src="stage.js"></script>
   <script src="connection.js"></script>
   <script src="chat.js"></script>
+  <script src="questions.js"></script>
   <script src="room-ui.js"></script>
 </body>
 </html>

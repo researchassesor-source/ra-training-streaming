@@ -27,8 +27,9 @@ function setupChat(room, myIdentity, options = {}) {
     inputEl.style.height = `${Math.min(inputEl.scrollHeight, 144)}px`;
     if (limitEl) {
       const count = inputEl.value.length;
-      limitEl.textContent = `${count}/2000`;
-      limitEl.classList.toggle('near-limit', count >= 1_800);
+      const limit = Number(inputEl.maxLength) || 2_000;
+      limitEl.textContent = `${count}/${limit}`;
+      limitEl.classList.toggle('near-limit', count >= limit * 0.9);
     }
   }
 
@@ -85,6 +86,15 @@ function setupChat(room, myIdentity, options = {}) {
   }
 
   async function sendText(text, kind = 'chat') {
+    if (kind === 'question' && typeof options.sendQuestion === 'function') {
+      try {
+        await options.sendQuestion(text);
+        return true;
+      } catch (error) {
+        if (errorEl) errorEl.textContent = error.message || 'No fue posible enviar la pregunta.';
+        return false;
+      }
+    }
     const pending = { kind, type: 'text', text, role: options.role, sentAt: new Date().toISOString() };
     const row = render(options.displayName || myIdentity, pending, true, 'sending');
     try {
@@ -122,11 +132,12 @@ function setupChat(room, myIdentity, options = {}) {
     if (sending || event.isComposing) return;
     const text = inputEl.value.trim();
     if (!text) return;
-    if (text.length > 2_000) {
-      if (errorEl) errorEl.textContent = 'El mensaje supera el límite de 2000 caracteres.';
+    const kind = kindEl?.value === 'question' ? 'question' : 'chat';
+    const limit = kind === 'question' ? 600 : 2_000;
+    if (text.length > limit) {
+      if (errorEl) errorEl.textContent = `El ${kind === 'question' ? 'texto de la pregunta' : 'mensaje'} supera el límite de ${limit} caracteres.`;
       return;
     }
-    const kind = kindEl?.value === 'question' ? 'question' : 'chat';
     if (errorEl) errorEl.textContent = '';
     setSending(true);
     inputEl.value = '';
@@ -152,6 +163,9 @@ function setupChat(room, myIdentity, options = {}) {
     const previous = event.target.value === 'question' ? 'chat' : 'question';
     drafts[previous] = inputEl.value;
     inputEl.value = drafts[event.target.value] || '';
+    inputEl.maxLength = event.target.value === 'question' ? 600 : 2000;
+    inputEl.placeholder = event.target.value === 'question' ? 'Escribe una pregunta para la sesión…' : 'Escribe un mensaje…';
+    if (limitEl) limitEl.textContent = `${inputEl.value.length}/${inputEl.maxLength}`;
     resizeComposer();
   });
   resizeComposer();
