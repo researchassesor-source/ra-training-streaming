@@ -106,7 +106,7 @@ test('official logo and optimized derivatives exist and all required surfaces re
     floating: fs.readFileSync(path.join(publicDir, 'floating-bar.js'), 'utf8'),
     recordings: fs.readFileSync(path.join(publicDir, 'recordings.html'), 'utf8'),
   };
-  for (const [surface, source] of Object.entries(references)) assert.match(source, /icon-192|favicon-32|mascot-login/, surface);
+  for (const [surface, source] of Object.entries(references)) assert.match(source, /streaming-app-logo|icon-192|favicon-32|mascot-login/, surface);
   assert.match(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'), /icon-512\.png/);
   const brandSource = fs.readFileSync(path.join(publicDir, 'brand.js'), 'utf8');
   const visibleBrandSources = [brandSource, fs.readFileSync(path.join(publicDir, 'sounds.js'), 'utf8'), references.login].join('\n');
@@ -125,7 +125,7 @@ test('mobile login keeps the form first and renders a compact non-overlapping ma
 
 test('room reconnection re-queries real recording status and zero counters stay hidden', () => {
   const roomUi = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
-  assert.match(roomUi, /onReconnected: \(\) => queryRecordingStatus\(\)/);
+  assert.match(roomUi, /onReconnected: \(\) => \{[\s\S]*?queryRecordingStatus\(\)/);
   assert.match(roomUi, /ui\.roomUi\.updateCount\(\)/);
   assert.match(roomUi, /element\.hidden = count < 1/);
   assert.doesNotMatch(roomUi, /setRecordingIndicator\(Boolean/);
