@@ -175,6 +175,17 @@ test('meeting model validates fields, persists lifecycle and rejects duplicate r
   assert.equal((await meetings.listMeetings()).some((item) => item.room === record.room), false);
 });
 
+test('reading a legacy meeting normalizes it without persisting a migration', async () => {
+  const legacy = { room: 'legacy-read-only', title: 'Modelo anterior', scheduledAt: '2030-07-30T09:00:00.000Z' };
+  await localStore.writeJson('meetings', legacy.room, legacy);
+  const normalized = await meetings.getMeeting(legacy.room);
+  const storedAgain = await localStore.readJson('meetings', legacy.room);
+  assert.equal(normalized.trainerName, 'Capacitador por definir');
+  assert.equal(normalized.capacity, 100);
+  assert.equal(normalized.endsAt, '2030-07-30T10:00:00.000Z');
+  assert.deepEqual(storedAgain, legacy);
+});
+
 test('invitations are long, stored only as hashes, expire, revoke and enforce use limits', async () => {
   const created = await invitations.createInvitation({
     meetingId: 'meeting-test', room: 'room-test', role: 'VIEWER', singleUse: true, createdBy: 'rootadmin',
