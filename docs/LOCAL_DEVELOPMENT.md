@@ -21,9 +21,10 @@ LIVEKIT_WS_URL=ws://localhost:7880
 
 No establezcas `ALLOW_OPEN_DEV_ROOMS=true` salvo una prueba deliberada. La aplicación funciona con reuniones registradas aunque LiveKit no esté iniciado.
 
-## Arranque
+## Arranque reproducible
 
 ```powershell
+npm run livekit:up
 npm start
 ```
 
@@ -31,15 +32,36 @@ Abre `http://localhost:3000` e inicia sesión con el bootstrap local. Los datos 
 
 ## LiveKit local
 
-Configura una instancia local con API key/secret de desarrollo y usa la URL `ws://localhost:7880`. Verifica:
+El proyecto fija LiveKit Server `v1.13.1` y claves exclusivas de desarrollo (`devkey` / `secret`). No las reutilices fuera del equipo local.
 
-1. Crear una reunión y marcarla `LIVE` desde el panel.
-2. Abrir como organizador mediante **Iniciar**.
-3. Crear un enlace de asistente y abrirlo en otra ventana/perfil.
-4. Validar cámara, micrófono, pantalla, chat, preguntas y mano levantada.
-5. Confirmar que un viewer no puede llamar promoción, expulsión ni grabación.
+### Opción A: Docker
 
-Sin LiveKit, usa `npm test`: los endpoints sensibles se validan con mocks y no contactan servicios externos. La prueba manual del preflight también debe conservar el diálogo abierto, mostrar un mensaje seguro de indisponibilidad y reemplazar el botón por **Reintentar conexión**. Si el botón permanece en **Entrar a la reunión** sin mostrar un error, revisa primero la validación de campos y consentimientos ocultos.
+Con Docker Desktop operativo, `npm run livekit:up` usa `docker-compose.livekit.yml`. Expone HTTP/WebSocket `7880`, RTC/TCP `7881` y RTC/UDP `7882`.
+
+### Opción B: binario oficial en Windows
+
+Si Docker no existe:
+
+```powershell
+npm run livekit:install
+npm run livekit:up
+```
+
+El instalador descarga `livekit_1.13.1_windows_amd64.zip` desde la publicación oficial, verifica SHA-256 `57afee4cdb044e5fda04c2cc00ca30f4c783bea1f1ea2f483321ce4b9cff4acf` y lo guarda bajo `.tools/livekit/`, fuera de Git. El proceso y sus registros viven bajo `.local-runtime/livekit/`.
+
+### Secuencia manual de QA
+
+1. Ejecuta `npm run livekit:up` y `npm start` (o `npm run dev`).
+2. Abre `http://localhost:3000`, inicia sesión y crea una reunión Programada.
+3. Pulsa **Iniciar**: la reunión sigue Programada durante el preflight.
+4. Conecta al organizador/panelista; solo la confirmación de LiveKit cambia el estado a En vivo.
+5. Crea un enlace de asistente y ábrelo en otro navegador o perfil.
+6. Autoriza y prueba cámara, micrófono, participantes, chat, preguntas, mano levantada y pantalla.
+7. Prueba reconexión y **Salir**; luego usa **Finalizar para todos** desde el organizador.
+8. Comprueba auditoría: intento, reintento/fallo si corresponde, una única reunión iniciada y finalización.
+9. Detén Node con `Ctrl+C` y ejecuta `npm run livekit:down`.
+
+El dashboard distingue **configurado** de **disponible** mediante una consulta real a la API de LiveKit. Sin servicio, **Iniciar** devuelve un aviso, no crea un falso estado LIVE, no incrementa activas y no registra una reunión iniciada.
 
 ## Prueba manual de medios
 
@@ -62,7 +84,7 @@ Las pruebas usan una carpeta temporal mediante `LOCAL_DATA_DIR`, puerto efímero
 
 ## Limpieza
 
-Detén Node con `Ctrl+C`. Si necesitas borrar datos locales de prueba, verifica primero la ruta absoluta de la subcarpeta concreta bajo `.local-data/`; nunca elimines la raíz del repositorio ni uses un destino construido con variables no resueltas.
+Detén Node con `Ctrl+C` y LiveKit con `npm run livekit:down`. Si necesitas borrar datos locales de prueba, verifica primero la ruta absoluta de la subcarpeta concreta bajo `.local-data/`; nunca elimines la raíz del repositorio ni uses un destino construido con variables no resueltas.
 
 ## Transcripción local
 

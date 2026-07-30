@@ -9,6 +9,8 @@
 - [ ] `npm run build:track-processors` termina correctamente.
 - [ ] `git diff --check` no reporta errores.
 - [ ] `git diff` no contiene claves, secretos, contraseñas o datos reales.
+- [ ] `npm run livekit:up` deja puertos 7880/7881 activos y el dashboard muestra LiveKit disponible.
+- [ ] Con LiveKit detenido, **Iniciar** no cambia el estado ni el contador de activas.
 
 ## Preview aislado
 
@@ -28,6 +30,7 @@ No ejecutar sin aprobación humana.
 - [ ] Crear/editar/desactivar usuario, cambiar contraseña y revocar sesiones.
 - [ ] Confirmar que ORGANIZER no administra ADMIN y VIEWER no se autopromueve.
 - [ ] Abrir panelista y asistente con cámara/micrófono permitidos y denegados.
+- [ ] Confirmar que Programada cambia a En vivo solo después de conectar un participante autorizado y que auditoría contiene un único `ROOM_CONNECTED`.
 - [ ] Chat, preguntas, archivo permitido/rechazado, rate limit, no leídos y reintento.
 - [ ] Mano: levantar, cancelar, rechazar, dar/quitar palabra y expulsar.
 - [ ] Compartir pantalla y evento `ended`.

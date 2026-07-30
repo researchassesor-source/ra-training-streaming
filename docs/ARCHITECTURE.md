@@ -9,6 +9,7 @@
 - `invitations.js`: creación, hash, caducidad, usos y revocación.
 - `room-session.js`: identidad, rol y sala firmados en cookie HttpOnly.
 - `rooms.js`: registro de salas con política fail-closed.
+- `livekit-status.js`: comprobación real y cacheada de disponibilidad, con timeout y respuesta sin secretos.
 - `audit.js`: eventos persistentes con metadata filtrada.
 - `local-store.js`: JSON local atómico.
 - `s3.js`: cliente S3/R2 privado.
@@ -34,17 +35,26 @@ El frontend usa `dashboard.js` para administración y `room-ui.js` para las dos 
 5. Responde `303` a `presenter.html` o `viewer.html`; el secreto desaparece de URL e historial inmediato.
 6. `/api/token` ignora parámetros de cliente y crea el JWT LiveKit desde la sesión de sala.
 
+### Inicio veraz de reunión
+
+1. `POST /api/meetings/:room/launch` registra `ROOM_OPEN_ATTEMPT` y comprueba la API de LiveKit.
+2. Si LiveKit no responde, devuelve `LIVEKIT_UNAVAILABLE`, registra el fallo y conserva DRAFT/SCHEDULED.
+3. Si responde, crea la sesión de sala y abre el preflight, todavía sin cambiar el estado.
+4. El cliente conecta con el JWT y llama `POST /api/room/connection`.
+5. El servidor consulta los participantes reales de LiveKit y solo entonces escribe `LIVE`, `startedAt`, `livekitConfirmedAt` y `ROOM_CONNECTED`.
+6. Repetir la confirmación es idempotente y no duplica auditoría. Finalizar escribe `ROOM_ENDED`.
+
 ### Chat, manos y moderación
 
 Los participantes no reciben permiso `canPublishData`. Mensajes y eventos pasan por Express, que valida sesión de sala, CSRF, estado, flags de reunión, pertenencia LiveKit y frecuencia. El servidor los retransmite con `RoomServiceClient.sendData`. Promoción, degradación y expulsión usan la identidad del actor firmada y nunca `panelistIdentity` del JSON.
 
 ## Modelo de reunión
 
-Campos principales: `id`, `title`, `description`, `room`, `trainerName`, `trainerId`, `scheduledAt`, `durationMinutes`, `endsAt`, `type`, `status`, `capacity`, flags de colaboración y grabación, modos de acceso y timestamps de ciclo de vida.
+Campos principales: `id`, `title`, `description`, `room`, `trainerName`, `trainerId`, `scheduledAt`, `durationMinutes`, `endsAt`, `type`, `status`, `capacity`, flags de colaboración y grabación, modos de acceso y timestamps de ciclo de vida, incluido `livekitConfirmedAt`.
 
 Tipos: `WEBINAR`, `SESSION`, `CLASS`.
 
-Estados: `DRAFT`, `SCHEDULED`, `LIVE`, `COMPLETED`, `CANCELLED`, `ARCHIVED`.
+Estados: `DRAFT` (Borrador), `SCHEDULED` (Programada), `LIVE` (En vivo confirmado), `COMPLETED` (Finalizada), `CANCELLED` (Cancelada), `ARCHIVED` (Archivada). Un clic, una fecha pasada o un preflight abierto nunca producen `LIVE`.
 
 `DELETE` es lógico: fija `deletedAt`, conserva historial y revoca la sala. Restaurar elimina `deletedAt` y vuelve a `SCHEDULED` o `DRAFT`.
 

@@ -1,6 +1,6 @@
 # R.A. Training Streaming
 
-Plataforma web para webinars, clases y sesiones en vivo de Research Assessor & Training. Combina un panel organizador, calendario, administración de credenciales, invitaciones seguras y salas LiveKit con chat, preguntas, mano levantada, grabación, transcripciones revisables y una ventana complementaria Picture-in-Picture.
+Plataforma web para webinars, clases y sesiones en vivo de R.A. Training. Combina un panel organizador, calendario, administración de credenciales, invitaciones seguras y salas LiveKit con chat, preguntas, mano levantada, grabación, transcripciones revisables y una ventana complementaria Picture-in-Picture.
 
 ## Arquitectura
 
@@ -27,6 +27,7 @@ Consulta [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTI
 ```powershell
 npm ci
 Copy-Item .env.example .env
+npm run livekit:up
 npm start
 ```
 
@@ -67,7 +68,17 @@ Los valores seguros de ejemplo están en [.env.example](.env.example). No config
 
 ## Desarrollo local
 
-Sin S3, usuarios, salas, reuniones, invitaciones y auditoría persisten en `.local-data/`. Esta carpeta y `.env` están ignoradas por Git. Sin LiveKit local, el panel y el canje de invitaciones funcionan; la conexión de medios mostrará el error esperado.
+Sin S3, usuarios, salas, reuniones, invitaciones y auditoría persisten en `.local-data/`. Esta carpeta, `.tools/`, `.local-runtime/` y `.env` están ignoradas por Git. `npm run livekit:up` usa Docker cuando está operativo o el binario local oficial instalado con `npm run livekit:install`. Si LiveKit no responde, el panel informa **no disponible** y no marca reuniones como En vivo.
+
+Comandos del servicio local:
+
+```powershell
+npm run livekit:install # solo si Docker no está disponible
+npm run livekit:up
+npm run livekit:logs
+npm run livekit:down
+npm run dev             # LiveKit + Node, con apagado coordinado
+```
 
 Más detalles: [Desarrollo local](docs/LOCAL_DEVELOPMENT.md).
 
