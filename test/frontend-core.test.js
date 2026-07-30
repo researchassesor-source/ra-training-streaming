@@ -15,7 +15,8 @@ const {
   isLivePublication,
   upcomingMeetings,
 } = require('../public/app-core');
-const { classifyTrackSource } = require('../public/stage');
+const { classifyTrackSource, selectActiveSpeaker } = require('../public/stage');
+const { partitionQuestionFlow } = require('../public/questions');
 const { nextPasswordType } = require('../public/password-toggle');
 
 test('connection state machine exposes one coherent Spanish state', () => {
@@ -69,6 +70,27 @@ test('camera state requires a real live publication and screen tracks keep their
   assert.equal(classifyTrackSource({ source: 'screen_share', track: { kind: 'video' } }), 'screen');
   assert.equal(classifyTrackSource({ source: 'screen_share_audio', track: { kind: 'audio' } }), 'screen-audio');
   assert.equal(classifyTrackSource({ source: 'camera', track: { kind: 'video' } }), 'camera');
+});
+
+test('active speaker selection prefers a remote speaker and falls back stably to local', () => {
+  const participants = [
+    { identity: 'local', local: true },
+    { identity: 'remote-a', local: false },
+    { identity: 'remote-b', local: false, visible: false },
+  ];
+  assert.equal(selectActiveSpeaker(participants, ['local', 'remote-a']), 'remote-a');
+  assert.equal(selectActiveSpeaker(participants, ['remote-b']), 'local');
+  assert.equal(selectActiveSpeaker(participants, []), 'local');
+});
+
+test('discarded questions are partitioned out of the active Q&A flow', () => {
+  const flow = partitionQuestionFlow([
+    { id: 'pending', status: 'PENDING' },
+    { id: 'answered', status: 'ANSWERED_WRITTEN' },
+    { id: 'dismissed', status: 'DISMISSED', answer: 'Respuesta archivada' },
+  ]);
+  assert.deepEqual(flow.active.map((item) => item.id), ['pending', 'answered']);
+  assert.deepEqual(flow.dismissed.map((item) => item.id), ['dismissed']);
 });
 
 test('chat URL sanitizer blocks executable schemes', () => {

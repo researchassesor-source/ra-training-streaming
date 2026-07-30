@@ -33,13 +33,18 @@ test('floating controls synchronize every critical state and fall back inside th
   assert.match(source, /let mode = 'compact'/);
   assert.match(source, /data-mode="\$\{mode\}"/);
   assert.match(source, /applyMode\(documentRef, mode === 'compact' \? 'expanded' : 'compact'\)/);
-  assert.match(source, /requestWindow\(\{ width: mode === 'compact' \? 760 : 460/);
+  assert.match(source, /requestWindow\(\{ width: mode === 'compact' \? 680 : 460/);
+  assert.match(source, /companion-popover/);
+  assert.match(source, /setPopover\(documentRef, 'chat'\)/);
+  assert.match(source, /setPopover\(documentRef, 'participants'\)/);
+  assert.match(source, /event\.key !== 'Escape'/);
+  assert.match(source, /actions\.sendChat/);
+  assert.match(source, /actions\.chatDraft/);
+  assert.match(source, /handle\.removeEventListener\('pointerdown', start\)/);
 });
 
-test('stage keeps a draggable local avatar while screen sharing and cleans remote listeners', () => {
+test('stage renders one debounced active-speaker mini while screen sharing and cleans remote listeners', () => {
   const source = fs.readFileSync(path.join(publicDir, 'stage.js'), 'utf8');
-  assert.match(source, /local-overlay/);
-  assert.match(source, /makeContainedDraggable/);
   assert.match(source, /video-avatar/);
   assert.match(source, /setParticipantVisibility/);
   assert.match(source, /screenshareaudio/);
@@ -48,10 +53,16 @@ test('stage keeps a draggable local avatar while screen sharing and cleans remot
   assert.match(source, /classifyTrackSource/);
   assert.match(source, /document\.body\.appendChild\(element\)/);
   assert.match(source, /dispose\(\).*room\.off/s);
+  assert.match(source, /selectActiveSpeaker/);
+  assert.match(source, /speakerSwitchTimer/);
+  assert.match(source, /450/);
+  assert.match(source, /900/);
+  assert.doesNotMatch(source, /local-overlay/);
   const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
-  assert.match(css, /\.video-tile\.local-overlay/);
   assert.match(css, /\.video-tile \.video-avatar\s*\{\s*display:\s*grid/);
   assert.match(css, /\.video-tile\.has-video \.video-avatar\s*\{\s*display:\s*none/);
+  assert.match(css, /\.active-speaker-mini/);
+  assert.match(css, /\.active-speaker-mini\.is-speaking/);
 });
 
 test('side panel collapse, mobile controls and reduced motion are explicit', () => {
@@ -115,8 +126,14 @@ test('room implementation includes Q&A, notifications, locks, shortcuts and boun
   assert.match(room, /askConfirmation\(\{[\s\S]*?Expulsar participante/);
   assert.match(room, /handleMicrophoneRequest/);
   assert.match(room, /media-response/);
+  assert.match(room, /renderParticipants\(\[room\.localParticipant, \.\.\.room\.remoteParticipants\.values\(\)\]\)/);
   const questions = fs.readFileSync(path.join(publicDir, 'questions.js'), 'utf8');
   for (const feature of ['voteCount', 'ANSWERED_LIVE', 'ANSWERED_WRITTEN', 'DISMISSED', 'pinned', 'questionSort']) assert.match(questions, new RegExp(feature));
+  assert.match(questions, /partitionQuestionFlow/);
+  assert.match(questions, /Ver.*descartadas/);
+  assert.match(questions, /Historial de descartadas/);
+  assert.match(questions, /flow\.active/);
+  assert.match(questions, /archive\.tabIndex = -1/);
 });
 
 test('room requests bind the tab selector and failed chat or Q&A restores the draft', () => {
@@ -126,7 +143,14 @@ test('room requests bind the tab selector and failed chat or Q&A restores the dr
   assert.match(access, /sessionStorage/);
   assert.match(access, /X-Room-CSRF/);
   const chat = fs.readFileSync(path.join(publicDir, 'chat.js'), 'utf8');
-  assert.match(chat, /inputEl\.value = ''[\s\S]*?const sent = await sendText[\s\S]*?if \(!sent && !inputEl\.value\) inputEl\.value = text/);
+  assert.match(chat, /inputEl\.value = ''[\s\S]*?const sent = await sendText[\s\S]*?if \(!sent && !inputEl\.value\)/);
   assert.match(chat, /if \(sending \|\| event\.isComposing\) return/);
   assert.match(chat, /Reintentar/);
+  assert.match(chat, /onHistoryChange/);
+  assert.match(chat, /onDraftChange/);
+  assert.match(chat, /const listenerController = new AbortController\(\)/);
+  assert.match(chat, /listenerController\.abort\(\)/);
+  assert.match(chat, /emojiPicker\.replaceChildren\(\)/);
+  const room = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
+  assert.doesNotMatch(room, /__roomCompactQa|Temporary local-only browser QA harness/);
 });

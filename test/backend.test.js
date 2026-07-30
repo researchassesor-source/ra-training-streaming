@@ -396,6 +396,16 @@ test('persistent Q&A enforces ownership, supports voting and moderator answers',
   const listing = await request('/api/questions', { cookie: viewerCookie });
   assert.equal(listing.data.questions.length, 1);
   assert.equal(listing.data.questions[0].answer, 'Sí, llegará al correo registrado.');
+  const dismissed = await request(`/api/questions/${created.data.question.id}`, { method: 'PATCH', cookie: organizerCookie, roomCsrf: organizer.session.csrf, body: { status: 'DISMISSED' } });
+  assert.equal(dismissed.response.status, 200, JSON.stringify(dismissed.data));
+  const viewerAfterDismiss = await request('/api/questions', { cookie: viewerCookie });
+  assert.deepEqual(viewerAfterDismiss.data.questions, []);
+  const organizerArchive = await request('/api/questions', { cookie: organizerCookie });
+  assert.equal(organizerArchive.data.questions.length, 1);
+  assert.equal(organizerArchive.data.questions[0].status, 'DISMISSED');
+  assert.equal(organizerArchive.data.questions[0].answer, 'Sí, llegará al correo registrado.');
+  const voteAfterDismiss = await request(`/api/questions/${created.data.question.id}/vote`, { method: 'POST', cookie: viewerCookie, roomCsrf: viewer.session.csrf, body: {} });
+  assert.equal(voteAfterDismiss.response.status, 404);
   assert.equal((await questions.list(meeting.room)).length, 1);
   mockRoomService.participants = [];
 });
