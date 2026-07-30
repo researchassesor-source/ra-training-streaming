@@ -11,9 +11,35 @@ function setupChat(room, myIdentity, options = {}) {
   const fileBtn = document.getElementById('fileBtn');
   const fileInput = document.getElementById('fileInput');
   const uploadStatus = document.getElementById('uploadStatus');
+  const cancelUpload = document.getElementById('cancelUpload');
+  const sendButton = document.getElementById('chatSendButton');
+  const limitEl = document.getElementById('chatLimit');
+  const errorEl = document.getElementById('chatError');
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const mountedRows = [];
+  const drafts = { chat: '', question: '' };
+  let sending = false;
+  let uploadController = null;
+
+  function resizeComposer() {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = `${Math.min(inputEl.scrollHeight, 144)}px`;
+    if (limitEl) {
+      const count = inputEl.value.length;
+      limitEl.textContent = `${count}/2000`;
+      limitEl.classList.toggle('near-limit', count >= 1_800);
+    }
+  }
+
+  function setSending(value) {
+    sending = value;
+    if (sendButton) {
+      sendButton.disabled = value;
+      sendButton.setAttribute('aria-busy', String(value));
+      sendButton.textContent = value ? 'Enviando…' : 'Enviar';
+    }
+  }
 
   function formatSize(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -51,7 +77,7 @@ function setupChat(room, myIdentity, options = {}) {
       const status = document.createElement('span'); status.className = `delivery-status ${delivery}`; status.textContent = delivery === 'failed' ? 'Falló' : delivery === 'sending' ? 'Enviando…' : 'Enviado'; row.appendChild(status);
       if (delivery === 'failed' && message.type !== 'file') {
         const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Reintentar';
-        retry.addEventListener('click', () => { row.remove(); sendText(message.text, message.kind); }); row.appendChild(retry);
+        retry.addEventListener('click', async () => { retry.disabled = true; row.remove(); await sendText(message.text, message.kind); }); row.appendChild(retry);
       }
     }
     container.appendChild(row); mountedRows.push(row); pruneRows(); container.scrollTop = container.scrollHeight;
@@ -66,12 +92,15 @@ function setupChat(room, myIdentity, options = {}) {
       const message = { ...pending, ...approved.message };
       row.querySelector('.delivery-status').className = 'delivery-status sent';
       row.querySelector('.delivery-status').textContent = 'Enviado';
+      return true;
     } catch (error) {
       row.querySelector('.delivery-status').className = 'delivery-status failed';
       row.querySelector('.delivery-status').textContent = 'Falló';
       if (!row.querySelector('button')) {
-        const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Reintentar'; retry.onclick = () => { row.remove(); sendText(text, kind); }; row.appendChild(retry);
+        const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Reintentar'; retry.onclick = async () => { retry.disabled = true; row.remove(); await sendText(text, kind); }; row.appendChild(retry);
       }
+      if (errorEl) errorEl.textContent = error.message || 'No fue posible enviar el mensaje.';
+      return false;
     }
   }
 
@@ -90,17 +119,47 @@ function setupChat(room, myIdentity, options = {}) {
 
   async function submit(event) {
     event.preventDefault();
+    if (sending || event.isComposing) return;
     const text = inputEl.value.trim();
     if (!text) return;
+    if (text.length > 2_000) {
+      if (errorEl) errorEl.textContent = 'El mensaje supera el límite de 2000 caracteres.';
+      return;
+    }
+    const kind = kindEl?.value === 'question' ? 'question' : 'chat';
+    if (errorEl) errorEl.textContent = '';
+    setSending(true);
     inputEl.value = '';
-    await sendText(text, kindEl?.value === 'question' ? 'question' : 'chat');
+    drafts[kind] = '';
+    resizeComposer();
+    const sent = await sendText(text, kind);
+    if (!sent && !inputEl.value) inputEl.value = text;
+    resizeComposer();
+    setSending(false);
   }
   formEl?.addEventListener('submit', submit);
+  inputEl?.addEventListener('keydown', (event) => {
+    if (!RATCore.shouldSubmitChat(event)) return;
+    event.preventDefault();
+    formEl.requestSubmit();
+  });
+  inputEl?.addEventListener('input', () => {
+    drafts[kindEl?.value === 'question' ? 'question' : 'chat'] = inputEl.value;
+    if (errorEl) errorEl.textContent = '';
+    resizeComposer();
+  });
+  kindEl?.addEventListener('change', (event) => {
+    const previous = event.target.value === 'question' ? 'chat' : 'question';
+    drafts[previous] = inputEl.value;
+    inputEl.value = drafts[event.target.value] || '';
+    resizeComposer();
+  });
+  resizeComposer();
 
   if (emojiBtn && emojiPicker) {
     for (const emoji of EMOJI_SET) {
       const button = document.createElement('button'); button.type = 'button'; button.textContent = emoji; button.setAttribute('aria-label', `Insertar ${emoji}`);
-      button.addEventListener('click', () => { inputEl.value += emoji; inputEl.focus(); }); emojiPicker.appendChild(button);
+      button.addEventListener('click', () => { inputEl.value += emoji; inputEl.dispatchEvent(new Event('input')); inputEl.focus(); }); emojiPicker.appendChild(button);
     }
     emojiBtn.addEventListener('click', () => { emojiPicker.hidden = !emojiPicker.hidden; });
   }
@@ -109,22 +168,30 @@ function setupChat(room, myIdentity, options = {}) {
     fileBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files[0]; fileInput.value = ''; if (!file) return;
+      const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/plain']);
+      if (file.size > 10 * 1024 * 1024 || !allowedTypes.has(file.type)) {
+        uploadStatus.textContent = 'El archivo debe ser JPG, PNG, WebP, PDF o TXT y pesar hasta 10 MB.';
+        return;
+      }
+      uploadController = new AbortController();
+      cancelUpload.hidden = false;
+      fileBtn.disabled = true;
       uploadStatus.textContent = `Subiendo ${file.name}…`;
+      uploadStatus.setAttribute('role', 'progressbar');
+      uploadStatus.setAttribute('aria-valuetext', `Subiendo ${file.name}`);
       try {
         const formData = new FormData(); formData.append('file', file);
-        const uploaded = await roomRequest('/api/chat/upload', { method: 'POST', body: formData }, options.csrfToken);
+        const uploaded = await roomRequest('/api/chat/upload', { method: 'POST', body: formData, signal: uploadController.signal }, options.csrfToken);
         const message = { kind: 'chat', type: 'file', role: options.role, sentAt: new Date().toISOString(), ...uploaded };
-        render(options.displayName || myIdentity, message, true, 'sent'); uploadStatus.textContent = '';
-      } catch (error) { uploadStatus.textContent = error.message; }
+        render(options.displayName || myIdentity, message, true, 'sent'); uploadStatus.textContent = 'Archivo enviado.';
+      } catch (error) { uploadStatus.textContent = error.name === 'AbortError' ? 'Carga cancelada.' : error.message; }
+      finally { uploadController = null; cancelUpload.hidden = true; fileBtn.disabled = false; uploadStatus.removeAttribute('role'); uploadStatus.removeAttribute('aria-valuetext'); }
     });
+    cancelUpload?.addEventListener('click', () => uploadController?.abort());
   }
 
   return {
-    dispose() { room.off(LivekitClient.RoomEvent.DataReceived, dataReceived); formEl?.removeEventListener('submit', submit); },
+    dispose() { uploadController?.abort(); room.off(LivekitClient.RoomEvent.DataReceived, dataReceived); formEl?.removeEventListener('submit', submit); },
     sendSystem(message) { return roomRequest('/api/room/events', { method: 'POST', body: message }, options.csrfToken); },
   };
-}
-
-function broadcastRecordingStatus(room, active) {
-  return Promise.resolve({ room, active });
 }
