@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <title>Asistente · R.A. Training Streaming</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/streaming-app-logo-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/streaming-app-logo-180.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="room-body" data-page-role="viewer">
@@ -34,26 +37,29 @@
         <div id="participantsList" class="participants-list"></div>
       </section>
       <div class="room-chat-composer">
-        <p id="uploadStatus" class="upload-progress" aria-live="polite"></p>
+        <div class="upload-status-row"><p id="uploadStatus" class="upload-progress" aria-live="polite"></p><button id="cancelUpload" class="text-button" type="button" hidden>Cancelar carga</button></div>
         <form id="chatForm">
-          <select id="chatKind" aria-label="Tipo de mensaje"><option value="chat">Chat</option><option value="question">Pregunta</option></select>
-          <input id="chatInput" autocomplete="off" maxlength="2000" placeholder="Escribe un mensaje…" aria-label="Mensaje" />
+          <label class="composer-kind">Enviar como<select id="chatKind"><option value="chat">Chat</option><option value="question">Pregunta</option></select></label>
+          <label class="sr-only" for="chatInput">Mensaje</label>
+          <textarea id="chatInput" rows="2" autocomplete="off" maxlength="2000" placeholder="Escribe un mensaje…" aria-describedby="chatLimit chatError"></textarea>
+          <span id="chatLimit" class="character-count">0/2000</span>
+          <p id="chatError" class="form-error composer-error" role="alert" aria-live="assertive"></p>
           <button id="emojiBtn" class="composer-icon" type="button" aria-label="Abrir reacciones">Reacción</button>
           <button id="fileBtn" class="composer-icon" type="button" aria-label="Adjuntar archivo">Adjuntar</button>
           <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,.txt" hidden />
-          <button class="primary compact" type="submit">Enviar</button>
+          <button id="chatSendButton" class="primary compact" type="submit">Enviar</button>
           <div id="emojiPicker" class="emoji-picker" hidden></div>
         </form>
       </div>
     </aside>
   </main>
   <nav id="roomControls" class="room-controls" aria-label="Controles de reunión">
-    <button id="btnMic" type="button" aria-pressed="false"><span class="control-symbol" aria-hidden="true">M</span><span>Micrófono</span></button>
-    <button id="btnCam" type="button" aria-pressed="false"><span class="control-symbol" aria-hidden="true">C</span><span>Cámara</span></button>
-    <button id="btnChat" type="button" aria-pressed="true"><span class="control-symbol" aria-hidden="true">Ch</span><span>Chat</span></button>
-    <button id="btnHand" type="button" aria-pressed="false"><span class="control-symbol" aria-hidden="true">↑</span><span>Mano</span></button>
-    <button id="btnMore" type="button" aria-expanded="false"><span class="control-symbol" aria-hidden="true">···</span><span>Más</span></button>
-    <button id="btnLeave" class="danger-control" type="button"><span class="control-symbol" aria-hidden="true">×</span><span>Salir</span></button>
+    <button id="btnMic" type="button" aria-label="Micrófono" title="Micrófono" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z M5 11v1a7 7 0 0 0 14 0v-1 M12 19v3 M8 22h8" /></svg><span>Micrófono</span></button>
+    <button id="btnCam" type="button" aria-label="Cámara" title="Cámara" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z M17 10l5-3v10l-5-3" /></svg><span>Cámara</span></button>
+    <button id="btnChat" type="button" aria-label="Chat" title="Chat" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /></svg><span>Chat</span></button>
+    <button id="btnHand" type="button" aria-label="Mano" title="Levantar la mano" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V5a2 2 0 0 1 4 0v5 M11 10V3a2 2 0 0 1 4 0v7 M15 10V5a2 2 0 0 1 4 0v9c0 5-3 8-8 8-4 0-6-2-8-6l-1-3a2 2 0 0 1 4-1l1 2" /></svg><span>Mano</span></button>
+    <button id="btnMore" type="button" aria-label="Más opciones" title="Más opciones" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg><span>Más</span></button>
+    <button id="btnLeave" class="danger-control" type="button" aria-label="Salir de la reunión" title="Salir de la reunión"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H4v14h6 M14 8l4 4-4 4 M8 12h10" /></svg><span>Salir</span></button>
   </nav>
   <div id="morePanel" class="more-panel" hidden>
     <div class="panel-heading"><h2>Más opciones</h2><button id="closeMore" class="icon-action" type="button" aria-label="Cerrar opciones">×</button></div>
@@ -67,6 +73,7 @@
       <button id="btnNotifications" type="button">Activar notificaciones</button>
       <button id="btnSoundToggle" type="button" aria-pressed="true">Sonido activo</button>
     </div>
+    <p id="recordingHelp" class="muted small" aria-live="polite"></p>
     <div id="effectsPanel" class="effects-panel" hidden>
       <button type="button" data-camera-effect="none">Sin efecto</button>
       <button type="button" data-camera-effect="blur">Desenfoque</button>
@@ -82,6 +89,7 @@
   </div>
   <dialog id="preflightDialog" class="app-dialog preflight-dialog">
     <form id="preflightForm" method="dialog">
+      <img class="preflight-app-logo" src="assets/streaming-app-logo-192.png" alt="Icono de R.A. Training Streaming" />
       <p class="eyebrow">Sala de preparación</p>
       <h1 id="preflightTitle">Antes de entrar</h1>
       <p id="preflightMeeting" class="muted"></p>
@@ -99,11 +107,16 @@
           <label class="check-row presenter-option"><input id="joinMicrophone" type="checkbox" /> Entrar con micrófono</label>
           <label class="check-row viewer-option"><input id="privacyConsent" type="checkbox" required /> Leí el aviso de privacidad y acepto participar.</label>
           <label class="check-row viewer-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label>
+          <label class="check-row viewer-option" id="transcriptionConsentLabel"><input id="transcriptionConsent" type="checkbox" /> Entiendo que la grabación puede transcribirse.</label>
+          <p id="processingNotice" class="privacy-notice">Esta reunión puede grabarse y transcribirse. La transcripción automática puede contener errores.</p>
         </div>
       </div>
       <p id="preflightError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><a class="button secondary" href="/index.html">Cancelar</a><button id="enterRoomButton" class="primary" type="submit">Entrar a la reunión</button></div>
     </form>
+  </dialog>
+  <dialog id="confirmationDialog" class="app-dialog confirmation-dialog">
+    <form method="dialog"><h2 data-confirm-title>Confirmar acción</h2><p data-confirm-message></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button data-confirm-accept class="primary" value="confirm">Confirmar</button></div></form>
   </dialog>
   <script src="brand.js"></script>
   <script src="app-core.js"></script>

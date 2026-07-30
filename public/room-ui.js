@@ -12,8 +12,11 @@ const ui = {
   meterFrame: null,
   microphone: false,
   camera: false,
+  microphoneBusy: false,
+  cameraBusy: false,
   screen: false,
   recording: false,
+  recordingConfigured: false,
   egressId: null,
   handRaised: false,
   activeTab: 'chat',
@@ -21,10 +24,32 @@ const ui = {
   backgroundObjectUrl: null,
 };
 const handQueue = new RATCore.HandQueue();
-const unreadChat = RATCore.createUnreadCounter((count) => updateCounter('chatUnread', count));
-const unreadQuestions = RATCore.createUnreadCounter((count) => updateCounter('questionUnread', count));
 const floatingModel = RATCore.createFloatingModel();
+const unreadChat = RATCore.createUnreadCounter((count) => { updateCounter('chatUnread', count); floatingModel.update({ unreadMessages: count }); });
+const unreadQuestions = RATCore.createUnreadCounter((count) => { updateCounter('questionUnread', count); floatingModel.update({ unreadQuestions: count }); });
 const statusMachine = new RATCore.ConnectionStateMachine(renderConnectionState);
+let recordingMachine = new RATCore.RecordingStateMachine(renderRecordingState, false);
+let recordingPollTimer = null;
+
+function renderRecordingState(snapshot) {
+  const wasRecording = ui.recording;
+  ui.recording = snapshot.active;
+  ui.egressId = snapshot.egressId;
+  const badge = document.getElementById('recordingBadge');
+  badge.hidden = !snapshot.active;
+  badge.textContent = snapshot.active ? 'Grabando' : '';
+  const button = document.getElementById('btnRecord');
+  if (button) {
+    button.disabled = snapshot.busy || snapshot.state === 'DISABLED';
+    button.textContent = snapshot.active ? 'Detener grabación' : snapshot.busy ? snapshot.label : 'Iniciar grabación';
+    button.setAttribute('aria-busy', String(snapshot.busy));
+    button.title = snapshot.state === 'DISABLED' ? 'La grabación no está configurada en este entorno' : snapshot.label;
+  }
+  const help = document.getElementById('recordingHelp');
+  if (help) help.textContent = snapshot.state === 'DISABLED' ? 'La grabación no está configurada en este entorno' : snapshot.active ? 'La grabación está activa y todos los participantes han sido avisados.' : snapshot.label;
+  floatingModel.update({ recording: snapshot.active });
+  if (snapshot.active !== wasRecording) playAlert(snapshot.active ? 'recordingStart' : 'recordingStop');
+}
 
 function renderConnectionState(snapshot) {
   const element = document.getElementById('connectionStatus');
@@ -44,6 +69,21 @@ function showMessage(message, critical = false) {
   element.textContent = message;
   element.className = critical ? 'form-error' : 'muted';
   if (critical) playAlert('critical');
+}
+
+function askConfirmation({ title, message, confirmLabel = 'Confirmar', danger = false }) {
+  const dialog = document.getElementById('confirmationDialog');
+  dialog.querySelector('[data-confirm-title]').textContent = title;
+  dialog.querySelector('[data-confirm-message]').textContent = message;
+  const accept = dialog.querySelector('[data-confirm-accept]');
+  accept.textContent = confirmLabel;
+  accept.className = danger ? 'danger' : 'primary';
+  return new Promise((resolve) => {
+    const close = () => { dialog.removeEventListener('close', close); resolve(dialog.returnValue === 'confirm'); };
+    dialog.addEventListener('close', close);
+    dialog.showModal();
+    accept.focus();
+  });
 }
 
 function participantName(participant) {
@@ -88,6 +128,8 @@ async function enumerateDevices() {
         select.disabled = true; select.title = 'La selección de altavoz no está disponible en este navegador.';
       }
     }
+    if (kind === 'videoinput' && !matches.length) { const button = document.getElementById('btnCam'); button.disabled = true; button.title = 'No se detectó una cámara.'; }
+    if (kind === 'audioinput' && !matches.length) { const button = document.getElementById('btnMic'); button.disabled = true; button.title = 'No se detectó un micrófono.'; }
   }
 }
 
@@ -156,6 +198,8 @@ function setupPreflight() {
   document.getElementById('displayNameInput').value = ui.session.displayName || '';
   document.getElementById('preflightMeeting').textContent = `${ui.session.meeting.title} · ${ui.session.meeting.trainerName}`;
   document.getElementById('recordingConsentLabel').hidden = !viewer || !ui.session.meeting.recordingConsentRequired;
+  document.getElementById('transcriptionConsentLabel').hidden = !viewer || !ui.session.meeting.transcriptionConsentRequired;
+  document.getElementById('processingNotice').hidden = !ui.session.meeting.allowRecording && !ui.session.meeting.allowTranscription;
   const connection = navigator.connection;
   document.getElementById('networkStatus').textContent = connection
     ? `Red estimada: ${connection.effectiveType || 'desconocida'}${connection.downlink ? ` · ${connection.downlink} Mbps` : ''}`
@@ -169,6 +213,7 @@ async function submitPreflight(event) {
   const viewer = ui.session.role === 'VIEWER';
   if (viewer && !document.getElementById('privacyConsent').checked) return void (error.textContent = 'Debes aceptar el aviso de privacidad para entrar.');
   if (viewer && ui.session.meeting.recordingConsentRequired && !document.getElementById('recordingConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de grabación para entrar.');
+  if (viewer && ui.session.meeting.transcriptionConsentRequired && !document.getElementById('transcriptionConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de transcripción para entrar.');
   try {
     const displayName = document.getElementById('displayNameInput').value.trim();
     if (displayName !== ui.session.displayName) {
@@ -263,7 +308,7 @@ async function rejectHand(item) {
 }
 
 async function removeParticipant(identity) {
-  if (!confirm('¿Expulsar a este participante de la reunión?')) return;
+  if (!await askConfirmation({ title: 'Expulsar participante', message: 'La persona perderá el acceso inmediato a esta reunión.', confirmLabel: 'Expulsar', danger: true })) return;
   try { await roomRequest('/api/participants/remove', { method: 'POST', body: { targetIdentity: identity } }, ui.session.csrfToken); } catch (error) { showMessage(error.message, true); }
 }
 
@@ -297,7 +342,10 @@ function handleData(payload, participant) {
     if (message.kind === 'hand-approved' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; renderMediaPermissions(); showMessage('El organizador te dio la palabra.'); }
     if (message.kind === 'hand-rejected' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); showMessage('La solicitud fue cerrada por el organizador.'); }
     if (message.kind === 'word-revoked' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; renderMediaPermissions(); showMessage('El organizador retiró el permiso para hablar.'); }
-    if (message.kind === 'recording-status') setRecordingIndicator(Boolean(message.active));
+    if (message.kind === 'recording-status') recordingMachine.set(message.state, {
+      active: message.state === 'RECORDING' && message.active === true,
+      egressId: message.egressId || null,
+    });
     if (message.kind === 'reaction') playAlert('reaction');
   } catch { /* Other binary data is ignored. */ }
 }
@@ -324,22 +372,26 @@ function renderMediaPermissions() {
 }
 
 async function toggleMicrophone() {
-  if (!ui.room || !hasPublishPermission()) return;
+  if (!ui.room || !hasPublishPermission() || ui.microphoneBusy) return;
+  ui.microphoneBusy = true; document.getElementById('btnMic').disabled = true; document.getElementById('btnMic').setAttribute('aria-busy', 'true');
   try {
     ui.microphone = !ui.microphone; await ui.room.localParticipant.setMicrophoneEnabled(ui.microphone);
     setButtonState(document.getElementById('btnMic'), ui.microphone, 'Silenciar', 'Micrófono'); floatingModel.update({ microphone: ui.microphone });
-  } catch (error) { ui.microphone = false; showMessage(`Micrófono: ${error.message}`, true); }
+  } catch (error) { ui.microphone = false; document.getElementById('btnMic').title = 'Permiso bloqueado o dispositivo no disponible.'; showMessage(`Micrófono: ${error.message}`, true); }
+  finally { ui.microphoneBusy = false; document.getElementById('btnMic').disabled = !hasPublishPermission(); document.getElementById('btnMic').setAttribute('aria-busy', 'false'); }
 }
 
 async function toggleCamera() {
-  if (!ui.room || !hasPublishPermission()) return;
+  if (!ui.room || !hasPublishPermission() || ui.cameraBusy) return;
+  ui.cameraBusy = true; document.getElementById('btnCam').disabled = true; document.getElementById('btnCam').setAttribute('aria-busy', 'true');
   try {
     ui.camera = !ui.camera; await ui.room.localParticipant.setCameraEnabled(ui.camera);
     setButtonState(document.getElementById('btnCam'), ui.camera, 'Apagar', 'Cámara'); floatingModel.update({ camera: ui.camera });
     const publication = ui.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
     if (ui.camera && publication?.track) ui.stage.setTrack(ui.session.identity, `${ui.session.displayName} (tú)`, 'camera', publication.track, { muted: true });
     else ui.stage.removeTrack(ui.session.identity, 'camera');
-  } catch (error) { ui.camera = false; showMessage(`Cámara: ${error.message}`, true); }
+  } catch (error) { ui.camera = false; document.getElementById('btnCam').title = 'Permiso bloqueado o dispositivo no disponible.'; showMessage(`Cámara: ${error.message}`, true); }
+  finally { ui.cameraBusy = false; document.getElementById('btnCam').disabled = !hasPublishPermission(); document.getElementById('btnCam').setAttribute('aria-busy', 'false'); }
 }
 
 async function toggleScreen() {
@@ -399,31 +451,53 @@ async function compressedBackgroundUrl(file) {
   return URL.createObjectURL(blob);
 }
 
-function setRecordingIndicator(active) {
-  ui.recording = active;
-  document.getElementById('recordingBadge').hidden = !active;
-  document.getElementById('btnRecord').textContent = active ? 'Detener grabación' : 'Iniciar grabación';
-  floatingModel.update({ recording: active });
-  playAlert(active ? 'recordingStart' : 'recordingStop');
+async function queryRecordingStatus() {
+  if (!ui.recordingConfigured || !ui.session?.meeting.allowRecording) {
+    recordingMachine.set('DISABLED');
+    return recordingMachine.emit();
+  }
+  try {
+    const result = await roomRequest('/api/recording/status');
+    const snapshot = recordingMachine.set(result.state, { active: result.active === true, egressId: result.egressId, message: result.message });
+    clearTimeout(recordingPollTimer);
+    if (snapshot.busy) recordingPollTimer = window.setTimeout(queryRecordingStatus, 1_500);
+    return snapshot;
+  } catch {
+    return recordingMachine.set('FAILED', { active: false, message: 'No fue posible consultar el estado real de la grabación.' });
+  }
 }
 
 async function toggleRecording() {
   if (!isOrganizer()) return;
-  if (!ui.recording && !confirm('¿Iniciar la grabación? Se mostrará un aviso a todos los participantes.')) return;
+  const current = recordingMachine.emit();
+  if (current.busy || current.state === 'DISABLED') return;
+  if (!current.active) {
+    const confirmed = await askConfirmation({
+      title: 'Iniciar grabación',
+      message: 'Se avisará a todos los participantes. La grabación solo aparecerá activa cuando Egress lo confirme.',
+      confirmLabel: 'Iniciar grabación',
+    });
+    if (!confirmed) return;
+  }
+  recordingMachine.set(current.active ? 'STOPPING' : 'STARTING');
   try {
-    if (!ui.recording) {
-      const result = await roomRequest('/api/recording/start', { method: 'POST', body: {} }, ui.session.csrfToken);
-      ui.egressId = result.egressId; setRecordingIndicator(true);
-    } else {
-      await roomRequest('/api/recording/stop', { method: 'POST', body: { egressId: ui.egressId } }, ui.session.csrfToken);
-      ui.egressId = null; setRecordingIndicator(false);
+    const result = current.active
+      ? await roomRequest('/api/recording/stop', { method: 'POST', body: { egressId: current.egressId } }, ui.session.csrfToken)
+      : await roomRequest('/api/recording/start', { method: 'POST', body: {} }, ui.session.csrfToken);
+    recordingMachine.set(result.state, { active: result.active === true, egressId: result.egressId });
+    if (result.state === 'STARTING' || result.state === 'STOPPING') {
+      clearTimeout(recordingPollTimer);
+      recordingPollTimer = window.setTimeout(queryRecordingStatus, 1_500);
     }
-    await broadcastRecordingStatus(ui.room, ui.recording);
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) {
+    recordingMachine.set('FAILED', { active: false, message: error.message });
+    showMessage(error.message, true);
+  }
 }
 
 async function leaveRoom() {
-  if (ui.recording && !confirm('La grabación sigue activa. Salir no finalizará la reunión ni detendrá automáticamente la grabación. ¿Salir?')) return;
+  const recording = await queryRecordingStatus();
+  if ((recording.active || recording.busy) && !await askConfirmation({ title: 'Salir de la reunión', message: 'Hay una operación de grabación activa. Salir no la detendrá ni finalizará la reunión.', confirmLabel: 'Salir', danger: true })) return;
   try {
     if (ui.backgroundObjectUrl) {
       URL.revokeObjectURL(ui.backgroundObjectUrl);
@@ -436,9 +510,11 @@ async function leaveRoom() {
 }
 
 async function endRoom() {
-  if (!confirm('Esto desconectará a todos y marcará la reunión como completada. ¿Finalizar para todos?')) return;
+  const recording = await queryRecordingStatus();
+  const detail = recording.active || recording.busy ? ' La operación de grabación se resolverá antes de cerrar.' : '';
+  if (!await askConfirmation({ title: 'Finalizar para todos', message: `Esto desconectará a todos y marcará la reunión como completada.${detail}`, confirmLabel: 'Finalizar reunión', danger: true })) return;
   try {
-    if (ui.recording && ui.egressId) await roomRequest('/api/recording/stop', { method: 'POST', body: { egressId: ui.egressId } }, ui.session.csrfToken);
+    if (recording.active && recording.egressId) await roomRequest('/api/recording/stop', { method: 'POST', body: { egressId: recording.egressId } }, ui.session.csrfToken);
     await roomRequest('/api/room/end', { method: 'POST', body: {} }, ui.session.csrfToken);
     statusMachine.set('room_ended');
     await ui.room.disconnect(); window.location.href = '/dashboard.html';
@@ -492,10 +568,8 @@ function setupControls() {
 async function connectRoom({ joinCamera, joinMicrophone }) {
   statusMachine.set('connecting_signaling');
   const tokenData = await requestToken();
-  if (isOrganizer() && !tokenData.recordingConfigured) {
-    document.getElementById('btnRecord').disabled = true;
-    document.getElementById('btnRecord').title = 'La grabación no está configurada en este entorno.';
-  }
+  ui.recordingConfigured = tokenData.recordingConfigured === true && ui.session.meeting.allowRecording === true;
+  recordingMachine = new RATCore.RecordingStateMachine(renderRecordingState, ui.recordingConfigured);
   const room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true, disconnectOnPageLeave: false });
   ui.room = room;
   ui.stage = createStage(document.getElementById('stageGrid'), 'Esperando contenido de la reunión…');
@@ -507,6 +581,7 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     countBadge: document.getElementById('participantCount'),
     floatingModel,
     onParticipantsChanged: renderParticipants,
+    onReconnected: () => queryRecordingStatus(),
   });
   statusMachine.set('connecting_media');
   await room.connect(tokenData.wsUrl, tokenData.token);
@@ -520,10 +595,11 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     onMessage(_participant, message) {
       const counter = message.kind === 'question' ? unreadQuestions : unreadChat;
       if (ui.activeTab !== (message.kind === 'question' ? 'questions' : 'chat') || document.getElementById('sidePanel').classList.contains('closed')) counter.increment();
-      floatingModel.update({ unreadMessages: unreadChat.value + unreadQuestions.value });
+      floatingModel.update({ unreadMessages: unreadChat.value, unreadQuestions: unreadQuestions.value });
     },
   });
   setupControls(); renderMediaPermissions(); renderParticipants([room.localParticipant]);
+  await queryRecordingStatus();
   await enumerateDevices();
   if (joinMicrophone) await toggleMicrophone();
   if (joinCamera) await toggleCamera();
@@ -532,10 +608,17 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
 
 async function initializeRoom() {
   setupTabs();
+  const syncViewport = () => document.documentElement.style.setProperty('--room-viewport-height', `${window.visualViewport?.height || window.innerHeight}px`);
+  syncViewport();
+  window.visualViewport?.addEventListener('resize', syncViewport);
+  window.visualViewport?.addEventListener('scroll', syncViewport);
   document.getElementById('preflightForm').addEventListener('submit', submitPreflight);
   document.getElementById('previewButton').addEventListener('click', () => startPreview().catch((error) => { document.getElementById('preflightError').textContent = error.message; }));
   window.addEventListener('pagehide', () => {
     stopPreview();
+    clearTimeout(recordingPollTimer);
+    window.visualViewport?.removeEventListener('resize', syncViewport);
+    window.visualViewport?.removeEventListener('scroll', syncViewport);
     if (ui.backgroundObjectUrl) URL.revokeObjectURL(ui.backgroundObjectUrl);
   }, { once: true });
   try {
@@ -552,7 +635,7 @@ async function initializeRoom() {
     await enumerateDevices(); setupPreflight();
   } catch (error) {
     statusMachine.set(error.code === 'ROOM_ENDED' ? 'room_ended' : 'access_denied', error.message);
-    document.querySelector('.room-layout').innerHTML = `<div class="access-denied"><h1>Acceso no disponible</h1><p></p><a class="button primary" href="/index.html">Volver al inicio</a></div>`;
+    document.querySelector('.room-layout').innerHTML = `<div class="access-denied branded-empty"><img src="assets/streaming-app-logo-192.png" alt="Icono de R.A. Training Streaming"><h1>Acceso no disponible</h1><p></p><a class="button primary" href="/index.html">Volver al inicio</a></div>`;
     document.querySelector('.access-denied p').textContent = error.message;
     document.getElementById('roomControls').hidden = true;
   }

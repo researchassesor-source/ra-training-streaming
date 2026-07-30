@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Panel organizador · R.A. Training</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/streaming-app-logo-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/streaming-app-logo-180.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="dashboard-body">
@@ -117,6 +120,12 @@
 
       <section class="dashboard-section admin-only" data-section-panel="audit" aria-labelledby="auditTitle">
         <div class="section-heading"><div><p class="eyebrow">Trazabilidad</p><h1 id="auditTitle">Auditoría</h1></div><button id="refreshAudit" class="secondary" type="button">Actualizar</button></div>
+        <div class="filters-grid audit-filters">
+          <label>Fecha<input id="auditDateFilter" type="date" /></label>
+          <label>Actor<input id="auditActorFilter" placeholder="Todos" /></label>
+          <label>Acción<input id="auditActionFilter" placeholder="Ej. AUTH_LOGIN" /></label>
+          <label>Sala<input id="auditRoomFilter" placeholder="Todas" /></label>
+        </div>
         <div class="table-wrap">
           <table class="data-table"><thead><tr><th>Fecha</th><th>Actor</th><th>Acción</th><th>Objetivo</th><th>Sala</th></tr></thead><tbody id="auditTable"></tbody></table>
         </div>
@@ -133,7 +142,7 @@
             <li>Salas cerradas por defecto; modo abierto solo mediante variable explícita de desarrollo.</li>
           </ul>
           <h2>Integraciones</h2>
-          <p id="settingsIntegrations" class="muted">Cargando estado…</p>
+          <div id="settingsIntegrations" class="service-list settings-diagnostics" aria-live="polite"><p class="muted">Cargando estado…</p></div>
         </article>
       </section>
     </main>
@@ -152,7 +161,7 @@
         <label>Duración (minutos)<input id="meetingDuration" type="number" min="1" max="1440" value="60" required /></label>
         <label>Tipo<select id="meetingType"><option>WEBINAR</option><option>SESSION</option><option>CLASS</option></select></label>
         <label>Estado<select id="meetingStatus"></select></label>
-        <label>Capacidad<input id="meetingCapacity" type="number" min="0" max="100000" value="500" /></label>
+        <label>Capacidad<input id="meetingCapacity" type="number" min="0" max="100000" value="100" /></label>
         <label>Acceso asistentes<select id="meetingViewerAccess"><option>INVITATION</option><option>AUTHENTICATED</option><option>CLOSED</option></select></label>
         <label>Acceso panelistas<select id="meetingPanelistAccess"><option>INVITATION</option><option>AUTHENTICATED</option><option>CLOSED</option></select></label>
       </div>
@@ -161,9 +170,17 @@
         <label><input id="meetingAllowFiles" type="checkbox" checked /> Archivos</label>
         <label><input id="meetingAllowReactions" type="checkbox" checked /> Reacciones</label>
         <label><input id="meetingAllowRaiseHand" type="checkbox" checked /> Mano levantada</label>
-        <label><input id="meetingAllowRecording" type="checkbox" checked /> Grabación</label>
-        <label><input id="meetingConsent" type="checkbox" checked /> Consentimiento de grabación</label>
+        <label><input id="meetingAllowRecording" type="checkbox" /> Grabación</label>
+        <label><input id="meetingConsent" type="checkbox" /> Consentimiento de grabación</label>
+        <label><input id="meetingAllowTranscription" type="checkbox" /> Permitir transcripción</label>
+        <label><input id="meetingTranscriptionConsent" type="checkbox" /> Solicitar consentimiento de transcripción</label>
+        <label><input id="meetingPanelistTranscript" type="checkbox" /> Permitir lectura a panelistas</label>
       </fieldset>
+      <div class="form-grid transcription-options">
+        <label>Idioma esperado<select id="meetingTranscriptionLanguage"><option value="es">Español</option><option value="en">Inglés</option><option value="pt">Portugués</option></select></label>
+        <label>Retención de transcripción (días)<input id="meetingTranscriptionRetention" type="number" min="1" max="3650" value="90" /></label>
+      </div>
+      <p class="muted small">La transcripción no se inicia automáticamente. El texto generado puede contener errores y debe revisarse.</p>
       <p id="meetingFormError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancelar</button><button id="saveMeeting" class="primary" type="submit">Guardar reunión</button></div>
     </form>
@@ -182,7 +199,16 @@
     </form>
   </dialog>
 
+  <dialog id="dashboardConfirmDialog" class="app-dialog confirmation-dialog">
+    <form method="dialog"><h2 data-confirm-title>Confirmar acción</h2><p data-confirm-message></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button data-confirm-accept class="primary" value="confirm">Confirmar</button></div></form>
+  </dialog>
+
+  <dialog id="passwordDialog" class="app-dialog small-dialog">
+    <form method="dialog"><h2>Cambiar contraseña</h2><p>Nueva contraseña para <strong data-password-user></strong>.</p><label>Contraseña nueva<input type="password" minlength="10" maxlength="128" autocomplete="new-password" required /></label><p class="form-error" role="alert"></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button class="primary" value="confirm">Cambiar contraseña</button></div></form>
+  </dialog>
+
   <script src="brand.js"></script>
+  <script src="app-core.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>
