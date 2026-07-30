@@ -17,10 +17,54 @@ function setupChat(room, myIdentity, options = {}) {
   const errorEl = document.getElementById('chatError');
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  const listenerController = new AbortController();
   const mountedRows = [];
   const drafts = { chat: '', question: '' };
+  const history = [];
   let sending = false;
   let uploadController = null;
+  let historySequence = 0;
+
+  function listen(target, type, handler) {
+    target?.addEventListener(type, handler, { signal: listenerController.signal });
+  }
+
+  function emitHistory() {
+    options.onHistoryChange?.(history.slice(-60).map((item) => ({ ...item })));
+  }
+
+  function addHistory(from, message, isMe, delivery) {
+    const historyId = String(message.id || `chat-${Date.now()}-${historySequence += 1}`);
+    history.push({
+      id: historyId,
+      from: from || 'Participante',
+      role: message.role || 'VIEWER',
+      text: message.type === 'file' ? `📎 ${message.filename || 'Archivo'}` : String(message.text || ''),
+      sentAt: message.sentAt || new Date().toISOString(),
+      isMe: isMe === true,
+      delivery,
+    });
+    if (history.length > 60) history.splice(0, history.length - 60);
+    emitHistory();
+    return historyId;
+  }
+
+  function updateHistory(historyId, patch) {
+    const item = history.find((entry) => entry.id === historyId);
+    if (!item) return;
+    Object.assign(item, patch);
+    emitHistory();
+  }
+
+  function setDraft(kind, value) {
+    const normalizedKind = kind === 'question' ? 'question' : 'chat';
+    drafts[normalizedKind] = String(value || '').slice(0, normalizedKind === 'question' ? 600 : 2_000);
+    if ((kindEl?.value === 'question' ? 'question' : 'chat') === normalizedKind) {
+      inputEl.value = drafts[normalizedKind];
+      resizeComposer();
+    }
+    options.onDraftChange?.(normalizedKind, drafts[normalizedKind]);
+  }
 
   function resizeComposer() {
     inputEl.style.height = 'auto';
@@ -56,6 +100,7 @@ function setupChat(room, myIdentity, options = {}) {
     const container = message.kind === 'question' && questionsEl ? questionsEl : messagesEl;
     const row = document.createElement('article');
     row.className = `chat-msg ${message.type === 'file' ? 'file' : ''}`;
+    row.dataset.historyId = addHistory(from, message, isMe, delivery);
     const header = document.createElement('div'); header.className = 'chat-msg-header';
     const who = document.createElement('strong'); who.className = isMe ? 'who me' : 'who'; who.textContent = from || 'Participante';
     const role = document.createElement('span'); role.className = 'chat-role'; role.textContent = RATCore.roleLabel(message.role);
@@ -78,7 +123,7 @@ function setupChat(room, myIdentity, options = {}) {
       const status = document.createElement('span'); status.className = `delivery-status ${delivery}`; status.textContent = delivery === 'failed' ? 'Falló' : delivery === 'sending' ? 'Enviando…' : 'Enviado'; row.appendChild(status);
       if (delivery === 'failed' && message.type !== 'file') {
         const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Reintentar';
-        retry.addEventListener('click', async () => { retry.disabled = true; row.remove(); await sendText(message.text, message.kind); }); row.appendChild(retry);
+        listen(retry, 'click', async () => { retry.disabled = true; row.remove(); await sendText(message.text, message.kind); }); row.appendChild(retry);
       }
     }
     container.appendChild(row); mountedRows.push(row); pruneRows(); container.scrollTop = container.scrollHeight;
@@ -102,10 +147,12 @@ function setupChat(room, myIdentity, options = {}) {
       const message = { ...pending, ...approved.message };
       row.querySelector('.delivery-status').className = 'delivery-status sent';
       row.querySelector('.delivery-status').textContent = 'Enviado';
+      updateHistory(row.dataset.historyId, { delivery: 'sent', sentAt: message.sentAt || pending.sentAt });
       return true;
     } catch (error) {
       row.querySelector('.delivery-status').className = 'delivery-status failed';
       row.querySelector('.delivery-status').textContent = 'Falló';
+      updateHistory(row.dataset.historyId, { delivery: 'failed' });
       if (!row.querySelector('button')) {
         const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Reintentar'; retry.onclick = async () => { retry.disabled = true; row.remove(); await sendText(text, kind); }; row.appendChild(retry);
       }
@@ -142,26 +189,33 @@ function setupChat(room, myIdentity, options = {}) {
     setSending(true);
     inputEl.value = '';
     drafts[kind] = '';
+    options.onDraftChange?.(kind, '');
     resizeComposer();
     const sent = await sendText(text, kind);
-    if (!sent && !inputEl.value) inputEl.value = text;
+    if (!sent && !inputEl.value) {
+      inputEl.value = text;
+      drafts[kind] = text;
+      options.onDraftChange?.(kind, text);
+    }
     resizeComposer();
     setSending(false);
   }
-  formEl?.addEventListener('submit', submit);
-  inputEl?.addEventListener('keydown', (event) => {
+  listen(formEl, 'submit', submit);
+  listen(inputEl, 'keydown', (event) => {
     if (!RATCore.shouldSubmitChat(event)) return;
     event.preventDefault();
     formEl.requestSubmit();
   });
-  inputEl?.addEventListener('input', () => {
+  listen(inputEl, 'input', () => {
     drafts[kindEl?.value === 'question' ? 'question' : 'chat'] = inputEl.value;
+    options.onDraftChange?.(kindEl?.value === 'question' ? 'question' : 'chat', inputEl.value);
     if (errorEl) errorEl.textContent = '';
     resizeComposer();
   });
-  kindEl?.addEventListener('change', (event) => {
+  listen(kindEl, 'change', (event) => {
     const previous = event.target.value === 'question' ? 'chat' : 'question';
     drafts[previous] = inputEl.value;
+    options.onDraftChange?.(previous, inputEl.value);
     inputEl.value = drafts[event.target.value] || '';
     inputEl.maxLength = event.target.value === 'question' ? 600 : 2000;
     inputEl.placeholder = event.target.value === 'question' ? 'Escribe una pregunta para la sesión…' : 'Escribe un mensaje…';
@@ -171,16 +225,17 @@ function setupChat(room, myIdentity, options = {}) {
   resizeComposer();
 
   if (emojiBtn && emojiPicker) {
+    emojiPicker.replaceChildren();
     for (const emoji of EMOJI_SET) {
       const button = document.createElement('button'); button.type = 'button'; button.textContent = emoji; button.setAttribute('aria-label', `Insertar ${emoji}`);
-      button.addEventListener('click', () => { inputEl.value += emoji; inputEl.dispatchEvent(new Event('input')); inputEl.focus(); }); emojiPicker.appendChild(button);
+      listen(button, 'click', () => { inputEl.value += emoji; inputEl.dispatchEvent(new Event('input')); inputEl.focus(); }); emojiPicker.appendChild(button);
     }
-    emojiBtn.addEventListener('click', () => { emojiPicker.hidden = !emojiPicker.hidden; });
+    listen(emojiBtn, 'click', () => { emojiPicker.hidden = !emojiPicker.hidden; });
   }
 
   if (fileBtn && fileInput) {
-    fileBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', async () => {
+    listen(fileBtn, 'click', () => fileInput.click());
+    listen(fileInput, 'change', async () => {
       const file = fileInput.files[0]; fileInput.value = ''; if (!file) return;
       const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/plain']);
       if (file.size > 10 * 1024 * 1024 || !allowedTypes.has(file.type)) {
@@ -201,11 +256,19 @@ function setupChat(room, myIdentity, options = {}) {
       } catch (error) { uploadStatus.textContent = error.name === 'AbortError' ? 'Carga cancelada.' : error.message; }
       finally { uploadController = null; cancelUpload.hidden = true; fileBtn.disabled = false; uploadStatus.removeAttribute('role'); uploadStatus.removeAttribute('aria-valuetext'); }
     });
-    cancelUpload?.addEventListener('click', () => uploadController?.abort());
+    listen(cancelUpload, 'click', () => uploadController?.abort());
   }
 
   return {
-    dispose() { uploadController?.abort(); room.off(LivekitClient.RoomEvent.DataReceived, dataReceived); formEl?.removeEventListener('submit', submit); },
+    dispose() {
+      uploadController?.abort();
+      listenerController.abort();
+      room.off(LivekitClient.RoomEvent.DataReceived, dataReceived);
+      emojiPicker?.replaceChildren();
+    },
+    getDraft(kind = 'chat') { return drafts[kind === 'question' ? 'question' : 'chat'] || ''; },
+    setDraft,
+    sendText,
     sendSystem(message) { return roomRequest('/api/room/events', { method: 'POST', body: message }, options.csrfToken); },
   };
 }

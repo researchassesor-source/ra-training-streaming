@@ -369,12 +369,32 @@ function openTab(name) {
 
 function renderParticipants(participants = []) {
   const container = document.getElementById('participantsList'); container.replaceChildren();
+  const participantItems = [];
   for (const participant of participants) {
     const row = document.createElement('article'); row.className = 'participant-card';
     const info = document.createElement('div');
     const media = participantMediaState(participant);
     const permission = participant.permissions || participant.permission || {};
     const pendingHand = handQueue.list().find((item) => item.identity === participant.identity && item.status === 'PENDING');
+    const compactActions = [];
+    if (isOrganizer() && !participant.isLocal) {
+      if (pendingHand && !permission.canPublish) compactActions.push('grantWord');
+      else if (permission.canPublish) compactActions.push('revokeWord');
+      if (!media.microphone) compactActions.push('requestMicrophone');
+      compactActions.push('more');
+    }
+    participantItems.push({
+      identity: participant.identity,
+      name: participantName(participant),
+      roleLabel: participantRole(participant),
+      microphone: media.microphone,
+      camera: media.camera,
+      screen: media.screen,
+      handRaised: Boolean(pendingHand),
+      canPublish: permission.canPublish === true,
+      isLocal: participant.isLocal === true,
+      actions: compactActions,
+    });
     const qualityLabels = { EXCELLENT: 'excelente', GOOD: 'buena', POOR: 'inestable', LOST: 'sin conexión' };
     const qualityValue = String(participant.connectionQuality || '').toUpperCase();
     const quality = isOrganizer() && qualityValue ? ` · Red ${qualityLabels[qualityValue] || 'desconocida'}` : '';
@@ -426,6 +446,7 @@ function renderParticipants(participants = []) {
     }
     container.appendChild(row);
   }
+  floatingModel.update({ participantItems });
   if (participants.length <= 1 && isOrganizer()) {
     const empty = document.createElement('div');
     empty.className = 'empty-state compact participants-empty';
@@ -595,10 +616,10 @@ function handleData(payload, participant) {
     const message = JSON.parse(new TextDecoder().decode(payload));
     if (message.kind === 'hand-raise' && ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(ui.session.role)) {
       handQueue.raise(message.identity || participant?.identity, message.displayName || participantName(participant), message.raisedAt);
-      renderHandQueue(); playAlert('hand'); systemNotification('Mano levantada', `${message.displayName || participantName(participant)} solicitó la palabra.`);
+      renderHandQueue(); ui.roomUi?.updateCount(); playAlert('hand'); systemNotification('Mano levantada', `${message.displayName || participantName(participant)} solicitó la palabra.`);
       notifier.notify('hand-raised', { title: 'Mano levantada', message: `${message.displayName || participantName(participant)} solicitó la palabra.`, system: false });
     }
-    if (message.kind === 'hand-lower') { handQueue.remove(participant?.identity || message.identity); renderHandQueue(); }
+    if (message.kind === 'hand-lower') { handQueue.remove(participant?.identity || message.identity); renderHandQueue(); ui.roomUi?.updateCount(); }
     if (message.kind === 'hand-approved' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); renderMediaPermissions(); showMessage('El organizador te dio la palabra.'); }
     if (message.kind === 'hand-rejected' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); showMessage('La solicitud fue cerrada por el organizador.'); }
     if (message.kind === 'word-revoked' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; if (ui.screen) finishScreenShare(true); renderMediaPermissions(); showMessage('El organizador retiró el permiso para hablar.'); }
@@ -1066,11 +1087,27 @@ function setupControls() {
   document.getElementById('speakerSelect').onchange = (event) => document.querySelectorAll('audio, video').forEach((media) => media.setSinkId?.(event.target.value).catch(() => {}));
   ui.companion = attachCompanionWindow(document.getElementById('btnFloat'), floatingModel, {
     microphone: toggleMicrophone, camera: toggleCamera, screen: toggleScreen,
-    chat: () => openTab('chat'), questions: () => openTab('questions'), participants: () => openTab('participants'),
+    questions: () => openTab('questions'),
     hand: ui.session.role === 'VIEWER' ? toggleHand : () => openTab('participants'),
     more: () => { document.getElementById('morePanel').hidden = false; window.focus(); },
     leave: leaveRoom, return: () => window.focus(), unsupported: (message) => showMessage(message, true),
     fallback: (message) => notifier.notify('floating-fallback', { title: 'Controles flotantes internos', message, system: false }),
+    chatDraft: (value) => ui.chat?.setDraft('chat', value),
+    sendChat: async (value) => {
+      if (!ui.chat) return false;
+      ui.chat.setDraft('chat', value);
+      const sent = await ui.chat.sendText(value, 'chat');
+      if (sent) ui.chat.setDraft('chat', '');
+      return sent;
+    },
+    participantAction: async (action, identity) => {
+      if (action === 'requestMicrophone') return requestParticipantMedia(identity, 'request-microphone');
+      if (action === 'grantWord') return promoteParticipant({ identity });
+      if (action === 'revokeWord') return demoteParticipant(identity);
+      if (action === 'more') { openTab('participants'); window.focus(); }
+      return undefined;
+    },
+    error: (message) => showMessage(message, true),
   });
   setupKeyboardShortcuts();
 }
@@ -1136,6 +1173,12 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
         notifier.notify('question-sent', { title: 'Pregunta enviada', message: 'Tu pregunta quedó en la cola de Q&A.', tone: 'success', system: false });
         return question;
       },
+      onDraftChange(kind, value) {
+        if (kind === 'chat') floatingModel.update({ chatDraft: value });
+      },
+      onHistoryChange(messages) {
+        floatingModel.update({ chatMessages: messages });
+      },
       onMessage(_participant, message) {
         const counter = message.kind === 'question' ? unreadQuestions : unreadChat;
         if (ui.activeTab !== (message.kind === 'question' ? 'questions' : 'chat') || document.getElementById('sidePanel').classList.contains('closed')) counter.increment();
@@ -1143,7 +1186,7 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
         notifier.notify(message.kind === 'question' ? 'legacy-question' : 'new-message', { title: message.kind === 'question' ? 'Nueva pregunta' : 'Nuevo mensaje', message: `${message.from || 'Participante'}: ${String(message.text || message.filename || '').slice(0, 100)}`, system: false });
       },
     });
-    setupControls(); configureMeetingMode(); renderMediaPermissions(); renderParticipants([room.localParticipant]);
+    setupControls(); configureMeetingMode(); renderMediaPermissions(); renderParticipants([room.localParticipant, ...room.remoteParticipants.values()]);
     ui.stage.setParticipantState(ui.session.identity, `${ui.session.displayName} (tú)`, { microphone: false, local: true, keepVisible: true });
     startMeetingTimer();
     await queryRecordingStatus();
@@ -1160,6 +1203,8 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     ui.questions = null;
     ui.stageEvents?.dispose();
     ui.stageEvents = null;
+    ui.stage?.dispose?.();
+    ui.stage = null;
     room.off(LivekitClient.RoomEvent.DataReceived, handleData);
     room.off(LivekitClient.RoomEvent.ParticipantPermissionsChanged, renderMediaPermissions);
     try { await Promise.resolve(room.disconnect()); } catch { /* Best-effort cleanup before retry. */ }
@@ -1184,6 +1229,7 @@ async function initializeRoom() {
     ui.chat?.dispose();
     ui.questions?.dispose();
     ui.stageEvents?.dispose();
+    ui.stage?.dispose?.();
     ui.roomUi?.dispose();
     ui.companion?.dispose();
     notifier.dispose();

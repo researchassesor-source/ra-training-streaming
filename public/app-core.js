@@ -260,6 +260,9 @@
       locked: false,
       role: 'VIEWER',
       mode: 'WEBINAR',
+      chatMessages: [],
+      chatDraft: '',
+      participantItems: [],
       ...initial,
     };
     const listeners = new Set();

@@ -11,48 +11,79 @@ function classifyTrackSource(publication) {
   return publication?.track?.kind === 'audio' ? 'audio' : 'camera';
 }
 
+function selectActiveSpeaker(participants = [], speakingIdentities = []) {
+  const visible = (participants || []).filter((participant) => participant?.identity && participant.visible !== false);
+  const speaking = new Set(speakingIdentities || []);
+  return visible.find((participant) => speaking.has(participant.identity) && participant.local !== true)?.identity
+    || visible.find((participant) => speaking.has(participant.identity))?.identity
+    || visible.find((participant) => participant.local === true)?.identity
+    || visible[0]?.identity
+    || null;
+}
+
 function createStage(containerElement, placeholderText, onSpotlightChange) {
   const tiles = new Map();
   const participantStates = new Map();
   const screenAudioStates = new Map();
   let spotlightActive = false;
+  let activeSpeakerIdentity = null;
+  let speakingIdentities = [];
+  let speakerSwitchTimer = null;
   const placeholder = document.createElement('div');
   placeholder.className = 'stage-placeholder';
   placeholder.textContent = placeholderText;
+  const speakerMini = document.createElement('article');
+  speakerMini.className = 'active-speaker-mini';
+  speakerMini.setAttribute('aria-label', 'Hablante activo');
+  const speakerVideo = document.createElement('video');
+  speakerVideo.autoplay = true;
+  speakerVideo.playsInline = true;
+  const speakerAvatar = document.createElement('div');
+  speakerAvatar.className = 'active-speaker-avatar';
+  const speakerMeta = document.createElement('div');
+  const speakerName = document.createElement('strong');
+  const speakerMic = document.createElement('span');
+  speakerMeta.append(speakerName, speakerMic);
+  speakerMini.append(speakerVideo, speakerAvatar, speakerMeta);
+  let speakerTrack = null;
 
   function initials(label) {
     return String(label || 'P').replace(/\s*\([^)]*\)\s*/g, ' ').trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   }
 
-  function makeContainedDraggable(entry) {
-    if (entry.dragBound) return;
-    entry.dragBound = true;
-    let drag = null;
-    const move = (event) => {
-      if (!drag || !entry.root.classList.contains('local-overlay')) return;
-      const bounds = containerElement.getBoundingClientRect();
-      const width = entry.root.offsetWidth;
-      const height = entry.root.offsetHeight;
-      entry.root.style.left = `${Math.max(8, Math.min(bounds.width - width - 8, drag.left + event.clientX - drag.x))}px`;
-      entry.root.style.top = `${Math.max(8, Math.min(bounds.height - height - 8, drag.top + event.clientY - drag.y))}px`;
-      entry.root.style.right = 'auto';
-      entry.root.style.bottom = 'auto';
-      entry.dragPosition = { left: entry.root.style.left, top: entry.root.style.top };
-    };
-    const end = () => {
-      drag = null;
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', end);
-    };
-    entry.root.addEventListener('pointerdown', (event) => {
-      if (!entry.root.classList.contains('local-overlay') || event.target.closest('button')) return;
-      const rootRect = entry.root.getBoundingClientRect();
-      const bounds = containerElement.getBoundingClientRect();
-      drag = { x: event.clientX, y: event.clientY, left: rootRect.left - bounds.left, top: rootRect.top - bounds.top };
-      entry.root.setPointerCapture?.(event.pointerId);
-      document.addEventListener('pointermove', move);
-      document.addEventListener('pointerup', end);
-    });
+  function participantCandidates() {
+    return [...participantStates.entries()].map(([identity, state]) => ({ identity, ...state }));
+  }
+
+  function detachSpeakerTrack() {
+    speakerTrack?.detach?.(speakerVideo);
+    speakerTrack = null;
+    speakerVideo.srcObject = null;
+    speakerMini.classList.remove('has-video');
+  }
+
+  function renderSpeakerMini() {
+    const identity = activeSpeakerIdentity || selectActiveSpeaker(participantCandidates(), speakingIdentities);
+    const state = identity ? participantStates.get(identity) || {} : {};
+    const camera = identity ? tiles.get(`${identity}|camera`) : null;
+    const track = camera?.track || null;
+    if (speakerTrack !== track) {
+      detachSpeakerTrack();
+      if (track && camera.root.classList.contains('has-video')) {
+        speakerTrack = track;
+        track.attach(speakerVideo);
+        speakerVideo.muted = state.local === true;
+        speakerVideo.play?.().catch(() => {});
+        speakerMini.classList.add('has-video');
+      }
+    }
+    speakerMini.dataset.identity = identity || '';
+    speakerAvatar.textContent = initials(state.label || 'Participante');
+    speakerName.textContent = state.label || 'Participante';
+    speakerMic.textContent = state.speaking ? 'Hablando' : state.microphone ? 'Mic activo' : 'Mic apagado';
+    speakerMini.classList.toggle('is-speaking', state.speaking === true);
+    speakerMini.hidden = !identity;
+    if (identity) containerElement.appendChild(speakerMini);
   }
 
   function tile(identity, source, label, options = {}) {
@@ -76,9 +107,8 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
     mic.setAttribute('aria-label', 'Micrófono apagado');
     mic.textContent = 'Mic apagado';
     root.append(video, avatar, labelElement, mic);
-    const entry = { root, video, avatar, labelElement, mic, identity, source, track: null, local: options.local === true, dragBound: false, dragPosition: null };
+    const entry = { root, video, avatar, labelElement, mic, identity, source, track: null, local: options.local === true };
     tiles.set(key, entry);
-    makeContainedDraggable(entry);
     return entry;
   }
 
@@ -185,19 +215,34 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
       entry?.root.remove();
       tiles.delete(`${identity}|${source}`);
     }
+    if (activeSpeakerIdentity === identity) activeSpeakerIdentity = null;
     layout();
   }
 
   function setSpeaking(identities) {
-    const active = new Set(identities || []);
+    speakingIdentities = [...(identities || [])];
+    const active = new Set(speakingIdentities);
     for (const [identity, state] of participantStates) participantStates.set(identity, { ...state, speaking: active.has(identity) });
     for (const entry of tiles.values()) applyParticipantState(entry);
+    const nextIdentity = selectActiveSpeaker(participantCandidates(), speakingIdentities);
+    if (nextIdentity === activeSpeakerIdentity) {
+      if (spotlightActive) renderSpeakerMini();
+      return;
+    }
+    clearTimeout(speakerSwitchTimer);
+    speakerSwitchTimer = setTimeout(() => {
+      activeSpeakerIdentity = nextIdentity;
+      layout();
+    }, speakingIdentities.length ? 450 : 900);
   }
 
   function setParticipantVisibility(identity, visible) {
     const entry = tiles.get(`${identity}|camera`);
-    if (!entry) return;
-    entry.root.hidden = visible === false;
+    const state = participantStates.get(identity) || {};
+    participantStates.set(identity, { ...state, visible: visible !== false });
+    if (entry) entry.root.hidden = visible === false;
+    if (visible === false && activeSpeakerIdentity === identity) activeSpeakerIdentity = null;
+    layout();
   }
 
   function layout() {
@@ -212,26 +257,13 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
     if (screenEntry) {
       containerElement.classList.add('has-spotlight');
       containerElement.appendChild(screenEntry[1].root);
-      const thumbnails = document.createElement('div');
-      thumbnails.className = 'spotlight-thumbs';
-      for (const [key, entry] of tiles) {
-        if (key === screenEntry[0]) continue;
-        entry.root.classList.toggle('local-overlay', entry.local);
-        if (entry.local) {
-          containerElement.appendChild(entry.root);
-          if (entry.dragPosition) Object.assign(entry.root.style, { left: entry.dragPosition.left, top: entry.dragPosition.top, right: 'auto', bottom: 'auto' });
-        } else thumbnails.appendChild(entry.root);
-      }
-      if (thumbnails.children.length) containerElement.appendChild(thumbnails);
+      renderSpeakerMini();
       notify(true);
     } else {
+      detachSpeakerTrack();
+      speakerMini.remove();
       containerElement.classList.remove('has-spotlight');
       for (const entry of tiles.values()) {
-        entry.root.classList.remove('local-overlay');
-        entry.root.style.removeProperty('left');
-        entry.root.style.removeProperty('top');
-        entry.root.style.removeProperty('right');
-        entry.root.style.removeProperty('bottom');
         containerElement.appendChild(entry.root);
       }
       notify(false);
@@ -246,7 +278,18 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
   }
 
   layout();
-  return { setTrack, setSelfSharePlaceholder, setScreenAudio, setParticipantState, setParticipantVisibility, setSpeaking, removeTrack, removeParticipant };
+  return {
+    setTrack, setSelfSharePlaceholder, setScreenAudio, setParticipantState, setParticipantVisibility, setSpeaking, removeTrack, removeParticipant,
+    dispose() {
+      clearTimeout(speakerSwitchTimer);
+      detachSpeakerTrack();
+      speakerMini.remove();
+      for (const entry of tiles.values()) entry.track?.detach?.(entry.video);
+      tiles.clear();
+      participantStates.clear();
+      screenAudioStates.clear();
+    },
+  };
 }
 
 function attachRemoteStageEvents(room, stage) {
@@ -340,4 +383,4 @@ function attachRemoteStageEvents(room, stage) {
   } };
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { classifyTrackSource, normalizeTrackSource };
+if (typeof module === 'object' && module.exports) module.exports = { classifyTrackSource, normalizeTrackSource, selectActiveSpeaker };

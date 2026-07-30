@@ -1,3 +1,11 @@
+function partitionQuestionFlow(items = []) {
+  return (items || []).reduce((flow, item) => {
+    if (item?.status === 'DISMISSED') flow.dismissed.push(item);
+    else flow.active.push(item);
+    return flow;
+  }, { active: [], dismissed: [] });
+}
+
 function setupQuestions(room, options = {}) {
   const container = document.getElementById('questionMessages');
   const sortSelect = document.getElementById('questionSort');
@@ -5,6 +13,17 @@ function setupQuestions(room, options = {}) {
   let items = [];
   let reloadTimer = null;
   let disposed = false;
+  let showDismissed = false;
+
+  const archiveTools = document.createElement('div');
+  archiveTools.className = 'question-archive-tools';
+  archiveTools.hidden = true;
+  const archiveToggle = document.createElement('button');
+  archiveToggle.type = 'button';
+  archiveToggle.className = 'text-button compact';
+  archiveToggle.setAttribute('aria-expanded', 'false');
+  archiveTools.appendChild(archiveToggle);
+  container.before(archiveTools);
 
   const statusLabels = {
     PENDING: 'Pendiente',
@@ -53,18 +72,42 @@ function setupQuestions(room, options = {}) {
     return form;
   }
 
+  function sorted(source) {
+    return [...source].sort((a, b) => sortSelect?.value === 'date'
+      ? String(b.createdAt).localeCompare(String(a.createdAt))
+      : Number(b.pinned) - Number(a.pinned) || b.voteCount - a.voteCount || String(a.createdAt).localeCompare(String(b.createdAt)));
+  }
+
+  function renderArchived(item, host) {
+    const card = document.createElement('article');
+    card.className = 'question-card question-card-archived status-dismissed';
+    const meta = document.createElement('div');
+    meta.className = 'question-meta';
+    meta.append(
+      Object.assign(document.createElement('strong'), { textContent: item.authorName }),
+      Object.assign(document.createElement('span'), { textContent: `Descartada · ${new Date(item.updatedAt || item.createdAt).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' })}` }),
+    );
+    const text = document.createElement('p');
+    text.className = 'question-text';
+    text.textContent = item.text;
+    card.append(meta, text);
+    host.appendChild(card);
+  }
+
   function render() {
     if (disposed) return;
     container.replaceChildren();
-    const visible = items
-      .filter((item) => moderator || item.status !== 'DISMISSED')
-      .sort((a, b) => sortSelect?.value === 'date'
-        ? String(b.createdAt).localeCompare(String(a.createdAt))
-        : Number(b.pinned) - Number(a.pinned) || b.voteCount - a.voteCount || String(a.createdAt).localeCompare(String(b.createdAt)));
+    const flow = partitionQuestionFlow(items);
+    const visible = sorted(flow.active);
+    archiveTools.hidden = !moderator || flow.dismissed.length === 0;
+    archiveToggle.textContent = `${showDismissed ? 'Ocultar' : 'Ver'} descartadas (${flow.dismissed.length})`;
+    archiveToggle.setAttribute('aria-expanded', String(showDismissed));
     if (!visible.length) {
       const empty = document.createElement('div');
       empty.className = 'empty-state compact';
-      empty.textContent = 'Todavía no hay preguntas. Usa el selector del campo de mensaje para enviar una.';
+      empty.textContent = flow.dismissed.length && moderator
+        ? 'No hay preguntas activas. Las descartadas están disponibles en el historial.'
+        : 'Todavía no hay preguntas. Usa el selector del campo de mensaje para enviar una.';
       container.appendChild(empty);
     }
     for (const item of visible) {
@@ -128,8 +171,19 @@ function setupQuestions(room, options = {}) {
       card.appendChild(actions);
       container.appendChild(card);
     }
-    const pending = items.filter((item) => item.status === 'PENDING').length;
-    options.onChange?.({ items: [...items], pending });
+    if (moderator && showDismissed && flow.dismissed.length) {
+      const archive = document.createElement('section');
+      archive.className = 'question-archive';
+      archive.tabIndex = -1;
+      archive.setAttribute('aria-label', 'Historial de preguntas descartadas');
+      const heading = document.createElement('h3');
+      heading.textContent = 'Historial de descartadas';
+      archive.appendChild(heading);
+      sorted(flow.dismissed).forEach((item) => renderArchived(item, archive));
+      container.appendChild(archive);
+    }
+    const pending = flow.active.filter((item) => item.status === 'PENDING').length;
+    options.onChange?.({ items: [...flow.active], dismissed: [...flow.dismissed], pending });
   }
 
   async function reload({ notify = false } = {}) {
@@ -160,6 +214,11 @@ function setupQuestions(room, options = {}) {
 
   room.on(LivekitClient.RoomEvent.DataReceived, onData);
   sortSelect?.addEventListener('change', render);
+  archiveToggle.addEventListener('click', () => {
+    showDismissed = !showDismissed;
+    render();
+    if (showDismissed) container.querySelector('.question-archive')?.focus?.();
+  });
   reload().catch((error) => options.onError?.(error.message));
   return {
     submit,
@@ -169,6 +228,9 @@ function setupQuestions(room, options = {}) {
       clearTimeout(reloadTimer);
       room.off(LivekitClient.RoomEvent.DataReceived, onData);
       sortSelect?.removeEventListener('change', render);
+      archiveTools.remove();
     },
   };
 }
+
+if (typeof module === 'object' && module.exports) module.exports = { partitionQuestionFlow };

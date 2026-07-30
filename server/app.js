@@ -626,7 +626,9 @@ function createApp(overrides = {}) {
 
   app.get('/api/questions', requireRoomSession, roomMeeting, asyncHandler(async (req, res) => {
     const items = await questions.list(req.roomSession.room);
-    res.json({ questions: items.map((item) => questions.publicQuestion(item, req.roomSession.identity)) });
+    const canModerate = ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role);
+    const visible = canModerate ? items : items.filter((item) => item.status !== 'DISMISSED');
+    res.json({ questions: visible.map((item) => questions.publicQuestion(item, req.roomSession.identity)) });
   }));
 
   app.post('/api/questions', requireRoomSession, requireRoomCsrf, chatLimiter, roomMeeting, asyncHandler(async (req, res) => {

@@ -11,13 +11,18 @@ function makeDraggable(element, handle = element) {
     document.removeEventListener('pointermove', move);
     document.removeEventListener('pointerup', end);
   }
-  handle.addEventListener('pointerdown', (event) => {
+  const start = (event) => {
     if (event.target.closest('button, input, a, label')) return;
     const rect = element.getBoundingClientRect();
     drag = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', end);
-  });
+  };
+  handle.addEventListener('pointerdown', start);
+  return () => {
+    end();
+    handle.removeEventListener('pointerdown', start);
+  };
 }
 
 function attachCompanionWindow(button, model, actions = {}) {
@@ -28,6 +33,8 @@ function attachCompanionWindow(button, model, actions = {}) {
   let disposed = false;
   let closeRequested = false;
   let mode = 'compact';
+  let popover = null;
+  const documentBindings = new Map();
 
   const icons = {
     microphone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm-7-3a7 7 0 0 0 14 0h-2a5 5 0 0 1-10 0H5Zm6 7v3h2v-3h-2Z"/></svg>',
@@ -49,6 +56,176 @@ function attachCompanionWindow(button, model, actions = {}) {
     return `${hours ? `${String(hours).padStart(2, '0')}:` : ''}${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 
+  function chatSignature(messages) {
+    return (messages || []).map((item) => `${item.id}:${item.delivery}:${item.text}`).join('|');
+  }
+
+  function ensureChatPopover(documentRef, content, state) {
+    let list = content.querySelector('[data-floating-chat-list]');
+    let input = content.querySelector('[data-floating-chat-input]');
+    if (!list || !input) {
+      content.replaceChildren();
+      list = documentRef.createElement('div');
+      list.className = 'companion-chat-list';
+      list.dataset.floatingChatList = '';
+      list.setAttribute('role', 'log');
+      list.setAttribute('aria-live', 'polite');
+      const form = documentRef.createElement('form');
+      form.className = 'companion-chat-form';
+      input = documentRef.createElement('textarea');
+      input.dataset.floatingChatInput = '';
+      input.rows = 2;
+      input.maxLength = 2_000;
+      input.placeholder = 'Escribe un mensaje…';
+      input.setAttribute('aria-label', 'Mensaje de chat flotante');
+      const send = documentRef.createElement('button');
+      send.type = 'submit';
+      send.className = 'primary compact';
+      send.textContent = 'Enviar';
+      const error = documentRef.createElement('p');
+      error.className = 'form-error companion-popover-error';
+      error.setAttribute('role', 'alert');
+      input.addEventListener('input', () => actions.chatDraft?.(input.value));
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          form.requestSubmit();
+        }
+      });
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const value = input.value.trim();
+        if (!value || send.disabled) return;
+        send.disabled = true;
+        send.setAttribute('aria-busy', 'true');
+        error.textContent = '';
+        try {
+          const sent = await actions.sendChat?.(value);
+          if (sent !== false) {
+            input.value = '';
+            actions.chatDraft?.('');
+          } else error.textContent = 'No fue posible enviar el mensaje. El borrador se conservó.';
+        } catch (sendError) {
+          error.textContent = sendError.message || 'No fue posible enviar el mensaje.';
+        } finally {
+          send.disabled = false;
+          send.setAttribute('aria-busy', 'false');
+          input.focus();
+        }
+      });
+      form.append(input, send, error);
+      content.append(list, form);
+    }
+    const messages = state.chatMessages || [];
+    const signature = chatSignature(messages);
+    if (list.dataset.signature !== signature) {
+      list.dataset.signature = signature;
+      list.replaceChildren();
+      if (!messages.length) {
+        const empty = documentRef.createElement('p');
+        empty.className = 'companion-popover-empty';
+        empty.textContent = 'Todavía no hay mensajes en esta sesión.';
+        list.appendChild(empty);
+      }
+      for (const item of messages) {
+        const row = documentRef.createElement('article');
+        row.className = `companion-chat-message${item.isMe ? ' is-me' : ''}`;
+        const meta = documentRef.createElement('div');
+        const author = documentRef.createElement('strong');
+        author.textContent = item.from || 'Participante';
+        const time = documentRef.createElement('time');
+        time.dateTime = item.sentAt || '';
+        time.textContent = new Date(item.sentAt || Date.now()).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' });
+        meta.append(author, time);
+        const body = documentRef.createElement('p');
+        body.textContent = item.text || '';
+        row.append(meta, body);
+        if (item.isMe) {
+          const delivery = documentRef.createElement('span');
+          delivery.className = `companion-delivery ${item.delivery || 'sent'}`;
+          delivery.textContent = item.delivery === 'failed' ? 'Falló' : item.delivery === 'sending' ? 'Enviando…' : 'Enviado';
+          row.appendChild(delivery);
+        }
+        list.appendChild(row);
+      }
+      list.scrollTop = list.scrollHeight;
+    }
+    if (documentRef.activeElement !== input && input.value !== (state.chatDraft || '')) input.value = state.chatDraft || '';
+  }
+
+  function renderParticipantPopover(documentRef, content, state) {
+    content.replaceChildren();
+    const list = documentRef.createElement('div');
+    list.className = 'companion-participant-list';
+    const participantItems = state.participantItems || [];
+    if (!participantItems.length) {
+      const empty = documentRef.createElement('p');
+      empty.className = 'companion-popover-empty';
+      empty.textContent = 'No hay participantes conectados.';
+      list.appendChild(empty);
+    }
+    const labels = { requestMicrophone: 'Solicitar micrófono', grantWord: 'Dar palabra', revokeWord: 'Quitar palabra', more: 'Más' };
+    for (const item of participantItems) {
+      const card = documentRef.createElement('article');
+      card.className = 'companion-participant-card';
+      const heading = documentRef.createElement('div');
+      const name = documentRef.createElement('strong');
+      name.textContent = `${item.name}${item.isLocal ? ' (tú)' : ''}`;
+      const role = documentRef.createElement('span');
+      role.textContent = item.roleLabel || 'Asistente';
+      heading.append(name, role);
+      const status = documentRef.createElement('p');
+      status.textContent = `Mic ${item.microphone ? 'activo' : 'apagado'} · Cámara ${item.camera ? 'activa' : 'apagada'} · Pantalla ${item.screen ? 'activa' : 'apagada'}${item.handRaised ? ' · Mano levantada' : ''}${item.canPublish ? ' · Con palabra' : ''}`;
+      card.append(heading, status);
+      if (item.actions?.length) {
+        const controls = documentRef.createElement('div');
+        controls.className = 'companion-participant-actions';
+        for (const actionName of item.actions) {
+          const control = documentRef.createElement('button');
+          control.type = 'button';
+          control.className = actionName === 'grantWord' ? 'primary compact' : 'secondary compact';
+          control.textContent = labels[actionName] || actionName;
+          control.addEventListener('click', async () => {
+            control.disabled = true;
+            try { await actions.participantAction?.(actionName, item.identity); }
+            catch (actionError) { actions.error?.(actionError.message); }
+            finally { control.disabled = false; }
+          });
+          controls.appendChild(control);
+        }
+        card.appendChild(controls);
+      }
+      list.appendChild(card);
+    }
+    content.appendChild(list);
+  }
+
+  function renderPopover(documentRef, state) {
+    const root = documentRef.getElementById('companionRoot');
+    const panel = root?.querySelector('[data-popover]');
+    if (!panel) return;
+    panel.hidden = !popover;
+    root.dataset.popover = popover || '';
+    if (!popover) return;
+    panel.querySelector('[data-popover-title]').textContent = popover === 'chat' ? 'Chat' : 'Participantes';
+    const content = panel.querySelector('[data-popover-content]');
+    if (content.dataset.kind !== popover) {
+      content.dataset.kind = popover;
+      content.replaceChildren();
+    }
+    if (popover === 'chat') ensureChatPopover(documentRef, content, state);
+    else renderParticipantPopover(documentRef, content, state);
+  }
+
+  function setPopover(documentRef, next) {
+    popover = popover === next ? null : next;
+    if (pipWindow && documentRef === pipWindow.document) {
+      try { pipWindow.resizeTo?.(popover ? 440 : mode === 'compact' ? 680 : 460, popover ? 520 : mode === 'compact' ? 86 : 460); } catch { /* Browser chrome controls minimum sizing. */ }
+    }
+    render(documentRef, model.snapshot?.() || {});
+    if (popover) documentRef.querySelector('[data-popover-close]')?.focus();
+  }
+
   function markup() {
     return `<main id="companionRoot" class="companion-window" data-mode="${mode}" aria-label="Controles flotantes de la reunión">
       <div class="companion-compact" data-drag-handle>
@@ -67,6 +244,10 @@ function attachCompanionWindow(button, model, actions = {}) {
         <div class="companion-metrics"><span data-participant-count></span><span data-hand-total></span><span data-message-total></span><span data-question-total></span><span data-reaction hidden></span></div>
         <div class="companion-actions"><button data-mic><span data-label></span></button><button data-camera><span data-label></span></button><button data-screen><span data-label></span></button><button data-chat>Chat</button><button data-questions>Preguntas</button><button data-participants>Participantes</button><button data-hand><span data-label></span></button><button data-more>Más</button><button data-leave class="danger">Salir</button><button data-return>Volver</button></div>
       </section>
+      <aside class="companion-popover" data-popover hidden>
+        <header><h2 data-popover-title></h2><button type="button" data-popover-close aria-label="Cerrar panel emergente">×</button></header>
+        <div class="companion-popover-content" data-popover-content></div>
+      </aside>
     </main>`;
   }
 
@@ -74,8 +255,8 @@ function attachCompanionWindow(button, model, actions = {}) {
     const root = documentRef.getElementById('companionRoot');
     if (!root) return;
     root.querySelectorAll('[data-live]').forEach((element) => { element.textContent = state.screen
-      ? `● Compartiendo${state.recording ? ' · Grabando' : ''}`
-      : state.recording ? '● Grabando' : state.live ? '● En vivo' : 'En espera'; element.classList.toggle('recording', state.recording); });
+      ? `Compartiendo${state.recording ? ' · Grabando' : ''}`
+      : state.recording ? 'Grabando' : state.live ? 'En vivo' : 'En espera'; element.classList.toggle('recording', state.recording); });
     root.querySelector('[data-title]').textContent = state.title || 'Reunión';
     root.querySelectorAll('[data-timer]').forEach((element) => { element.textContent = elapsed(state.elapsedSeconds); });
     root.querySelector('[data-participant-count]').textContent = `${state.participants} participantes`;
@@ -105,7 +286,17 @@ function attachCompanionWindow(button, model, actions = {}) {
         if (text) text.textContent = label;
       });
     }
-    for (const [selector, label] of [['chat', 'Abrir Chat'], ['participants', 'Abrir Participantes'], ['more', 'Más opciones'], ['return', 'Volver a la reunión'], ['expand', mode === 'compact' ? 'Expandir panel' : 'Volver a compacto']]) root.querySelectorAll(`[data-${selector}]`).forEach((control) => { control.setAttribute('aria-label', label); control.title = label; });
+    for (const [selector, label] of [
+      ['chat', popover === 'chat' ? 'Cerrar Chat' : 'Abrir Chat'],
+      ['participants', popover === 'participants' ? 'Cerrar Participantes' : 'Abrir Participantes'],
+      ['more', 'Más opciones'], ['return', 'Volver a la reunión'],
+      ['expand', mode === 'compact' ? 'Expandir panel' : 'Volver a compacto'],
+    ]) root.querySelectorAll(`[data-${selector}]`).forEach((control) => {
+      control.setAttribute('aria-label', label);
+      control.setAttribute('aria-expanded', String((selector === 'chat' && popover === 'chat') || (selector === 'participants' && popover === 'participants')));
+      control.title = label;
+    });
+    renderPopover(documentRef, state);
   }
 
   function applyMode(documentRef, nextMode) {
@@ -115,22 +306,41 @@ function attachCompanionWindow(button, model, actions = {}) {
     root.dataset.mode = mode;
     root.querySelector('.companion-compact').hidden = mode !== 'compact';
     root.querySelector('.companion-expanded').hidden = mode !== 'expanded';
-    if (pipWindow && documentRef === pipWindow.document) {
-      try { pipWindow.resizeTo?.(mode === 'compact' ? 760 : 460, mode === 'compact' ? 110 : 460); } catch { /* The initial PiP resize can require a separate user gesture. */ }
+    if (pipWindow && documentRef === pipWindow.document && !popover) {
+      try { pipWindow.resizeTo?.(mode === 'compact' ? 680 : 460, mode === 'compact' ? 86 : 460); } catch { /* The initial PiP resize can require a separate user gesture. */ }
     }
   }
 
   function bind(documentRef, { draggable = false } = {}) {
     const root = documentRef.getElementById('companionRoot');
+    documentBindings.get(documentRef)?.();
     const mappings = {
-      mic: 'microphone', camera: 'camera', screen: 'screen', chat: 'chat', questions: 'questions',
-      participants: 'participants', hand: 'hand', more: 'more', leave: 'leave',
+      mic: 'microphone', camera: 'camera', screen: 'screen', questions: 'questions',
+      hand: 'hand', more: 'more', leave: 'leave',
     };
     for (const [selector, action] of Object.entries(mappings)) root.querySelectorAll(`[data-${selector}]`).forEach((control) => { control.onclick = () => actions[action]?.(); });
+    root.querySelectorAll('[data-chat]').forEach((control) => { control.onclick = () => setPopover(documentRef, 'chat'); });
+    root.querySelectorAll('[data-participants]').forEach((control) => { control.onclick = () => setPopover(documentRef, 'participants'); });
     root.querySelectorAll('[data-return]').forEach((control) => { control.onclick = () => { window.focus(); actions.return?.(); }; });
     root.querySelectorAll('[data-close]').forEach((control) => { control.onclick = close; });
+    root.querySelector('[data-popover-close]').onclick = () => setPopover(documentRef, popover);
     root.querySelectorAll('[data-expand]').forEach((control) => { control.onclick = () => { applyMode(documentRef, mode === 'compact' ? 'expanded' : 'compact'); render(documentRef, model.snapshot?.() || {}); }; });
-    if (draggable) makeDraggable(root, root.querySelector('[data-drag-handle]'));
+    const removeDrag = draggable ? makeDraggable(root, root.querySelector('[data-drag-handle]')) : () => {};
+    const onKeydown = (event) => {
+      if (event.key !== 'Escape' || !popover) return;
+      event.preventDefault();
+      setPopover(documentRef, popover);
+    };
+    const onPointerDown = (event) => {
+      if (popover && !event.target.closest?.('#companionRoot')) setPopover(documentRef, popover);
+    };
+    documentRef.addEventListener('keydown', onKeydown);
+    documentRef.addEventListener('pointerdown', onPointerDown);
+    documentBindings.set(documentRef, () => {
+      documentRef.removeEventListener('keydown', onKeydown);
+      documentRef.removeEventListener('pointerdown', onPointerDown);
+      removeDrag();
+    });
     applyMode(documentRef, mode);
     unsubscribe?.();
     unsubscribe = model.subscribe((state) => render(documentRef, state));
@@ -159,12 +369,14 @@ function attachCompanionWindow(button, model, actions = {}) {
     if ('documentPictureInPicture' in window && documentPictureInPicture.requestWindow) {
       closeRequested = false;
       const openedAt = Date.now();
-      pipWindow = await documentPictureInPicture.requestWindow({ width: mode === 'compact' ? 760 : 460, height: mode === 'compact' ? 110 : 460 });
+      pipWindow = await documentPictureInPicture.requestWindow({ width: mode === 'compact' ? 680 : 460, height: mode === 'compact' ? 86 : 460 });
       pipWindow.document.head.innerHTML = `<meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="${location.origin}/style.css">`;
       pipWindow.document.body.innerHTML = markup();
       bind(pipWindow.document);
       pipWindow.addEventListener('pagehide', () => {
         const failedImmediately = !closeRequested && Date.now() - openedAt < 1_000;
+        documentBindings.get(pipWindow?.document)?.();
+        if (pipWindow?.document) documentBindings.delete(pipWindow.document);
         unsubscribe?.();
         unsubscribe = null;
         pipWindow = null;
@@ -179,6 +391,7 @@ function attachCompanionWindow(button, model, actions = {}) {
 
   function close() {
     closeRequested = true;
+    popover = null;
     if (pipWindow) pipWindow.close();
     if (fallback) fallback.hidden = true;
     unsubscribe?.();
@@ -205,6 +418,8 @@ function attachCompanionWindow(button, model, actions = {}) {
     dispose() {
       disposed = true;
       close();
+      for (const cleanup of documentBindings.values()) cleanup();
+      documentBindings.clear();
       fallback?.remove();
       fallback = null;
       if (button.onclick === toggle) button.onclick = null;
