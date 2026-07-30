@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
+const { config } = require('./config');
 const {
   AppError,
   parseBoolean,
@@ -14,6 +15,28 @@ const {
 const TYPES = Object.freeze(['WEBINAR', 'SESSION', 'CLASS']);
 const STATUSES = Object.freeze(['DRAFT', 'SCHEDULED', 'LIVE', 'COMPLETED', 'CANCELLED', 'ARCHIVED']);
 const ACCESS_MODES = Object.freeze(['INVITATION', 'AUTHENTICATED', 'CLOSED']);
+const LEGACY_DEFAULTS = Object.freeze({
+  description: '',
+  trainerName: 'Capacitador por definir',
+  durationMinutes: 60,
+  type: 'WEBINAR',
+  status: 'SCHEDULED',
+  capacity: 100,
+  allowChat: true,
+  allowFiles: true,
+  allowReactions: true,
+  allowRaiseHand: true,
+  allowRecording: false,
+  recordingConsentRequired: false,
+  allowTranscription: false,
+  transcriptionConsentRequired: false,
+  transcriptionLanguage: /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(config.transcriptionLanguage) ? config.transcriptionLanguage : 'es',
+  transcriptionRetentionDays: config.transcriptionRetentionDays,
+  allowPanelistTranscriptAccess: false,
+  deletedAt: null,
+  cancelledAt: null,
+  archivedAt: null,
+});
 
 function keyFor(room) {
   return `meetings/${encodeURIComponent(room)}.json`;
@@ -36,10 +59,13 @@ async function writeMeeting(record) {
 async function getMeeting(room) {
   const normalized = String(room || '');
   if (!normalized) return undefined;
-  if (!storageConfigured) return localStore.readJson('meetings', normalized);
+  if (!storageConfigured) {
+    const stored = await localStore.readJson('meetings', normalized);
+    return stored ? normalizeStoredMeeting(stored) : undefined;
+  }
   try {
     const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(normalized) }));
-    return JSON.parse(await response.Body.transformToString());
+    return normalizeStoredMeeting(JSON.parse(await response.Body.transformToString()));
   } catch (error) {
     if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) return undefined;
     throw error;
@@ -58,8 +84,53 @@ async function listMeetings({ includeDeleted = false } = {}) {
     items = await localStore.listJson('meetings');
   }
   return items
+    .map(normalizeStoredMeeting)
     .filter((meeting) => includeDeleted || !meeting.deletedAt)
     .sort((a, b) => String(a.scheduledAt || '').localeCompare(String(b.scheduledAt || '')));
+}
+
+function validStoredDate(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return Number.isNaN(new Date(value).getTime()) ? null : value;
+}
+
+function normalizeStoredMeeting(stored) {
+  const source = stored && typeof stored === 'object' ? stored : {};
+  const durationMinutes = Number.isInteger(Number(source.durationMinutes)) && Number(source.durationMinutes) > 0
+    ? Number(source.durationMinutes)
+    : LEGACY_DEFAULTS.durationMinutes;
+  const capacity = Number.isInteger(Number(source.capacity)) && Number(source.capacity) >= 0
+    ? Number(source.capacity)
+    : LEGACY_DEFAULTS.capacity;
+  const scheduledAt = validStoredDate(source.scheduledAt);
+  const room = typeof source.room === 'string' && source.room.trim()
+    ? source.room
+    : `reunion-legada-${crypto.createHash('sha256').update(JSON.stringify(source)).digest('hex').slice(0, 12)}`;
+  const normalized = {
+    ...source,
+    id: typeof source.id === 'string' && source.id ? source.id : `legacy-${crypto.createHash('sha256').update(room).digest('hex').slice(0, 24)}`,
+    room,
+    title: typeof source.title === 'string' && source.title.trim() ? source.title : 'Reunión sin título',
+    description: typeof source.description === 'string' ? source.description : LEGACY_DEFAULTS.description,
+    trainerName: typeof source.trainerName === 'string' && source.trainerName.trim() ? source.trainerName : LEGACY_DEFAULTS.trainerName,
+    durationMinutes,
+    capacity,
+    scheduledAt,
+    type: TYPES.includes(String(source.type || '').toUpperCase()) ? String(source.type).toUpperCase() : LEGACY_DEFAULTS.type,
+    status: STATUSES.includes(String(source.status || '').toUpperCase()) ? String(source.status).toUpperCase() : LEGACY_DEFAULTS.status,
+  };
+  for (const name of ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand', 'allowRecording', 'recordingConsentRequired', 'allowTranscription', 'transcriptionConsentRequired', 'allowPanelistTranscriptAccess']) {
+    normalized[name] = typeof source[name] === 'boolean' ? source[name] : LEGACY_DEFAULTS[name];
+  }
+  normalized.transcriptionLanguage = typeof source.transcriptionLanguage === 'string' && /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(source.transcriptionLanguage)
+    ? source.transcriptionLanguage
+    : LEGACY_DEFAULTS.transcriptionLanguage;
+  normalized.transcriptionRetentionDays = Number.isInteger(Number(source.transcriptionRetentionDays)) && Number(source.transcriptionRetentionDays) > 0
+    ? Number(source.transcriptionRetentionDays)
+    : LEGACY_DEFAULTS.transcriptionRetentionDays;
+  for (const name of ['deletedAt', 'cancelledAt', 'archivedAt']) normalized[name] = validStoredDate(source[name]);
+  normalized.endsAt = validStoredDate(source.endsAt) || calculateEndsAt(scheduledAt, durationMinutes);
+  return normalized;
 }
 
 function enumValue(value, allowed, field, fallback) {
@@ -75,7 +146,8 @@ function normalizeMeetingInput(input, { partial = false } = {}) {
   };
   setText('title', { min: 1, max: 140, required: !partial });
   setText('description', { max: 2_000 });
-  setText('trainerName', { min: 2, max: 100, required: !partial });
+  if (!partial && input.trainerName === undefined) output.trainerName = LEGACY_DEFAULTS.trainerName;
+  else setText('trainerName', { min: 2, max: 100, required: !partial });
   setText('trainerId', { max: 80 });
 
   if (!partial || input.room !== undefined) output.room = slugify(input.room || input.title);
@@ -87,7 +159,7 @@ function normalizeMeetingInput(input, { partial = false } = {}) {
   }
   if (!partial || input.capacity !== undefined) {
     output.capacity = parsePositiveInteger(input.capacity, {
-      field: 'capacity', min: 0, max: 100_000, fallback: partial ? undefined : 500,
+      field: 'capacity', min: 0, max: 100_000, fallback: partial ? undefined : LEGACY_DEFAULTS.capacity,
     });
   }
   if (!partial || input.type !== undefined) output.type = enumValue(input.type, TYPES, 'type', 'WEBINAR');
@@ -100,18 +172,33 @@ function normalizeMeetingInput(input, { partial = false } = {}) {
     allowFiles: true,
     allowReactions: true,
     allowRaiseHand: true,
-    allowRecording: true,
-    recordingConsentRequired: true,
+    allowRecording: false,
+    recordingConsentRequired: false,
+    allowTranscription: false,
+    transcriptionConsentRequired: false,
+    allowPanelistTranscriptAccess: false,
   };
   for (const [name, fallback] of Object.entries(booleanDefaults)) {
     if (!partial || input[name] !== undefined) output[name] = parseBoolean(input[name], fallback);
+  }
+  if (!partial || input.transcriptionLanguage !== undefined) {
+    const language = String(input.transcriptionLanguage || LEGACY_DEFAULTS.transcriptionLanguage).trim();
+    if (!/^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(language)) throw new AppError(400, 'Idioma de transcripción no válido', 'VALIDATION_ERROR');
+    output.transcriptionLanguage = language;
+  }
+  if (!partial || input.transcriptionRetentionDays !== undefined) {
+    output.transcriptionRetentionDays = parsePositiveInteger(input.transcriptionRetentionDays, {
+      field: 'transcriptionRetentionDays', min: 1, max: 3_650, fallback: partial ? undefined : LEGACY_DEFAULTS.transcriptionRetentionDays,
+    });
   }
   return Object.fromEntries(Object.entries(output).filter(([, value]) => value !== undefined));
 }
 
 function calculateEndsAt(scheduledAt, durationMinutes) {
   if (!scheduledAt || !durationMinutes) return null;
-  return new Date(new Date(scheduledAt).getTime() + durationMinutes * 60_000).toISOString();
+  const start = new Date(scheduledAt).getTime();
+  if (!Number.isFinite(start)) return null;
+  return new Date(start + durationMinutes * 60_000).toISOString();
 }
 
 async function createMeeting(input) {
@@ -127,6 +214,7 @@ async function createMeeting(input) {
     updatedAt: now,
     cancelledAt: null,
     deletedAt: null,
+    archivedAt: null,
     startedAt: null,
     completedAt: null,
   };
@@ -156,8 +244,8 @@ async function transitionMeeting(room, action, data = {}) {
   const now = new Date().toISOString();
   const transitions = {
     cancel: { status: 'CANCELLED', cancelledAt: now },
-    archive: { status: 'ARCHIVED' },
-    restore: { status: existing.scheduledAt ? 'SCHEDULED' : 'DRAFT', deletedAt: null, cancelledAt: null },
+    archive: { status: 'ARCHIVED', archivedAt: now },
+    restore: { status: existing.scheduledAt ? 'SCHEDULED' : 'DRAFT', deletedAt: null, cancelledAt: null, archivedAt: null },
     start: { status: 'LIVE', startedAt: existing.startedAt || now },
     complete: { status: 'COMPLETED', completedAt: now },
     delete: { status: 'ARCHIVED', deletedAt: now },
@@ -202,6 +290,7 @@ async function deleteMeeting(room) {
 
 module.exports = {
   ACCESS_MODES,
+  LEGACY_DEFAULTS,
   STATUSES,
   TYPES,
   calculateEndsAt,
@@ -210,6 +299,7 @@ module.exports = {
   duplicateMeeting,
   getMeeting,
   listMeetings,
+  normalizeStoredMeeting,
   normalizeMeetingInput,
   transitionMeeting,
   updateMeeting,

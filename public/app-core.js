@@ -18,6 +18,97 @@
     room_ended: 'El organizador finalizó la reunión',
   });
 
+  const RECORDING_STATES = Object.freeze({
+    DISABLED: 'No disponible',
+    IDLE: 'Lista para iniciar',
+    STARTING: 'Iniciando…',
+    RECORDING: 'Grabando',
+    STOPPING: 'Deteniendo…',
+    PROCESSING: 'Procesando grabación…',
+    FAILED: 'No se pudo consultar la grabación',
+  });
+
+  const MEETING_DEFAULTS = Object.freeze({
+    description: '', trainerName: 'Capacitador por definir', durationMinutes: 60,
+    type: 'WEBINAR', status: 'SCHEDULED', capacity: 100, allowChat: true,
+    allowFiles: true, allowReactions: true, allowRaiseHand: true, allowRecording: false,
+    recordingConsentRequired: false, allowTranscription: false,
+    transcriptionConsentRequired: false, transcriptionLanguage: 'es',
+    transcriptionRetentionDays: 90, allowPanelistTranscriptAccess: false,
+    deletedAt: null, cancelledAt: null, archivedAt: null,
+  });
+
+  function validDate(value) {
+    if (!value) return null;
+    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function localDateKey(value) {
+    const date = validDate(value);
+    if (!date) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function normalizeMeeting(raw = {}) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const durationMinutes = Number.isInteger(Number(source.durationMinutes)) && Number(source.durationMinutes) > 0 ? Number(source.durationMinutes) : 60;
+    const capacity = Number.isInteger(Number(source.capacity)) && Number(source.capacity) >= 0 ? Number(source.capacity) : 100;
+    const scheduledDate = validDate(source.scheduledAt);
+    const endDate = validDate(source.endsAt) || (scheduledDate ? new Date(scheduledDate.getTime() + durationMinutes * 60_000) : null);
+    const meeting = {
+      ...MEETING_DEFAULTS,
+      ...source,
+      title: typeof source.title === 'string' && source.title.trim() ? source.title : 'Reunión sin título',
+      room: typeof source.room === 'string' && source.room.trim() ? source.room : 'sala-por-definir',
+      description: typeof source.description === 'string' ? source.description : '',
+      trainerName: typeof source.trainerName === 'string' && source.trainerName.trim() ? source.trainerName : 'Capacitador por definir',
+      durationMinutes,
+      capacity,
+      scheduledAt: scheduledDate ? scheduledDate.toISOString() : null,
+      endsAt: endDate ? endDate.toISOString() : null,
+    };
+    for (const [name, fallback] of Object.entries(MEETING_DEFAULTS)) {
+      if (typeof fallback === 'boolean' && typeof source[name] !== 'boolean') meeting[name] = fallback;
+    }
+    return meeting;
+  }
+
+  class RecordingStateMachine {
+    constructor(onChange, configured = false) {
+      this.onChange = typeof onChange === 'function' ? onChange : () => {};
+      this.state = configured ? 'IDLE' : 'DISABLED';
+      this.egressId = null;
+      this.emit();
+    }
+
+    set(next, { egressId = null, active = false, message = '' } = {}) {
+      const state = Object.prototype.hasOwnProperty.call(RECORDING_STATES, next) ? next : 'FAILED';
+      this.state = state;
+      this.egressId = state === 'RECORDING' && active === true ? egressId : null;
+      return this.emit(message);
+    }
+
+    emit(message = '') {
+      const snapshot = {
+        state: this.state,
+        label: message || RECORDING_STATES[this.state],
+        active: this.state === 'RECORDING' && Boolean(this.egressId),
+        busy: ['STARTING', 'STOPPING'].includes(this.state),
+        egressId: this.egressId,
+      };
+      this.onChange(snapshot);
+      return snapshot;
+    }
+  }
+
+  function shouldSubmitChat(event = {}) {
+    return event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229;
+  }
+
   class ConnectionStateMachine {
     constructor(onChange, initial = 'validating_invitation') {
       this.onChange = typeof onChange === 'function' ? onChange : () => {};
@@ -95,6 +186,7 @@
       participants: 1,
       raisedHands: 0,
       unreadMessages: 0,
+      unreadQuestions: 0,
       recording: false,
       connection: 'validating_invitation',
       microphone: false,
@@ -122,5 +214,19 @@
     }
   }
 
-  return { CONNECTION_STATES, ConnectionStateMachine, HandQueue, createFloatingModel, createUnreadCounter, safeHttpUrl };
+  return {
+    CONNECTION_STATES,
+    MEETING_DEFAULTS,
+    RECORDING_STATES,
+    ConnectionStateMachine,
+    HandQueue,
+    RecordingStateMachine,
+    createFloatingModel,
+    createUnreadCounter,
+    localDateKey,
+    normalizeMeeting,
+    safeHttpUrl,
+    shouldSubmitChat,
+    validDate,
+  };
 }));
