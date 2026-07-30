@@ -95,6 +95,20 @@ function updateDisplayName(session, displayName) {
   return { token: signPayload(updated), session: updated };
 }
 
+function updateConsents(session, consents) {
+  const updated = {
+    ...session,
+    consents: {
+      privacy: consents.privacy === true,
+      recording: consents.recording === true,
+      transcription: consents.transcription === true,
+      acceptedAt: new Date().toISOString(),
+    },
+    csrf: crypto.randomBytes(24).toString('base64url'),
+  };
+  return { token: signPayload(updated), session: updated };
+}
+
 function roomCookie(token, sessionId = '') {
   return serializeCookie(sessionCookieName(sessionId), token, {
     httpOnly: true,
@@ -127,5 +141,6 @@ module.exports = {
   requireRoomSession,
   roomCookie,
   sessionCookieName,
+  updateConsents,
   updateDisplayName,
 };

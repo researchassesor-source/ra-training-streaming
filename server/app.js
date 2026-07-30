@@ -5,8 +5,10 @@ const multer = require('multer');
 const { PutObjectCommand, ListObjectsV2Command, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { AccessToken, RoomServiceClient, EgressClient, EgressStatus, EncodedFileType, DataPacket_Kind } = require('livekit-server-sdk');
-const { s3, storageConfigured, bucket } = require('./s3');
+const { s3, storageConfigured, bucket, storageStatus } = require('./s3');
 const { config } = require('./config');
+const { invitationSharePayload } = require('./invitation-message');
+const { log } = require('./logger');
 const roomRegistry = require('./rooms');
 const auth = require('./auth');
 const meetings = require('./meetings');
@@ -22,6 +24,7 @@ const {
   requireRoomRoles,
   requireRoomSession,
   roomCookie,
+  updateConsents,
   updateDisplayName,
 } = require('./room-session');
 const { createRateLimiter } = require('./rate-limit');
@@ -37,15 +40,19 @@ const {
   validateUsername,
 } = require('./http-utils');
 
-const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'devkey';
-const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'secret';
-const LIVEKIT_WS_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
+const LIVEKIT_API_KEY = config.livekitApiKey;
+const LIVEKIT_API_SECRET = config.livekitApiSecret;
+const LIVEKIT_WS_URL = config.livekitWsUrl;
 const LIVEKIT_HTTP_URL = LIVEKIT_WS_URL.replace(/^ws/, 'http');
 const recordingConfigured = Boolean(
   process.env.RECORDING_S3_ACCESS_KEY &&
   process.env.RECORDING_S3_SECRET_KEY &&
   process.env.RECORDING_S3_BUCKET
 );
+
+function safeRequestPath(pathname) {
+  return String(pathname || '').replace(/^\/i\/[^/]+/, '/i/[redacted]').slice(0, 300);
+}
 
 function defaultServices() {
   return {
@@ -100,7 +107,7 @@ async function safeAudit(event) {
   try {
     return await audit.logEvent(event);
   } catch (error) {
-    console.error('audit/write error', error.message);
+    log('error', 'audit_write_error', { action: event?.action, room: event?.room, errorName: error.name, errorCode: error.code });
     return null;
   }
 }
@@ -116,21 +123,39 @@ function createApp(overrides = {}) {
   const egressClient = services.egressClient;
   const transcriptionProvider = services.transcriptionProvider;
   const livekitProbe = overrides.livekitProbe || createLiveKitStatusProbe({ roomService, wsUrl: LIVEKIT_WS_URL });
+  const storageProbe = overrides.storageProbe || storageStatus;
   const pendingMediaRequests = new Map();
+
+  async function transcriptionStatus(options) {
+    if (typeof transcriptionProvider.healthStatus === 'function') return transcriptionProvider.healthStatus(options);
+    const configured = transcriptionProvider.isConfigured();
+    return { configured, available: configured, checkedAt: new Date().toISOString() };
+  }
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use((req, res, next) => {
+    const requestId = crypto.randomUUID();
+    const startedAt = Date.now();
+    req.requestId = requestId;
+    res.setHeader('X-Request-ID', requestId);
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), display-capture=(self), picture-in-picture=(self)');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ${LIVEKIT_WS_URL || ''}`.trim());
+    if (config.isProductionLike) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    if (config.noIndex) res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
     if (req.path.startsWith('/api/') || req.path.startsWith('/i/')) res.setHeader('Cache-Control', 'no-store');
+    if (config.nodeEnv !== 'test') res.on('finish', () => log('info', 'http_request', { requestId, method: req.method, path: safeRequestPath(req.path), status: res.statusCode, durationMs: Date.now() - startedAt }));
     next();
   });
   app.use(express.json({ limit: config.maxJsonPayload, strict: true }));
   app.use(express.urlencoded({ extended: false, limit: '64kb' }));
+  app.get('/robots.txt', (_req, res) => {
+    res.type('text/plain').send(config.noIndex ? 'User-agent: *\nDisallow: /\n' : 'User-agent: *\nAllow: /\n');
+  });
   app.use(express.static(path.join(__dirname, '..', 'public'), {
     etag: true,
     maxAge: config.isProduction ? '1h' : 0,
@@ -381,7 +406,7 @@ function createApp(overrides = {}) {
       createdBy: req.auth.u,
     });
     await safeAudit({ actor: req.auth.u, action: 'INVITATION_CREATED', target: created.invitation.id, room: req.meeting.room, metadata: { role: created.invitation.role, expiresAt: created.invitation.expiresAt }, ...auditContext(req) });
-    res.status(201).json({ invitation: created.invitation, path: `/i/${created.token}` });
+    res.status(201).json({ invitation: created.invitation, ...invitationSharePayload({ token: created.token, meeting: req.meeting, role: created.invitation.role }) });
   }));
 
   app.delete('/api/meetings/:room/invitations/:id', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
@@ -398,7 +423,7 @@ function createApp(overrides = {}) {
     const livekit = await livekitProbe({ fresh: true });
     if (!livekit.available) {
       await safeAudit({ actor: req.auth.u, action: 'ROOM_CONNECTION_FAILED', target: req.meeting.id, room: req.meeting.room, metadata: { reason: livekit.errorCode || livekit.state }, ...auditContext(req) });
-      throw new AppError(503, 'El servicio de videoconferencia no está disponible. Inicia LiveKit local antes de abrir la sala.', 'LIVEKIT_UNAVAILABLE');
+      throw new AppError(503, 'El servicio de videoconferencia no está disponible. Verifica la configuración de LiveKit.', 'LIVEKIT_UNAVAILABLE');
     }
     await roomRegistry.createRoom(req.meeting.room, { meetingId: req.meeting.id });
     const created = createRoomSession({ room: req.meeting.room, meetingId: req.meeting.id, role: req.auth.role, username: req.auth.u, displayName: req.auth.u });
@@ -445,6 +470,7 @@ function createApp(overrides = {}) {
       role: req.roomSession.role,
       identity: req.roomSession.identity,
       displayName: req.roomSession.displayName,
+      consents: req.roomSession.consents || null,
       csrfToken: req.roomSession.csrf,
       meeting: {
         id: meeting.id,
@@ -479,6 +505,29 @@ function createApp(overrides = {}) {
     res.json({ displayName, csrfToken: updated.session.csrf });
   }));
 
+  app.post('/api/room-session/consent', requireRoomSession, requireRoomCsrf, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.roomSession.role !== 'VIEWER') throw new AppError(403, 'El consentimiento de acceso solo aplica a asistentes', 'ROOM_FORBIDDEN');
+    const consents = {
+      privacy: req.body?.privacy === true,
+      recording: req.body?.recording === true,
+      transcription: req.body?.transcription === true,
+    };
+    if (!consents.privacy) throw new AppError(400, 'Debes aceptar el aviso de privacidad para entrar', 'PRIVACY_CONSENT_REQUIRED');
+    if (req.meeting.recordingConsentRequired && !consents.recording) throw new AppError(400, 'Debes confirmar el aviso de grabación para entrar', 'RECORDING_CONSENT_REQUIRED');
+    if (req.meeting.transcriptionConsentRequired && !consents.transcription) throw new AppError(400, 'Debes confirmar el aviso de transcripción para entrar', 'TRANSCRIPTION_CONSENT_REQUIRED');
+    const updated = updateConsents(req.roomSession, consents);
+    res.setHeader('Set-Cookie', roomCookie(updated.token, req.roomSessionSelector));
+    await safeAudit({
+      actor: req.roomSession.identity,
+      action: 'PARTICIPANT_CONSENT_RECORDED',
+      target: req.meeting.id,
+      room: req.meeting.room,
+      metadata: updated.session.consents,
+      ...auditContext(req),
+    });
+    res.json({ consents: updated.session.consents, csrfToken: updated.session.csrf });
+  }));
+
   app.post('/api/room-session/leave', requireRoomSession, requireRoomCsrf, asyncHandler(async (req, res) => {
     await roomRegistry.setSpeakerGrant(req.roomSession.room, req.roomSession.identity, false).catch(() => {});
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_LEFT', target: req.roomSession.meetingId, room: req.roomSession.room, ...auditContext(req) });
@@ -494,6 +543,12 @@ function createApp(overrides = {}) {
     const access = await roomRegistry.checkAccess(meeting.room, { allowLocked: true });
     if (!access.allowed) throw new AppError(403, 'Tu acceso a la sala fue retirado', access.reason);
     if (req.roomSession.role === 'VIEWER' && meeting.status !== 'LIVE') throw new AppError(409, 'La reunión todavía no ha comenzado', 'MEETING_NOT_LIVE');
+    if (req.roomSession.role === 'VIEWER') {
+      const consents = req.roomSession.consents || {};
+      if (!consents.privacy) throw new AppError(403, 'Debes aceptar el aviso de privacidad antes de conectarte', 'PRIVACY_CONSENT_REQUIRED');
+      if (meeting.recordingConsentRequired && !consents.recording) throw new AppError(403, 'Debes confirmar el aviso de grabación antes de conectarte', 'RECORDING_CONSENT_REQUIRED');
+      if (meeting.transcriptionConsentRequired && !consents.transcription) throw new AppError(403, 'Debes confirmar el aviso de transcripción antes de conectarte', 'TRANSCRIPTION_CONSENT_REQUIRED');
+    }
     const canPublish = ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role) || await roomRegistry.hasSpeakerGrant(meeting.room, req.roomSession.identity);
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: req.roomSession.identity,
@@ -606,7 +661,7 @@ function createApp(overrides = {}) {
       createdBy: req.roomSession.username || req.roomSession.identity,
     });
     await safeAudit({ actor: req.roomSession.identity, action: 'INVITATION_CREATED', target: created.invitation.id, room: req.meeting.room, metadata: { role: created.invitation.role, source: 'in-room' }, ...auditContext(req) });
-    res.status(201).json({ invitation: created.invitation, path: `/i/${created.token}` });
+    res.status(201).json({ invitation: created.invitation, ...invitationSharePayload({ token: created.token, meeting: req.meeting, role: created.invitation.role }) });
   }));
 
   app.post('/api/room/media-state', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
@@ -1131,20 +1186,25 @@ function createApp(overrides = {}) {
     const recentErrors = req.auth.role === 'ADMIN'
       ? (await audit.listEvents({ limit: 1_000 })).filter((item) => item.action === 'AUTH_LOGIN_FAILED' && new Date(item.timestamp).getTime() >= since).length
       : null;
-    const livekit = await livekitProbe();
+    const [livekit, storage, transcription] = await Promise.all([livekitProbe(), storageProbe(), transcriptionStatus()]);
+    const recordingAvailable = recordingConfigured && livekit.available === true && storage.available === true;
     res.json({
       meetingsToday: allMeetings.filter((meeting) => meeting.status === 'SCHEDULED' && localDateKey(meeting.scheduledAt) === today).length,
       activeMeetings: livekit.available ? allMeetings.filter((meeting) => meeting.status === 'LIVE' && meeting.livekitConfirmedAt).length : 0,
       nextMeeting: allMeetings.filter((meeting) => meeting.scheduledAt && new Date(meeting.scheduledAt) >= new Date() && !['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)).sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt))[0] || null,
       activeCredentials: users.filter((user) => user.active).length,
       recentErrors,
-      storage: storageConfigured ? 'configured' : 'local',
+      app: { name: config.appName, environment: config.appEnv, displayEnvironment: config.appDisplayEnv, version: config.appVersion },
+      storage,
       livekit,
       recordingConfigured,
-      transcriptionConfigured: transcriptionProvider.isConfigured(),
+      recordingAvailable,
+      transcriptionConfigured: transcription.configured,
+      transcriptionAvailable: transcription.available,
       transcriptionProvider: config.transcriptionProvider,
-      environment: config.nodeEnv,
-      version: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12),
+      environment: config.appEnv,
+      displayEnvironment: config.appDisplayEnv,
+      version: config.appVersion,
       security: { secureCookies: config.cookieSecure, openDevRooms: config.allowOpenDevRooms },
       missingConfiguration: [
         LIVEKIT_API_KEY === 'devkey' ? 'LIVEKIT_API_KEY' : null,
@@ -1155,10 +1215,27 @@ function createApp(overrides = {}) {
     });
   }));
 
-  app.get('/api/health', asyncHandler(async (_req, res) => {
-    const livekit = await livekitProbe();
-    res.json({ ok: true, storage: storageConfigured ? 's3' : 'local', livekit, recordingConfigured, transcriptionConfigured: transcriptionProvider.isConfigured() });
-  }));
+  async function healthResponse(_req, res) {
+    const [livekit, storage, transcription] = await Promise.all([livekitProbe(), storageProbe(), transcriptionStatus()]);
+    const servicesStatus = {
+      livekit: { configured: livekit.configured === true, available: livekit.available === true },
+      storage: { configured: storage.configured === true, available: storage.available === true, mode: storage.mode },
+      recording: { available: recordingConfigured && livekit.available === true && storage.available === true },
+      transcription: { configured: transcription.configured === true, available: transcription.available === true },
+    };
+    const requiredAvailable = !config.isProductionLike || (servicesStatus.livekit.available && servicesStatus.storage.available && servicesStatus.recording.available && servicesStatus.transcription.available);
+    res.json({
+      app: config.appName,
+      environment: config.appEnv,
+      displayEnvironment: config.appDisplayEnv,
+      version: config.appVersion,
+      status: requiredAvailable ? 'operational' : 'degraded',
+      checkedAt: new Date().toISOString(),
+      services: servicesStatus,
+    });
+  }
+  app.get('/health', asyncHandler(healthResponse));
+  app.get('/api/health', asyncHandler(healthResponse));
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint no encontrado', code: 'NOT_FOUND' }));
   app.use((error, _req, res, _next) => {
@@ -1169,7 +1246,7 @@ function createApp(overrides = {}) {
     if (error.type === 'entity.too.large') return res.status(413).json({ error: 'La solicitud supera el tamaño permitido', code: 'PAYLOAD_TOO_LARGE' });
     if (error instanceof SyntaxError && error.status === 400 && 'body' in error) return res.status(400).json({ error: 'JSON no válido', code: 'INVALID_JSON' });
     const status = error instanceof AppError ? error.status : 500;
-    if (status >= 500 && !(error instanceof AppError)) console.error('request error', error.message);
+    if (status >= 500 && !(error instanceof AppError)) log('error', 'request_error', { requestId: _req.requestId, method: _req.method, path: safeRequestPath(_req.path), errorName: error.name, errorCode: error.code });
     return res.status(status).json({
       error: error instanceof AppError ? error.message : status >= 500 ? 'Ocurrió un error interno' : error.message,
       code: error.code || 'INTERNAL_ERROR',
@@ -1178,8 +1255,9 @@ function createApp(overrides = {}) {
 
   app.locals.services = services;
   app.locals.livekitProbe = livekitProbe;
+  app.locals.storageProbe = storageProbe;
   app.locals.rateLimiters = { loginLimiter, meetingLimiter, transcriptionLimiter, chatLimiter, interactionLimiter };
   return app;
 }
 
-module.exports = { canManageMeeting, createApp, localDateKey, recordingConfigured, recordingStateFromEgress };
+module.exports = { canManageMeeting, createApp, localDateKey, recordingConfigured, recordingStateFromEgress, safeRequestPath };

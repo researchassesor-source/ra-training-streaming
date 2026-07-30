@@ -1,18 +1,19 @@
 require('dotenv').config({ quiet: true });
 const { assertRuntimeConfig, config } = require('./config');
 const { createApp, recordingConfigured } = require('./app');
+const { log } = require('./logger');
 
 assertRuntimeConfig();
 
 const app = createApp();
 const server = app.listen(config.port, async () => {
-  console.info(`R.A. Training disponible en http://localhost:${config.port}`);
+  log('info', 'server_started', { app: config.appName, environment: config.appEnv, publicUrl: config.appPublicUrl, port: config.port });
   const livekit = await app.locals.livekitProbe({ fresh: true });
-  console.info(`LiveKit ${livekit.mode}: ${livekit.available ? 'disponible' : 'no disponible'} | Grabación: ${recordingConfigured ? 'configurada' : 'deshabilitada'}`);
+  log('info', 'service_status', { service: 'livekit', mode: livekit.mode, available: livekit.available, recordingConfigured });
 });
 
 function shutdown(signal) {
-  console.info(`${signal}: cerrando servidor`);
+  log('info', 'server_shutdown', { signal });
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 10_000).unref();
 }

@@ -1,0 +1,67 @@
+services:
+  - type: web
+    name: ra-training-streaming-preview
+    runtime: node
+    plan: free
+    branch: feature/optimizacion-streaming-webinar
+    autoDeploy: false
+    buildCommand: npm ci && npm run build:track-processors
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_ENV
+        value: preview
+      - key: APP_DISPLAY_ENV
+        value: Vista previa
+      - key: APP_NAME
+        value: R.A. Training Streaming
+      - key: APP_TIME_ZONE
+        value: America/Guayaquil
+      - key: APP_TIME_ZONE_LABEL
+        value: Ecuador continental
+      - key: COOKIE_SECURE
+        value: true
+      - key: ALLOW_OPEN_DEV_ROOMS
+        value: false
+      - key: TRANSCRIPTION_ENABLED
+        value: true
+      - key: TRANSCRIPTION_PROVIDER
+        value: http
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: INVITATION_HASH_SECRET
+        generateValue: true
+      - key: APP_PUBLIC_URL
+        sync: false
+      - key: APP_VERSION
+        sync: false
+      - key: PREVIEW_ISOLATION_ACK
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: LIVEKIT_WS_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: RECORDING_S3_ACCESS_KEY
+        sync: false
+      - key: RECORDING_S3_SECRET_KEY
+        sync: false
+      - key: RECORDING_S3_BUCKET
+        sync: false
+      - key: RECORDING_S3_REGION
+        sync: false
+      - key: RECORDING_S3_ENDPOINT
+        sync: false
+      - key: TRANSCRIPTION_API_URL
+        sync: false
+      - key: TRANSCRIPTION_API_KEY
+        sync: false
+      - key: TRANSCRIPTION_ALLOWED_HOSTS
+        sync: false

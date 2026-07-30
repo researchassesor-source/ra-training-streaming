@@ -1,9 +1,12 @@
 const crypto = require('crypto');
+const dns = require('node:dns').promises;
+const net = require('node:net');
 const { AppError } = require('./http-utils');
 const { config } = require('./config');
 
 class TranscriptionProvider {
   isConfigured() { return false; }
+  async healthStatus() { return { configured: false, available: false, checkedAt: new Date().toISOString() }; }
   async createJob() { throw new Error('createJob no implementado'); }
   async getJobStatus() { throw new Error('getJobStatus no implementado'); }
   async cancelJob() { throw new Error('cancelJob no implementado'); }
@@ -19,6 +22,10 @@ class MockTranscriptionProvider extends TranscriptionProvider {
   }
 
   isConfigured() { return this.configured; }
+
+  async healthStatus() {
+    return { configured: this.isConfigured(), available: this.isConfigured(), mode: 'mock', checkedAt: new Date().toISOString() };
+  }
 
   async createJob({ recording, language }) {
     if (!this.isConfigured()) throw new AppError(503, 'El proveedor de transcripción no está configurado', 'TRANSCRIPTION_NOT_CONFIGURED');
@@ -66,34 +73,72 @@ class MockTranscriptionProvider extends TranscriptionProvider {
   }
 }
 
+function isPrivateAddress(address) {
+  const value = String(address || '').toLowerCase().split('%')[0].replace(/^\[|\]$/g, '');
+  if (net.isIP(value) === 4) {
+    const [a, b] = value.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) || a >= 224;
+  }
+  if (net.isIP(value) === 6) {
+    if (value === '::' || value === '::1' || value.startsWith('fc') || value.startsWith('fd') || /^fe[89ab]/.test(value)) return true;
+    if (value.startsWith('::ffff:')) return isPrivateAddress(value.slice(7));
+  }
+  return false;
+}
+
 class HttpTranscriptionProvider extends TranscriptionProvider {
-  constructor({ enabled, apiUrl, apiKey, fetchImpl = global.fetch } = {}) {
+  constructor({ enabled, apiUrl, apiKey, fetchImpl = global.fetch, lookupImpl = dns.lookup } = {}) {
     super();
     this.enabled = enabled;
     this.apiUrl = String(apiUrl || '').replace(/\/$/, '');
     this.apiKey = apiKey || '';
     this.fetchImpl = fetchImpl;
+    this.lookupImpl = lookupImpl;
+    this.healthCache = null;
+    this.healthCacheAt = 0;
   }
 
   isConfigured() {
     if (!this.enabled || !this.apiUrl || !this.apiKey || typeof this.fetchImpl !== 'function') return false;
     try {
       const parsed = new URL(this.apiUrl);
-      return parsed.protocol === 'https:' || (!config.isProduction && parsed.hostname === 'localhost');
+      if (parsed.username || parsed.password || parsed.protocol !== 'https:') return !config.isProductionLike && parsed.protocol === 'http:' && parsed.hostname === 'localhost';
+      if (config.isProductionLike && (parsed.hostname.endsWith('.local') || isPrivateAddress(parsed.hostname))) return false;
+      if (config.isProductionLike && !config.transcriptionAllowedHosts.has(parsed.hostname.toLowerCase())) return false;
+      return true;
     } catch {
       return false;
     }
   }
 
+  async assertPublicTarget() {
+    if (!config.isProductionLike) return;
+    const hostname = new URL(this.apiUrl).hostname;
+    if (hostname.endsWith('.local') || isPrivateAddress(hostname)) throw new AppError(503, 'El destino del proveedor de transcripción no es válido', 'TRANSCRIPTION_PROVIDER_TARGET_INVALID');
+    let addresses;
+    try {
+      addresses = await this.lookupImpl(hostname, { all: true, verbatim: true });
+    } catch {
+      throw new AppError(502, 'No fue posible resolver el proveedor de transcripción', 'TRANSCRIPTION_PROVIDER_UNAVAILABLE');
+    }
+    if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
+      throw new AppError(503, 'El destino del proveedor de transcripción no es válido', 'TRANSCRIPTION_PROVIDER_TARGET_INVALID');
+    }
+  }
+
   async request(pathname, options = {}) {
     if (!this.isConfigured()) throw new AppError(503, 'El proveedor de transcripción no está configurado', 'TRANSCRIPTION_NOT_CONFIGURED');
+    await this.assertPublicTarget();
     let response;
     try {
+      const { timeoutMs = 20_000, ...fetchOptions } = options;
       response = await this.fetchImpl(`${this.apiUrl}${pathname}`, {
-        ...options,
+        ...fetchOptions,
         headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json', ...(options.headers || {}) },
         redirect: 'error',
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       throw new AppError(502, 'No fue posible comunicarse con el proveedor de transcripción', 'TRANSCRIPTION_PROVIDER_UNAVAILABLE');
@@ -101,6 +146,20 @@ class HttpTranscriptionProvider extends TranscriptionProvider {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new AppError(502, 'El proveedor de transcripción rechazó la solicitud', 'TRANSCRIPTION_PROVIDER_ERROR');
     return data;
+  }
+
+  async healthStatus({ fresh = false } = {}) {
+    const configured = this.isConfigured();
+    if (!configured) return { configured: false, available: false, mode: 'http', checkedAt: new Date().toISOString() };
+    if (!fresh && this.healthCache && Date.now() - this.healthCacheAt < 30_000) return this.healthCache;
+    try {
+      await this.request('/health', { method: 'GET', timeoutMs: 3_000 });
+      this.healthCache = { configured: true, available: true, mode: 'http', checkedAt: new Date().toISOString() };
+    } catch (error) {
+      this.healthCache = { configured: true, available: false, mode: 'http', checkedAt: new Date().toISOString(), errorCode: String(error.code || 'TRANSCRIPTION_PROVIDER_UNAVAILABLE').slice(0, 80) };
+    }
+    this.healthCacheAt = Date.now();
+    return this.healthCache;
   }
 
   createJob({ recording, meeting, language, callbackUrl }) {
@@ -136,4 +195,5 @@ module.exports = {
   MockTranscriptionProvider,
   TranscriptionProvider,
   createTranscriptionProvider,
+  isPrivateAddress,
 };

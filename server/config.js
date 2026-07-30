@@ -1,3 +1,5 @@
+const APP_ENVIRONMENTS = new Set(['development', 'test', 'preview', 'production']);
+
 function boolFromEnv(name, fallback = false) {
   const value = process.env[name];
   if (value === undefined || value === '') return fallback;
@@ -10,23 +12,69 @@ function intFromEnv(name, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } =
   return Math.min(max, Math.max(min, parsed));
 }
 
-const nodeEnv = process.env.NODE_ENV || 'development';
+function normalizePublicUrl(value) {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) return '';
+    if (parsed.pathname !== '/' && parsed.pathname !== '') return '';
+    return parsed.origin;
+  } catch {
+    return '';
+  }
+}
+
+function defaultAppEnvironment(nodeEnv) {
+  if (nodeEnv === 'test') return 'test';
+  if (nodeEnv === 'production') return 'production';
+  return 'development';
+}
+
+const nodeEnv = String(process.env.NODE_ENV || 'development').trim().toLowerCase();
+const appEnv = String(process.env.APP_ENV || defaultAppEnvironment(nodeEnv)).trim().toLowerCase();
 const isProduction = nodeEnv === 'production';
+const isProductionLike = appEnv === 'preview' || appEnv === 'production';
+const port = intFromEnv('PORT', 3000, { min: 1, max: 65_535 });
+const appDisplayEnv = String(process.env.APP_DISPLAY_ENV || ({
+  development: 'Desarrollo',
+  test: 'Pruebas',
+  preview: 'Vista previa',
+  production: 'Producción',
+})[appEnv] || '').trim();
+const configuredPublicUrl = normalizePublicUrl(process.env.APP_PUBLIC_URL);
+const appPublicUrl = configuredPublicUrl || (isProductionLike ? '' : `http://localhost:${port}`);
+const sessionSecret = process.env.SESSION_SECRET || 'dev-insecure-secret-change-me';
 
 const config = {
   nodeEnv,
+  appEnv,
+  appDisplayEnv,
+  appName: String(process.env.APP_NAME || 'R.A. Training Streaming').trim(),
+  appPublicUrl,
+  appVersion: String(process.env.APP_VERSION || process.env.RENDER_GIT_COMMIT || (appEnv === 'development' ? 'desarrollo' : 'sin-versión')).trim().slice(0, 64),
+  appTimeZone: String(process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
+  appTimeZoneLabel: String(process.env.APP_TIME_ZONE_LABEL || process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
+  noIndex: appEnv === 'preview',
+  previewIsolationAcknowledged: boolFromEnv('PREVIEW_ISOLATION_ACK', false),
   isProduction,
-  port: intFromEnv('PORT', 3000, { min: 1, max: 65_535 }),
-  sessionSecret: process.env.SESSION_SECRET || 'dev-insecure-secret-change-me',
+  isProductionLike,
+  port,
+  sessionSecret,
+  invitationHashSecret: process.env.INVITATION_HASH_SECRET || (isProductionLike ? '' : sessionSecret),
   sessionTtlMs: intFromEnv('SESSION_TTL_HOURS', 12, { min: 1, max: 168 }) * 60 * 60 * 1000,
   roomSessionTtlMs: intFromEnv('ROOM_SESSION_TTL_HOURS', 8, { min: 1, max: 48 }) * 60 * 60 * 1000,
-  cookieSecure: boolFromEnv('COOKIE_SECURE', isProduction),
-  allowOpenDevRooms: !isProduction && boolFromEnv('ALLOW_OPEN_DEV_ROOMS', false),
+  cookieSecure: boolFromEnv('COOKIE_SECURE', isProductionLike || isProduction),
+  allowOpenDevRooms: !isProductionLike && !isProduction && boolFromEnv('ALLOW_OPEN_DEV_ROOMS', false),
   invitationTtlMinutes: intFromEnv('INVITATION_TOKEN_TTL_MINUTES', 1_440, { min: 5, max: 43_200 }),
   loginRateLimitWindowMs: intFromEnv('LOGIN_RATE_LIMIT_WINDOW', 900, { min: 10, max: 86_400 }) * 1000,
   loginRateLimitMax: intFromEnv('LOGIN_RATE_LIMIT_MAX', 8, { min: 1, max: 1_000 }),
   chatRateLimitMax: intFromEnv('CHAT_RATE_LIMIT_MAX', 20, { min: 1, max: 1_000 }),
   meetingRateLimitMax: intFromEnv('MEETING_RATE_LIMIT_MAX', 20, { min: 1, max: 1_000 }),
+  livekitWsUrl: String(process.env.LIVEKIT_WS_URL || (isProductionLike ? '' : 'ws://localhost:7880')).trim(),
+  livekitApiKey: String(process.env.LIVEKIT_API_KEY || (isProductionLike ? '' : 'devkey')).trim(),
+  livekitApiSecret: String(process.env.LIVEKIT_API_SECRET || (isProductionLike ? '' : 'secret')).trim(),
+  storageConfigured: Boolean(process.env.RECORDING_S3_ACCESS_KEY && process.env.RECORDING_S3_SECRET_KEY && process.env.RECORDING_S3_BUCKET),
   transcriptionEnabled: boolFromEnv('TRANSCRIPTION_ENABLED', false),
   transcriptionProvider: String(process.env.TRANSCRIPTION_PROVIDER || 'mock').trim().toLowerCase(),
   transcriptionLanguage: String(process.env.TRANSCRIPTION_LANGUAGE || 'es').trim(),
@@ -35,6 +83,7 @@ const config = {
   transcriptionRateLimitMax: intFromEnv('TRANSCRIPTION_RATE_LIMIT_MAX', 10, { min: 1, max: 1_000 }),
   transcriptionApiUrl: String(process.env.TRANSCRIPTION_API_URL || '').trim(),
   transcriptionApiKeyConfigured: Boolean(process.env.TRANSCRIPTION_API_KEY),
+  transcriptionAllowedHosts: new Set(String(process.env.TRANSCRIPTION_ALLOWED_HOSTS || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean)),
   maxJsonPayload: process.env.MAX_JSON_PAYLOAD || '256kb',
   maxChatMessageLength: intFromEnv('MAX_CHAT_MESSAGE_LENGTH', 2_000, { min: 50, max: 10_000 }),
   maxChatFileSize: intFromEnv('MAX_CHAT_FILE_SIZE', 10 * 1024 * 1024, { min: 1_024, max: 50 * 1024 * 1024 }),
@@ -46,19 +95,67 @@ const config = {
   ),
 };
 
-function assertRuntimeConfig() {
-  if (config.isProduction && config.sessionSecret === 'dev-insecure-secret-change-me') {
-    throw new Error('SESSION_SECRET debe configurarse en Producción.');
+function validateRuntimeConfig(candidate = config) {
+  const errors = [];
+  if (!APP_ENVIRONMENTS.has(candidate.appEnv)) errors.push('APP_ENV debe ser development, test, preview o production.');
+  if (!candidate.appName) errors.push('APP_NAME no puede estar vacío.');
+  try { new Intl.DateTimeFormat('es-EC', { timeZone: candidate.appTimeZone }).format(new Date()); }
+  catch { errors.push('APP_TIME_ZONE no es una zona horaria válida.'); }
+  if (candidate.isProductionLike) {
+    if (candidate.nodeEnv !== 'production') errors.push('NODE_ENV debe ser production en Preview y Producción.');
+    if (!candidate.appPublicUrl || !candidate.appPublicUrl.startsWith('https://')) errors.push('APP_PUBLIC_URL debe ser una URL HTTPS sin ruta en Preview y Producción.');
+    if (!candidate.cookieSecure) errors.push('COOKIE_SECURE debe estar activado en Preview y Producción.');
+    if (!candidate.sessionSecret || candidate.sessionSecret.length < 32 || candidate.sessionSecret === 'dev-insecure-secret-change-me') errors.push('SESSION_SECRET debe tener al menos 32 caracteres seguros.');
+    if (!candidate.invitationHashSecret || candidate.invitationHashSecret.length < 32) errors.push('INVITATION_HASH_SECRET debe tener al menos 32 caracteres seguros.');
+    let secureLiveKitUrl = false;
+    try {
+      const liveKitUrl = new URL(candidate.livekitWsUrl);
+      secureLiveKitUrl = liveKitUrl.protocol === 'wss:' && Boolean(liveKitUrl.hostname) && !liveKitUrl.username && !liveKitUrl.password;
+    } catch {}
+    if (!secureLiveKitUrl || !candidate.livekitApiKey || !candidate.livekitApiSecret) errors.push('LiveKit debe configurarse con WSS y credenciales aisladas.');
   }
-  if (config.isProduction && !config.cookieSecure) {
-    throw new Error('COOKIE_SECURE no puede desactivarse en Producción.');
+  if (candidate.appEnv === 'preview') {
+    if (!candidate.previewIsolationAcknowledged) errors.push('PREVIEW_ISOLATION_ACK debe confirmar que todas las integraciones usan recursos no productivos.');
+    if (!candidate.storageConfigured) errors.push('Preview requiere almacenamiento S3/R2 aislado.');
+    if (!candidate.transcriptionEnabled || candidate.transcriptionProvider !== 'http' || !candidate.transcriptionApiUrl || !candidate.transcriptionApiKeyConfigured) errors.push('Preview requiere un proveedor HTTP real de transcripción.');
   }
-  if (config.isProduction && config.transcriptionEnabled && config.transcriptionProvider === 'mock') {
-    throw new Error('El proveedor mock de transcripción no puede habilitarse en Producción.');
+  if (candidate.isProductionLike && candidate.transcriptionEnabled && candidate.transcriptionProvider === 'http') {
+    if (!candidate.transcriptionApiKeyConfigured) errors.push('TRANSCRIPTION_API_KEY debe configurarse cuando la transcripción HTTP está habilitada.');
+    try {
+      const providerUrl = new URL(candidate.transcriptionApiUrl);
+      const hostname = providerUrl.hostname.toLowerCase();
+      if (providerUrl.protocol !== 'https:' || providerUrl.username || providerUrl.password) {
+        errors.push('TRANSCRIPTION_API_URL debe usar HTTPS y no incluir credenciales.');
+      }
+      if (!candidate.transcriptionAllowedHosts?.has(hostname)) errors.push('TRANSCRIPTION_ALLOWED_HOSTS debe autorizar explícitamente el host del proveedor.');
+    } catch {
+      errors.push('TRANSCRIPTION_API_URL debe ser una URL HTTPS válida.');
+    }
   }
-  if (config.transcriptionEnabled && !['http', 'mock'].includes(config.transcriptionProvider)) {
-    throw new Error('TRANSCRIPTION_PROVIDER debe ser http o mock.');
-  }
+  if (candidate.isProduction && candidate.sessionSecret === 'dev-insecure-secret-change-me') errors.push('SESSION_SECRET debe configurarse en Producción.');
+  if (candidate.isProduction && !candidate.cookieSecure) errors.push('COOKIE_SECURE no puede desactivarse en Producción.');
+  if (candidate.isProduction && candidate.transcriptionEnabled && candidate.transcriptionProvider === 'mock') errors.push('El proveedor mock de transcripción no puede habilitarse en Producción.');
+  if (candidate.transcriptionEnabled && !['http', 'mock'].includes(candidate.transcriptionProvider)) errors.push('TRANSCRIPTION_PROVIDER debe ser http o mock.');
+  return errors;
 }
 
-module.exports = { config, boolFromEnv, intFromEnv, assertRuntimeConfig };
+function assertRuntimeConfig() {
+  const errors = validateRuntimeConfig();
+  if (errors.length) throw new Error(errors.join(' '));
+}
+
+function publicUrl(pathname = '/') {
+  const path = String(pathname || '/').startsWith('/') ? String(pathname || '/') : `/${pathname}`;
+  return new URL(path, `${config.appPublicUrl}/`).href;
+}
+
+module.exports = {
+  APP_ENVIRONMENTS,
+  assertRuntimeConfig,
+  boolFromEnv,
+  config,
+  intFromEnv,
+  normalizePublicUrl,
+  publicUrl,
+  validateRuntimeConfig,
+};

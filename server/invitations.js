@@ -9,7 +9,15 @@ const INVITATION_ROLES = new Set(['PANELIST', 'VIEWER']);
 const consumeLocks = new Map();
 
 function tokenHash(token) {
+  return crypto.createHmac('sha256', config.invitationHashSecret).update(String(token)).digest('hex');
+}
+
+function legacyTokenHash(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function tokenHashes(token) {
+  return [...new Set([tokenHash(token), legacyTokenHash(token)])];
 }
 
 function keyForHash(hash) {
@@ -31,15 +39,20 @@ async function writeInvitation(record) {
 }
 
 async function getByToken(token) {
-  const hash = tokenHash(token);
-  if (!storageConfigured) return localStore.readJson('invitations', hash);
-  try {
-    const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyForHash(hash) }));
-    return JSON.parse(await response.Body.transformToString());
-  } catch (error) {
-    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) return undefined;
-    throw error;
+  for (const hash of tokenHashes(token)) {
+    if (!storageConfigured) {
+      const record = await localStore.readJson('invitations', hash);
+      if (record) return record;
+      continue;
+    }
+    try {
+      const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyForHash(hash) }));
+      return JSON.parse(await response.Body.transformToString());
+    } catch (error) {
+      if (error.name !== 'NoSuchKey' && error.$metadata?.httpStatusCode !== 404) throw error;
+    }
   }
+  return undefined;
 }
 
 async function listInvitations({ room } = {}) {
@@ -194,6 +207,7 @@ module.exports = {
   deriveStatus,
   getByToken,
   listInvitations,
+  legacyTokenHash,
   peekInvitation,
   publicInvitation,
   revokeInvitation,
