@@ -108,6 +108,10 @@ test('official logo and optimized derivatives exist and all required surfaces re
   };
   for (const [surface, source] of Object.entries(references)) assert.match(source, /streaming-app-logo/, surface);
   assert.match(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'), /streaming-app-logo-512\.png/);
+  const brandSource = fs.readFileSync(path.join(publicDir, 'brand.js'), 'utf8');
+  const visibleBrandSources = [brandSource, fs.readFileSync(path.join(publicDir, 'sounds.js'), 'utf8'), references.login].join('\n');
+  assert.doesNotMatch(visibleBrandSources, /assets\/logo\.png|mascot\.png/);
+  assert.equal((brandSource.match(/<img/g) || []).length, 1);
 });
 
 test('mobile login isolates the form and hidden controls cannot reappear through layout CSS', () => {
@@ -123,4 +127,26 @@ test('room reconnection re-queries real recording status and zero counters stay 
   assert.match(roomUi, /onReconnected: \(\) => queryRecordingStatus\(\)/);
   assert.match(roomUi, /element\.hidden = count < 1/);
   assert.doesNotMatch(roomUi, /setRecordingIndicator\(Boolean/);
+});
+
+test('preflight stays visible until LiveKit connects and exposes a retry on failure', () => {
+  const roomUi = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
+  assert.match(roomUi, /privacyConsent\.disabled = !viewer/);
+  assert.match(roomUi, /privacyConsent\.required = false/);
+  assert.match(roomUi, /await connectRoom\(\{ joinCamera, joinMicrophone \}\);[\s\S]*preflightDialog'\)\.close\(\)/);
+  assert.match(roomUi, /button\.textContent = shouldRetry \? 'Reintentar conexión'/);
+  assert.match(roomUi, /RATCore\.roomConnectionErrorMessage\(requestError\)/);
+  assert.match(roomUi, /ui\.roomUi\?\.dispose\(\)/);
+});
+
+test('credential forms expose accessible password toggles and meeting fields use Spanish labels', () => {
+  const login = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const dashboard = fs.readFileSync(path.join(publicDir, 'dashboard.html'), 'utf8');
+  assert.match(login, /data-password-toggle="password"/);
+  assert.match(dashboard, /data-password-toggle="userPassword"/);
+  assert.match(dashboard, /data-password-toggle="resetUserPassword"/);
+  assert.match(dashboard, /required-note[\s\S]*Campos obligatorios/);
+  assert.match(dashboard, /Identificador de sala \(slug\)/);
+  assert.match(dashboard, /value="WEBINAR">Webinar/);
+  assert.match(dashboard, /value="INVITATION">Invitación/);
 });

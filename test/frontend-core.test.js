@@ -7,8 +7,11 @@ const {
   HandQueue,
   createFloatingModel,
   createUnreadCounter,
+  roleLabel,
+  roomConnectionErrorMessage,
   safeHttpUrl,
 } = require('../public/app-core');
+const { nextPasswordType } = require('../public/password-toggle');
 
 test('connection state machine exposes one coherent Spanish state', () => {
   const seen = [];
@@ -72,4 +75,17 @@ test('authentication UI does not persist credentials in localStorage', () => {
   const files = ['login.js', 'dashboard.js', 'recordings.js'].map((name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8')).join('\n');
   assert.doesNotMatch(files, /localStorage/);
   assert.match(files, /credentials: 'same-origin'/);
+});
+
+test('visible roles and room connection failures are translated safely', () => {
+  assert.equal(roleLabel('ADMIN'), 'Administrador');
+  assert.equal(roleLabel('VIEWER'), 'Asistente');
+  assert.equal(roleLabel('unexpected'), 'Participante');
+  assert.match(roomConnectionErrorMessage(new Error('websocket failed')), /No se pudo conectar al servicio de videoconferencia/);
+  assert.equal(roomConnectionErrorMessage({ status: 410, code: 'ROOM_ENDED', message: 'La reunión finalizó.' }), 'La reunión finalizó.');
+});
+
+test('password visibility toggles between secure and readable input types', () => {
+  assert.equal(nextPasswordType('password'), 'text');
+  assert.equal(nextPasswordType('text'), 'password');
 });

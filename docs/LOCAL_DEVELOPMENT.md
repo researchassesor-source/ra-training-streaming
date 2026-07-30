@@ -39,7 +39,7 @@ Configura una instancia local con API key/secret de desarrollo y usa la URL `ws:
 4. Validar cámara, micrófono, pantalla, chat, preguntas y mano levantada.
 5. Confirmar que un viewer no puede llamar promoción, expulsión ni grabación.
 
-Sin LiveKit, usa `npm test`: los endpoints sensibles se validan con mocks y no contactan servicios externos.
+Sin LiveKit, usa `npm test`: los endpoints sensibles se validan con mocks y no contactan servicios externos. La prueba manual del preflight también debe conservar el diálogo abierto, mostrar un mensaje seguro de indisponibilidad y reemplazar el botón por **Reintentar conexión**. Si el botón permanece en **Entrar a la reunión** sin mostrar un error, revisa primero la validación de campos y consentimientos ocultos.
 
 ## Prueba manual de medios
 
