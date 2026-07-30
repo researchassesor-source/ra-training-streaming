@@ -33,7 +33,7 @@ No ejecutar sin aprobación humana.
 - [ ] Abrir panelista y asistente con cámara/micrófono permitidos y denegados.
 - [ ] Confirmar que Programada cambia a En vivo solo después de conectar un participante autorizado y que auditoría contiene un único `ROOM_CONNECTED`.
 - [ ] Chat, preguntas, archivo permitido/rechazado, rate limit, no leídos y reintento.
-- [ ] Q&A persistente: editar propia pendiente, votar, ordenar, fijar, responder por escrito/en vivo y descartar.
+- [ ] Q&A persistente: editar propia pendiente, votar, ordenar, fijar y responder por escrito/en vivo sin duplicados; al descartar desaparece del flujo principal y del asistente, y solo queda en el historial secundario de moderación.
 - [ ] Mano: levantar, cancelar, rechazar, dar/quitar palabra y expulsar.
 - [ ] Solicitud de micrófono: aceptar y publicar, rechazar con “Ahora no”, fallar por dispositivo y recibir cada estado específico en organizador.
 - [ ] Conceder palabra, recargar/reconectar asistente, comprobar que el permiso continúa y luego revocarlo.
@@ -46,9 +46,10 @@ No ejecutar sin aprobación humana.
 - [ ] Transcripción: crear, procesar, completar, fallar, reintentar, cancelar, editar con conflicto, eliminar y exportar TXT/JSON/VTT/SRT.
 - [ ] PANELIST respeta el permiso de consulta; VIEWER recibe 403; ninguna respuesta o log expone claves ni `providerJobId`.
 - [ ] Probar búsqueda, filtro de participante, timestamps, confianza, nombres desconocidos y cambios sin guardar.
-- [ ] Document PiP abre compacto, expande/contrae, controla mic/cámara/pantalla/paneles/salida, cierra sin desconectar y reabre compacto; fallback interno completo y mensaje honesto.
+- [ ] Document PiP abre con dock compacto de hasta 650×56, expande/contrae, controla mic/cámara/pantalla/paneles/salida, cierra sin desconectar y reabre compacto; fallback interno completo y mensaje honesto.
+- [ ] Popovers del dock: Chat y Participantes alternan con su mismo botón, son mutuamente excluyentes, cierran con Escape/clic exterior y conservan borrador e historial sin duplicar listeners.
 - [ ] Cerrar Chat/Preguntas/Participantes elimina la columna y expande inmediatamente el escenario.
-- [ ] Pantalla real en spotlight, vídeo con `srcObject`, miniatura local arrastrable/avatar, audio veraz y recuperación al silenciar, despublicar o terminar desde el navegador.
+- [ ] Pantalla real en spotlight, vídeo con `srcObject`, una miniatura de hablante activo con prioridad remota/debounce/fallback local/avatar, audio veraz y recuperación al silenciar, despublicar o terminar desde el navegador.
 - [ ] Bloquear/desbloquear: una invitación no se consume al rechazar; la sesión existente continúa.
 - [ ] Invitaciones de asistente/panelista desde sala muestran confirmación sin exponer el token en UI persistente.
 - [ ] Calidad, temporizador y estado de grabación real coinciden en header y panel flotante.

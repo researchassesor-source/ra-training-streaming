@@ -31,10 +31,24 @@ Esta matriz reproduce las regresiones corregidas sin depender de Producción.
 3. Terminar desde el indicador nativo; el spotlight y el estado deben desaparecer.
 4. Cerrar Chat/Preguntas/Participantes y medir que layout, escenario y viewport tienen el mismo ancho, sin scroll horizontal.
 5. Abrir PiP: empieza compacto; expandir, contraer, cerrar y reabrir sin desconectar ni duplicar listeners.
+6. Mientras existe un `ScreenShare`, hacer hablar al asistente: tras 450 ms su cámara/avatar debe ser la única miniatura; al callar, el fallback local debe estabilizarse tras 900 ms.
+
+## Q&A y dock compacto
+
+1. Crear dos preguntas, votar/ordenar/destacar una y responderla por escrito o en vivo; no deben duplicarse al recargar.
+2. Descartar una pregunta: debe desaparecer inmediatamente del flujo principal y del asistente. En moderador solo aparece después de expandir **Ver descartadas**.
+3. Abrir Chat desde el dock, escribir sin enviar, cerrar con el mismo botón y reabrir: el borrador debe conservarse.
+4. Enviar con Enter, insertar una línea con Shift+Enter y comprobar estados enviado/fallido. Reabrir el dock no debe duplicar mensajes ni listeners.
+5. Abrir Participantes mientras Chat está abierto: debe quedar un solo popover. Probar solicitar micrófono, dar/quitar palabra y **Más**; Escape y clic exterior deben cerrar.
+6. Medir el dock en escritorio y móvil: hasta 650×56, sin scroll horizontal ni solapamiento de controles.
+
+## Responsive
+
+Revisar como mínimo 360×740, 390×844, 768×900, 1366×768 y 1920×1080. Con el panel lateral cerrado, `panel-closed` debe existir y el escenario debe ocupar todo el ancho útil. Abrir Chat debe reservar la columna lateral; cerrarlo debe devolverla inmediatamente sin reconstruir la conexión.
 
 ## Limitación de automatización
 
-El selector nativo de pantalla requiere una elección humana y no se controla desde una prueba DOM. Para una comprobación automatizada local de transporte/render se puede publicar temporalmente una pista de vídeo de prueba con fuente LiveKit `ScreenShare`, siempre desde un harness externo que no se versiona. La validación manual de release debe repetir el flujo con el selector nativo.
+El selector nativo de pantalla requiere una elección humana y no se controla desde una prueba DOM. Para una comprobación automatizada local de transporte/render se puede publicar temporalmente una pista de vídeo de prueba con fuente LiveKit `ScreenShare`, siempre desde un harness externo que no se versiona. Ese flujo sí valida suscripción remota, `srcObject`, spotlight, hablante activo y limpieza, pero no sustituye la validación manual de release con el selector nativo y su evento `ended`.
 
 ## Cierre
 

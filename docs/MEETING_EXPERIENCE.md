@@ -24,7 +24,7 @@ En escritorio están visibles micrófono, cámara, pantalla, chat, mano cuando c
 
 ## Pantalla y cámara local
 
-La pantalla compartida ocupa el spotlight. La cámara local permanece como miniatura arrastrable; apagada se transforma en avatar con iniciales, nombre, etiqueta “tú” y estado de micrófono. Puede ocultarse durante la sesión desde Más.
+La pantalla compartida ocupa el spotlight y conserva una única miniatura compacta de hablante activo. Un hablante remoto tiene prioridad; si nadie remoto habla se usa el participante local como fallback estable. El cambio aplica debounce de 450 ms al empezar a hablar y 900 ms al volver al fallback para evitar saltos visuales. Si la cámara seleccionada no tiene un track vivo, la miniatura muestra iniciales, nombre y estado de micrófono en vez de fingir vídeo.
 
 El navegador decide si comparte pestaña, ventana o pantalla completa. La aplicación solicita audio, pero solo muestra **Audio de pantalla incluido** cuando LiveKit publica el track `ScreenShareAudio`. El evento `ended` restaura escenario, botones, aviso y auditoría aunque la captura termine desde el indicador nativo.
 
@@ -34,7 +34,9 @@ El estado visual procede del track publicado y sus eventos, no del clic ni de la
 
 Al iniciar pantalla aparece un toast **Mantén los controles visibles mientras presentas**. La preferencia local **Abrir panel flotante al compartir** permite solicitar apertura automática desde ese gesto.
 
-Cuando `documentPictureInPicture` funciona se abre inicialmente una barra compacta de aproximadamente 760×110 con estado, temporizador y acciones esenciales. El usuario puede expandirla a la vista detallada con logo, título, conexión, calidad, bloqueo, participantes, manos, mensajes, preguntas pendientes, reacción reciente y grabación real. Incluye micrófono, cámara, detener pantalla, chat, preguntas, participantes, mano/ver manos, Más, Salir y volver. La preferencia compacta/expandida se conserva mientras vive la instancia.
+Cuando `documentPictureInPicture` funciona solicita inicialmente una ventana de aproximadamente 680×86 y renderiza un dock de hasta 650×56 con estado, temporizador y acciones esenciales. El usuario puede expandirlo a la vista detallada con logo, título, conexión, calidad, bloqueo, participantes, manos, mensajes, preguntas pendientes, reacción reciente y grabación real. Incluye micrófono, cámara, detener pantalla, chat, preguntas, participantes, mano/ver manos, Más, Salir y volver. La preferencia compacta/expandida se conserva mientras vive la instancia.
+
+Chat y Participantes se abren como popovers compactos desde el mismo botón que los cierra. Solo uno puede estar abierto, Escape o un clic exterior lo cierran, y `aria-expanded` refleja el estado. Chat conserva el borrador entre cierres, comparte el historial reciente y el estado enviado/fallido con la sala, usa Enter para enviar y Shift+Enter para nueva línea. Participantes muestra rol y estados reales de micrófono, cámara, pantalla, mano y permiso, con las mismas rutas seguras de moderación de la sala.
 
 Cerrar la ventana no altera reunión ni medios y el botón permite reabrirla. Si la API no existe, falla o cierra inmediatamente, se abre un panel arrastrable dentro de la reunión. Ese fallback conserva todos los controles, pero no puede permanecer sobre otra aplicación. No se promete “siempre encima” fuera de navegadores compatibles.
 
@@ -46,7 +48,7 @@ El compositor conserva borradores por tipo, dos líneas autoexpandibles, Enter p
 
 ## Q&A
 
-Las preguntas se guardan en `questions/` local o S3, no en el DOM. El asistente puede crear, editar/eliminar una pregunta propia pendiente y votar. Organizador/panelista puede destacar, responder por escrito, marcar respondida en vivo o descartar. Se ordenan por votos o fecha y el contador muestra pendientes.
+Las preguntas se guardan en `questions/` local o S3, no en el DOM. El asistente puede crear, editar/eliminar una pregunta propia pendiente y votar. Organizador/panelista puede destacar, responder por escrito, marcar respondida en vivo o descartar. Al descartar, la pregunta desaparece del flujo activo y deja de devolverse a asistentes; moderadores pueden consultarla únicamente al expandir el historial secundario **Ver descartadas**. Se ordenan por votos o fecha y el contador muestra solo pendientes activas.
 
 Solo se retransmite `question-changed`/`question-deleted`; cada cliente vuelve a consultar una proyección que no expone identidades internas ni la lista de votantes. Auditoría registra creación y decisiones de moderación, no el texto.
 
@@ -80,7 +82,7 @@ Bloquear sala impide nuevos canjes, no desconecta asistentes existentes ni revoc
 - Ctrl/Cmd+Shift+C: chat.
 - Ctrl/Cmd+Shift+H: mano o cola.
 - Ctrl/Cmd+Shift+P: participantes.
-- Escape: cerrar panel lateral/Más.
+- Escape: cerrar panel lateral, Más o el popover del dock flotante.
 
 No se ejecutan con foco en `input`, `textarea`, `select`, `contenteditable` o un diálogo. Hay foco visible, nombres accesibles, estados textuales, contraste y controles táctiles. Los diálogos nativos conservan foco modal; el preflight y confirmaciones restauran una salida clara.
 
@@ -88,7 +90,7 @@ No se ejecutan con foco en `input`, `textarea`, `select`, `contenteditable` o un
 
 Document PiP funciona principalmente en Chromium compatible y exige contexto seguro (localhost cuenta). Firefox/Safari y políticas corporativas pueden usar solo el fallback interno. Selección de altavoz requiere `setSinkId`; compartir pantalla y audio dependen del dispositivo/navegador. Notificaciones pueden ser bloqueadas globalmente.
 
-La sala limita mensajes montados a 300, agrupa toasts, debounces recargas de Q&A, carga efectos bajo demanda, revoca Object URLs y elimina listeners/timers en retry o `pagehide`. Los fondos se procesan localmente; no se suben.
+La sala limita mensajes montados a 300 y el historial proyectado del dock a 60, agrupa toasts, aplica debounce a recargas de Q&A y cambios de hablante, carga efectos bajo demanda, revoca Object URLs y elimina listeners/timers en retry o `pagehide`. Un único `AbortController` desmonta los listeners DOM del chat para que una reconexión no duplique teclas, emojis ni adjuntos. Los fondos se procesan localmente; no se suben.
 
 ## QA local
 
