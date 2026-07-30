@@ -67,3 +67,26 @@ Un ORGANIZER solo administra reuniones creadas por él o donde coincide con `tra
 Con R2, cada entidad es un objeto JSON bajo `users/`, `meetings/`, `room-configs/`, `invitations/` o `audit/`. Sin R2, las mismas secciones viven bajo `.local-data/`. Las grabaciones y archivos de chat requieren S3/R2; no se simulan como archivos públicos locales.
 
 Para alto volumen o varias instancias, la evolución recomendada es PostgreSQL para entidades, Redis para rate limits/sesiones y una cola para trabajos de grabación.
+
+## Compatibilidad de datos históricos
+
+Toda lectura de reuniones pasa por `normalizeStoredMeeting` en `meetings.js`, tanto con almacenamiento local como con R2. La normalización es no destructiva: completa en memoria títulos, sala, entrenador, duración, capacidad, tipo, estado, permisos y timestamps ausentes, pero no reescribe el objeto histórico. Una migración persistente futura deberá ser explícita, versionada y respaldada.
+
+Las fechas inválidas se representan como ausencia de fecha y nunca como `Invalid Date`. El calendario agrupa por fecha local para evitar que una reunión cambie de día por conversión UTC; por ejemplo, una reunión local del 30 de julio permanece en el 30 de julio.
+
+## Estado de grabación
+
+El cliente no infiere que una sala está grabando. Consulta `/api/recording/status` al conectar y reconectar, y solo muestra el indicador rojo cuando el servidor devuelve `state=RECORDING`, `active=true` y un `egressId`. Estados de inicio, finalización, fallo, desconocidos o errores de red son no activos. El control usa una máquina de estados para impedir dobles clics y presentar errores sin producir un falso positivo visual.
+
+Al iniciar Egress se guarda, si R2 está disponible, un objeto `.metadata.json` junto al archivo con sala, reunión, participantes e identidades de pista observadas. No contiene tokens ni credenciales. Esta metadata mejora el enlace posterior entre voces y participantes sin prometer diarización perfecta.
+
+## Transcripciones
+
+- `transcription-provider.js` define la interfaz de proveedor y las implementaciones HTTP y mock.
+- `transcriptions.js` gestiona estados, persistencia, revisión optimista, identidad de participantes, retención y exportaciones.
+- `app.js` aplica autenticación, roles, propiedad de la reunión, CSRF y rate limit antes de delegar al proveedor.
+- `transcription.html` y `transcription.js` ofrecen consulta, búsqueda, edición, regeneración, cancelación, eliminación y exportación.
+
+Estados expuestos por la experiencia: `NOT_AVAILABLE`, `READY`, `QUEUED`, `PROCESSING_AUDIO`, `IDENTIFYING_PARTICIPANTS`, `GENERATING_TRANSCRIPT`, `COMPLETED`, `COMPLETED_WITH_WARNINGS`, `FAILED` y `CANCELLED`; desde `QUEUED` se persiste el trabajo real. Las respuestas públicas nunca incluyen `providerJobId` ni claves del proveedor. ADMIN y el ORGANIZER autorizado administran; el PANELIST asignado como `trainerId` solo puede consultar y exportar cuando la reunión lo permite; VIEWER no tiene acceso.
+
+El proveedor HTTP recibe una URL firmada de corta duración creada por el servidor. El modo `mock` solo produce contenido si la prueba inyecta un fixture explícito y está prohibido en Producción. La guía operativa completa está en [TRANSCRIPTION.md](TRANSCRIPTION.md).

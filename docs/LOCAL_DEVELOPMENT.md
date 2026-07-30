@@ -63,3 +63,23 @@ Las pruebas usan una carpeta temporal mediante `LOCAL_DATA_DIR`, puerto efímero
 ## Limpieza
 
 Detén Node con `Ctrl+C`. Si necesitas borrar datos locales de prueba, verifica primero la ruta absoluta de la subcarpeta concreta bajo `.local-data/`; nunca elimines la raíz del repositorio ni uses un destino construido con variables no resueltas.
+
+## Transcripción local
+
+La transcripción está desactivada de forma predeterminada. Para pruebas automatizadas se inyecta un proveedor mock y un fixture explícito; el mock no inventa conversaciones. Para una integración local real usa `TRANSCRIPTION_PROVIDER=http`, una URL HTTPS (o localhost en desarrollo) y una clave de prueba:
+
+```dotenv
+TRANSCRIPTION_ENABLED=true
+TRANSCRIPTION_PROVIDER=http
+TRANSCRIPTION_LANGUAGE=es
+TRANSCRIPTION_MAX_DURATION_MINUTES=240
+TRANSCRIPTION_RETENTION_DAYS=90
+TRANSCRIPTION_API_URL=https://proveedor-de-prueba.example/v1/transcriptions
+TRANSCRIPTION_API_KEY=valor-local-no-versionado
+```
+
+No copies credenciales reales a capturas, logs, issues o fixtures. Consulta [TRANSCRIPTION.md](TRANSCRIPTION.md) para el contrato del proveedor, permisos, privacidad y limitaciones.
+
+## Comprobación visual local
+
+Además de las pruebas automatizadas, revisa login, calendario, sala previa, grabaciones y transcripción en 360×640, 375×667, 390×844, 412×915, 768×1024, 1024×768, 1366×768 y 1920×1080. En cada tamaño comprueba foco visible, ausencia de scroll horizontal, teclado móvil, diálogos, estados vacíos y que el logo oficial conserve proporción.

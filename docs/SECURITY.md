@@ -48,3 +48,15 @@ Express emite `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `P
 ## Reporte
 
 No abras un issue público con credenciales, tokens o datos de participantes. Entrega el reporte por el canal privado definido por R.A. Training.
+
+## Grabaciones y transcripciones
+
+- El indicador de grabación depende del estado Egress confirmado por servidor; fallos, estados desconocidos y desconexiones no se muestran como grabación activa.
+- La metadata de grabación admite identidades y pistas, pero excluye secretos y se filtra antes de persistirla.
+- Las claves del proveedor de transcripción permanecen exclusivamente en servidor. Ninguna respuesta pública incluye la clave ni el identificador privado del trabajo.
+- Crear, regenerar, cancelar, editar y eliminar exige CSRF, rol y propiedad de reunión. La consulta de PANELIST es optativa por reunión; VIEWER queda denegado.
+- El texto se sanitiza al guardar y al renderizar. La edición usa revisión optimista para evitar sobreescrituras silenciosas.
+- Las URL de audio enviadas al proveedor son firmadas y temporales. La transcripción hereda la sensibilidad de la grabación y no debe copiarse a canales no autorizados.
+- `retentionUntil` registra la fecha objetivo de retención. La eliminación automática del objeto y del trabajo remoto requiere una tarea operativa programada; hasta implementarla, el borrado manual autorizado y auditable es obligatorio.
+
+La diarización depende de la fuente. Una grabación compuesta puede mezclar voces; si la metadata no permite identificar una pista, la interfaz muestra “Participante sin identificar N” en vez de atribuirla por conjetura. Para mayor precisión, conviene grabar pistas o participantes por separado y correlacionar sus identidades LiveKit.

@@ -33,6 +33,12 @@ No ejecutar sin aprobación humana.
 - [ ] Compartir pantalla y evento `ended`.
 - [ ] Salir no finaliza; **Finalizar para todos** sí desconecta y completa.
 - [ ] Grabación: consentimiento, inicio, aviso, stop, listado y enlace firmado.
+- [ ] El indicador de grabación permanece apagado ante error, estado desconocido, reconexión y Egress finalizado.
+- [ ] Reunión histórica incompleta carga con valores seguros sin reescribir el objeto almacenado.
+- [ ] Calendario conserva la fecha local (incluido un caso del 30 de julio) y distingue el mes adyacente.
+- [ ] Transcripción: crear, procesar, completar, fallar, reintentar, cancelar, editar con conflicto, eliminar y exportar TXT/JSON/VTT/SRT.
+- [ ] PANELIST respeta el permiso de consulta; VIEWER recibe 403; ninguna respuesta o log expone claves ni `providerJobId`.
+- [ ] Probar búsqueda, filtro de participante, timestamps, confianza, nombres desconocidos y cambios sin guardar.
 - [ ] PiP de documento, fallback de video y mensaje sin soporte.
 - [ ] Sonidos, volumen, preferencias y notificaciones con pestaña oculta.
 - [ ] Breakpoints: 360×640, 375×667, 390×844, 412×915, 768×1024, 1024×768, 1366×768, 1920×1080.

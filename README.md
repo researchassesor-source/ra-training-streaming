@@ -1,6 +1,6 @@
 # R.A. Training Streaming
 
-Plataforma web para webinars, clases y sesiones en vivo de Research Assessor & Training. Combina un panel organizador, calendario, administración de credenciales, invitaciones seguras y salas LiveKit con chat, preguntas, mano levantada, grabación y una ventana complementaria Picture-in-Picture.
+Plataforma web para webinars, clases y sesiones en vivo de Research Assessor & Training. Combina un panel organizador, calendario, administración de credenciales, invitaciones seguras y salas LiveKit con chat, preguntas, mano levantada, grabación, transcripciones revisables y una ventana complementaria Picture-in-Picture.
 
 ## Arquitectura
 
@@ -8,11 +8,12 @@ Plataforma web para webinars, clases y sesiones en vivo de Research Assessor & T
 - **LiveKit:** señalización WebRTC, audio, video, pantalla, permisos de participantes y Egress.
 - **Cloudflare R2 / S3 compatible:** usuarios, reuniones, invitaciones, auditoría, archivos de chat y grabaciones.
 - **Persistencia local:** JSON atómico bajo `.local-data/` cuando S3 no está configurado.
+- **Transcripción desacoplada:** interfaz `TranscriptionProvider`, proveedor mock seguro para pruebas y adaptador HTTP configurable.
 - **Frontend vanilla:** HTML, CSS y JavaScript sin framework; vistas específicas para administración, escritorio, tablet y móvil.
 
 Los secretos de invitación se guardan como SHA-256. Al abrir `/i/<token>`, el servidor valida expiración, revocación y usos, crea una cookie HttpOnly de sala y redirige a una URL sin token. El navegador nunca decide su rol, sala ni identidad LiveKit.
 
-Consulta [Arquitectura](docs/ARCHITECTURE.md) y [Seguridad](docs/SECURITY.md) para el diseño completo.
+Consulta [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md) y [Seguridad](docs/SECURITY.md) para el diseño completo.
 
 ## Requisitos
 
@@ -47,12 +48,19 @@ Abre `http://localhost:3000`. No reutilices credenciales productivas en `.env` l
 | `LOGIN_RATE_LIMIT_WINDOW`, `LOGIN_RATE_LIMIT_MAX` | Ventana en segundos y máximo de intentos. |
 | `CHAT_RATE_LIMIT_MAX` | Mensajes/eventos por minuto y sesión de sala. |
 | `MEETING_RATE_LIMIT_MAX` | Creaciones de reunión por hora e IP. |
+| `TRANSCRIPTION_RATE_LIMIT_MAX` | Creaciones/regeneraciones de transcripción por hora y usuario. |
 | `MAX_JSON_PAYLOAD` | Límite de cuerpos JSON. |
 | `MAX_CHAT_MESSAGE_LENGTH` | Longitud máxima de mensaje. |
 | `MAX_CHAT_FILE_SIZE` | Tamaño máximo de archivo en bytes. |
 | `ALLOWED_CHAT_MIME_TYPES` | MIME permitidos, separados por coma. |
 | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_WS_URL` | Conexión LiveKit. |
 | `RECORDING_S3_*` | Credenciales, bucket, región y endpoint de R2/S3/Egress. |
+| `TRANSCRIPTION_ENABLED` | Habilita explícitamente la integración; `false` por defecto. |
+| `TRANSCRIPTION_PROVIDER` | `mock` en pruebas o `http` para un adaptador externo. |
+| `TRANSCRIPTION_LANGUAGE` | Idioma esperado predeterminado. |
+| `TRANSCRIPTION_MAX_DURATION_MINUTES` | Duración máxima aceptada por trabajo. |
+| `TRANSCRIPTION_RETENTION_DAYS` | Retención predeterminada del texto. |
+| `TRANSCRIPTION_API_URL`, `TRANSCRIPTION_API_KEY` | Endpoint y secreto del proveedor HTTP; nunca llegan al cliente. |
 | `LOCAL_DATA_DIR` | Sobrescribe la carpeta local; útil para pruebas aisladas. |
 
 Los valores seguros de ejemplo están en [.env.example](.env.example). No configures todavía estas variables en Render sin completar el checklist de release.
@@ -72,7 +80,7 @@ node --check server\index.js
 git diff --check
 ```
 
-`npm test` usa `node:test`, un servidor HTTP efímero, almacenamiento temporal y servicios LiveKit simulados. No toca Producción.
+`npm test` usa `node:test`, servidores HTTP efímeros, almacenamiento temporal y servicios LiveKit/transcripción simulados. Cubre compatibilidad legada, grabación, permisos, exportaciones y sanitización sin tocar Producción.
 
 ## Flujo Git
 
@@ -96,6 +104,8 @@ git diff --check
 - La persistencia JSON/S3 es apropiada para el volumen actual, no sustituye transacciones de base de datos en alta concurrencia.
 - Document Picture-in-Picture depende del navegador; video PiP es el fallback y no ofrece los mismos controles.
 - Cámara, micrófono, pantalla, reconexión real y Egress deben validarse en un Preview aislado con LiveKit de prueba.
+- La grabación actual usa `RoomComposite`: el audio resultante está mezclado. La identificación exacta por participante requiere Participant/Track Egress o diarización del proveedor y siempre admite corrección manual.
+- El proveedor `mock` no inventa texto: solo completa trabajos con fixtures explícitos y está prohibido en Producción.
 - La integración de Google Calendar queda fuera de esta entrega; el modelo y filtros ya permiten añadir un adaptador.
 
 Antes de publicar, sigue [Checklist de release](docs/RELEASE_CHECKLIST.md).
