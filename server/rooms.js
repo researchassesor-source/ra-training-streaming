@@ -39,6 +39,7 @@ async function createRoom(room, { meetingId = null, status = 'ACTIVE' } = {}) {
     locked: existing?.locked === true,
     lockedAt: existing?.lockedAt || null,
     lockedBy: existing?.lockedBy || null,
+    speakerGrants: existing?.speakerGrants && typeof existing.speakerGrants === 'object' ? existing.speakerGrants : {},
   });
 }
 
@@ -101,6 +102,22 @@ async function withAdmissionLock(room, operation) {
   }
 }
 
+async function setSpeakerGrant(room, identity, granted, actor = '') {
+  return withAdmissionLock(room, async () => {
+    const existing = await getRoom(room);
+    if (!existing || existing.status !== 'ACTIVE' || existing.revokedAt) throw new Error('La sala no está activa');
+    const grants = { ...(existing.speakerGrants || {}) };
+    if (granted) grants[identity] = { grantedAt: new Date().toISOString(), grantedBy: String(actor || '').slice(0, 100) };
+    else delete grants[identity];
+    return persist(room, { ...existing, speakerGrants: grants });
+  });
+}
+
+async function hasSpeakerGrant(room, identity) {
+  const existing = await getRoom(room);
+  return Boolean(existing?.speakerGrants?.[identity]);
+}
+
 async function revokeRoom(room) {
   const existing = await getRoom(room);
   return persist(room, {
@@ -110,4 +127,4 @@ async function revokeRoom(room) {
   });
 }
 
-module.exports = { checkAccess, createRoom, getRoom, revokeRoom, setRoomLock, withAdmissionLock };
+module.exports = { checkAccess, createRoom, getRoom, hasSpeakerGrant, revokeRoom, setRoomLock, setSpeakerGrant, withAdmissionLock };

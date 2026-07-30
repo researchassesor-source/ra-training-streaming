@@ -116,6 +116,7 @@ function createApp(overrides = {}) {
   const egressClient = services.egressClient;
   const transcriptionProvider = services.transcriptionProvider;
   const livekitProbe = overrides.livekitProbe || createLiveKitStatusProbe({ roomService, wsUrl: LIVEKIT_WS_URL });
+  const pendingMediaRequests = new Map();
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -401,8 +402,8 @@ function createApp(overrides = {}) {
     }
     await roomRegistry.createRoom(req.meeting.room, { meetingId: req.meeting.id });
     const created = createRoomSession({ room: req.meeting.room, meetingId: req.meeting.id, role: req.auth.role, username: req.auth.u, displayName: req.auth.u });
-    res.setHeader('Set-Cookie', roomCookie(created.token));
-    res.json({ redirect: '/presenter.html' });
+    res.setHeader('Set-Cookie', [roomCookie(created.token), roomCookie(created.token, created.session.sid)]);
+    res.json({ redirect: `/presenter.html?roomSession=${encodeURIComponent(created.session.sid)}` });
   }));
 
   app.get('/api/livekit/status', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (_req, res) => {
@@ -429,9 +430,10 @@ function createApp(overrides = {}) {
       role: invitation.role,
       invitationId: invitation.id,
     });
-    res.setHeader('Set-Cookie', roomCookie(created.token));
+    res.setHeader('Set-Cookie', [roomCookie(created.token), roomCookie(created.token, created.session.sid)]);
     await safeAudit({ actor: created.session.identity, action: 'INVITATION_REDEEMED', target: invitation.id, room: meeting.room, metadata: { role: invitation.role }, ...auditContext(req) });
-    res.redirect(303, invitation.role === 'PANELIST' ? '/presenter.html' : '/viewer.html');
+    const destination = invitation.role === 'PANELIST' ? '/presenter.html' : '/viewer.html';
+    res.redirect(303, `${destination}?roomSession=${encodeURIComponent(created.session.sid)}`);
   }));
 
   app.get('/api/room-session', requireRoomSession, asyncHandler(async (req, res) => {
@@ -473,13 +475,14 @@ function createApp(overrides = {}) {
   app.patch('/api/room-session/profile', requireRoomSession, requireRoomCsrf, asyncHandler(async (req, res) => {
     const displayName = sanitizeText(req.body?.displayName, { field: 'displayName', min: 2, max: 80, required: true });
     const updated = updateDisplayName(req.roomSession, displayName);
-    res.setHeader('Set-Cookie', roomCookie(updated.token));
+    res.setHeader('Set-Cookie', roomCookie(updated.token, req.roomSessionSelector));
     res.json({ displayName, csrfToken: updated.session.csrf });
   }));
 
   app.post('/api/room-session/leave', requireRoomSession, requireRoomCsrf, asyncHandler(async (req, res) => {
+    await roomRegistry.setSpeakerGrant(req.roomSession.room, req.roomSession.identity, false).catch(() => {});
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_LEFT', target: req.roomSession.meetingId, room: req.roomSession.room, ...auditContext(req) });
-    res.setHeader('Set-Cookie', clearRoomCookie());
+    res.setHeader('Set-Cookie', [clearRoomCookie(), clearRoomCookie(req.roomSessionSelector)]);
     res.json({ left: true });
   }));
 
@@ -491,7 +494,7 @@ function createApp(overrides = {}) {
     const access = await roomRegistry.checkAccess(meeting.room, { allowLocked: true });
     if (!access.allowed) throw new AppError(403, 'Tu acceso a la sala fue retirado', access.reason);
     if (req.roomSession.role === 'VIEWER' && meeting.status !== 'LIVE') throw new AppError(409, 'La reunión todavía no ha comenzado', 'MEETING_NOT_LIVE');
-    const canPublish = ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role);
+    const canPublish = ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role) || await roomRegistry.hasSpeakerGrant(meeting.room, req.roomSession.identity);
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: req.roomSession.identity,
       name: req.roomSession.displayName,
@@ -533,6 +536,15 @@ function createApp(overrides = {}) {
     const caller = participants.find((participant) => participant.identity === req.roomSession.identity);
     if (!caller) throw new AppError(403, 'Debes estar conectado a la sala para realizar esta acción', 'NOT_IN_ROOM');
     return participants;
+  }
+
+  function participantCanPublish(participant) {
+    const permission = participant?.permission || participant?.permissions || {};
+    return permission.canPublish === true;
+  }
+
+  function publishPermission(canPublish) {
+    return { permission: { canPublish, canSubscribe: true, canPublishData: false } };
   }
 
   app.post('/api/room/connection', requireRoomSession, requireRoomCsrf, roomMeeting, asyncHandler(async (req, res) => {
@@ -670,12 +682,12 @@ function createApp(overrides = {}) {
     const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
     const participants = await assertCallerPresent(req);
     if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
-    await roomService.updateParticipant(req.roomSession.room, targetIdentity, {
-      permission: { canPublish: true, canSubscribe: true, canPublishData: false },
-    });
+    await roomService.updateParticipant(req.roomSession.room, targetIdentity, publishPermission(true));
+    await roomRegistry.setSpeakerGrant(req.roomSession.room, targetIdentity, true, req.roomSession.identity);
     await relayRoomData(req, { kind: 'hand-approved', targetIdentity, sentAt: new Date().toISOString() }, [targetIdentity]);
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_PROMOTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
-    res.json({ promoted: true });
+    await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKING_RIGHT_GRANTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
+    res.json({ promoted: true, targetIdentity, canPublish: true });
   }));
 
   app.post('/api/participants/demote', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
@@ -683,18 +695,17 @@ function createApp(overrides = {}) {
     const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
     const participants = await assertCallerPresent(req);
     if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
-    await roomService.updateParticipant(req.roomSession.room, targetIdentity, {
-      permission: { canPublish: false, canSubscribe: true, canPublishData: false },
-    });
+    await roomService.updateParticipant(req.roomSession.room, targetIdentity, publishPermission(false));
+    await roomRegistry.setSpeakerGrant(req.roomSession.room, targetIdentity, false, req.roomSession.identity);
     await relayRoomData(req, { kind: 'word-revoked', targetIdentity, sentAt: new Date().toISOString() }, [targetIdentity]);
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_DEMOTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
-    res.json({ demoted: true });
+    await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKING_RIGHT_REVOKED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
+    res.json({ demoted: true, targetIdentity, canPublish: false });
   }));
 
   app.post('/api/participants/self-demote', requireRoomSession, requireRoomCsrf, roomMeeting, asyncHandler(async (req, res) => {
-    await roomService.updateParticipant(req.roomSession.room, req.roomSession.identity, {
-      permission: { canPublish: false, canSubscribe: true, canPublishData: false },
-    });
+    await roomService.updateParticipant(req.roomSession.room, req.roomSession.identity, publishPermission(false));
+    await roomRegistry.setSpeakerGrant(req.roomSession.room, req.roomSession.identity, false, req.roomSession.identity);
     res.json({ demoted: true });
   }));
 
@@ -704,6 +715,7 @@ function createApp(overrides = {}) {
     const participants = await assertCallerPresent(req);
     if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
     await roomService.removeParticipant(req.roomSession.room, targetIdentity);
+    await roomRegistry.setSpeakerGrant(req.roomSession.room, targetIdentity, false, req.roomSession.identity).catch(() => {});
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_REMOVED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     res.json({ removed: true });
   }));
@@ -718,6 +730,7 @@ function createApp(overrides = {}) {
     try { metadata = JSON.parse(target.metadata || '{}'); } catch (_error) { metadata = {}; }
     if (metadata.invitationId) await invitations.revokeInvitation(metadata.invitationId, req.roomSession.room);
     await roomService.removeParticipant(req.roomSession.room, targetIdentity);
+    await roomRegistry.setSpeakerGrant(req.roomSession.room, targetIdentity, false, req.roomSession.identity).catch(() => {});
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_BLOCKED', target: targetIdentity, room: req.roomSession.room, metadata: { invitationRevoked: Boolean(metadata.invitationId) }, ...auditContext(req) });
     res.json({ blocked: true, invitationRevoked: Boolean(metadata.invitationId) });
   }));
@@ -728,9 +741,67 @@ function createApp(overrides = {}) {
     const action = String(req.body?.action || 'request-microphone');
     if (!['request-microphone', 'request-camera-off'].includes(action)) throw new AppError(400, 'Solicitud multimedia no válida', 'VALIDATION_ERROR');
     const participants = await assertCallerPresent(req);
-    if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
-    await relayRoomData(req, { kind: action, from: req.roomSession.displayName, sentAt: new Date().toISOString() }, [targetIdentity]);
-    res.json({ sent: true });
+    const target = participants.find((participant) => participant.identity === targetIdentity);
+    if (!target) throw new AppError(404, 'El participante ya no está conectado', 'PARTICIPANT_NOT_CONNECTED');
+    const now = Date.now();
+    for (const [id, pending] of pendingMediaRequests) if (pending.expiresAt <= now) pendingMediaRequests.delete(id);
+    const duplicate = [...pendingMediaRequests.values()].find((pending) => pending.room === req.roomSession.room && pending.targetIdentity === targetIdentity && pending.action === action);
+    if (duplicate) throw new AppError(409, 'Ya existe una solicitud pendiente para este participante', 'MEDIA_REQUEST_PENDING');
+    const requestId = crypto.randomUUID();
+    pendingMediaRequests.set(requestId, {
+      requestId,
+      room: req.roomSession.room,
+      targetIdentity,
+      requesterIdentity: req.roomSession.identity,
+      requesterName: req.roomSession.displayName,
+      action,
+      accepted: false,
+      permissionGranted: false,
+      expiresAt: now + 60_000,
+    });
+    await relayRoomData(req, { kind: action, requestId, from: req.roomSession.displayName, fromIdentity: req.roomSession.identity, sentAt: new Date(now).toISOString() }, [targetIdentity]);
+    if (action === 'request-microphone') await safeAudit({ actor: req.roomSession.identity, action: 'MICROPHONE_REQUESTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
+    res.json({ sent: true, requestId, expiresInMs: 60_000 });
+  }));
+
+  app.post('/api/participants/media-response', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    const requestId = sanitizeText(req.body?.requestId, { field: 'requestId', min: 36, max: 36, required: true });
+    const status = String(req.body?.status || '').toLowerCase();
+    if (!['accepted', 'activated', 'rejected', 'failed'].includes(status)) throw new AppError(400, 'Respuesta multimedia no válida', 'VALIDATION_ERROR');
+    const pending = pendingMediaRequests.get(requestId);
+    if (!pending || pending.room !== req.roomSession.room || pending.expiresAt <= Date.now()) {
+      pendingMediaRequests.delete(requestId);
+      throw new AppError(404, 'La solicitud ya no está disponible', 'MEDIA_REQUEST_NOT_FOUND');
+    }
+    if (pending.targetIdentity !== req.roomSession.identity) throw new AppError(403, 'No puedes responder esta solicitud', 'ROOM_FORBIDDEN');
+    const participants = await assertCallerPresent(req);
+    const target = participants.find((participant) => participant.identity === req.roomSession.identity);
+    if (!participants.some((participant) => participant.identity === pending.requesterIdentity)) {
+      pendingMediaRequests.delete(requestId);
+      throw new AppError(404, 'El organizador ya no está conectado', 'PARTICIPANT_NOT_CONNECTED');
+    }
+    if (status === 'accepted') {
+      if (pending.accepted) throw new AppError(409, 'La solicitud ya fue aceptada', 'MEDIA_REQUEST_ALREADY_ACCEPTED');
+      if (pending.action === 'request-microphone' && !participantCanPublish(target)) {
+        await roomService.updateParticipant(req.roomSession.room, req.roomSession.identity, publishPermission(true));
+        await roomRegistry.setSpeakerGrant(req.roomSession.room, req.roomSession.identity, true, pending.requesterIdentity);
+        pending.permissionGranted = true;
+      }
+      pending.accepted = true;
+      pending.expiresAt = Date.now() + 30_000;
+      await relayRoomData(req, { kind: 'media-response', requestId, action: pending.action, status, targetIdentity: req.roomSession.identity, displayName: req.roomSession.displayName, sentAt: new Date().toISOString() }, [pending.requesterIdentity]);
+      return res.json({ accepted: true, permissionGranted: pending.permissionGranted, canPublish: true });
+    }
+    if (status === 'activated' && !pending.accepted) throw new AppError(409, 'Primero debes aceptar la solicitud', 'MEDIA_REQUEST_NOT_ACCEPTED');
+    if (status === 'failed' && pending.permissionGranted) {
+      await roomService.updateParticipant(req.roomSession.room, req.roomSession.identity, publishPermission(false));
+      await roomRegistry.setSpeakerGrant(req.roomSession.room, req.roomSession.identity, false, pending.requesterIdentity);
+    }
+    pendingMediaRequests.delete(requestId);
+    const auditAction = status === 'rejected' ? 'MICROPHONE_REQUEST_REJECTED' : status === 'failed' ? 'MICROPHONE_REQUEST_FAILED' : 'MICROPHONE_REQUEST_ACCEPTED';
+    await safeAudit({ actor: req.roomSession.identity, action: auditAction, target: pending.requesterIdentity, room: req.roomSession.room, metadata: { status }, ...auditContext(req) });
+    await relayRoomData(req, { kind: 'media-response', requestId, action: pending.action, status, targetIdentity: req.roomSession.identity, displayName: req.roomSession.displayName, sentAt: new Date().toISOString() }, [pending.requesterIdentity]);
+    res.json({ acknowledged: true, status });
   }));
 
   app.post('/api/participants/mute', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
@@ -787,6 +858,7 @@ function createApp(overrides = {}) {
       if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
       message = { kind, targetIdentity, sentAt: new Date().toISOString() };
       destinations = [targetIdentity];
+      await safeAudit({ actor: req.roomSession.identity, action: 'HAND_REJECTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     } else if (kind === 'reaction') {
       if (!req.meeting.allowReactions) throw new AppError(409, 'Las reacciones están deshabilitadas', 'REACTIONS_DISABLED');
       const reaction = sanitizeText(req.body?.reaction, { field: 'reaction', min: 1, max: 8, required: true });
@@ -908,7 +980,7 @@ function createApp(overrides = {}) {
     await roomService.deleteRoom(req.roomSession.room).catch((error) => {
       if (!/not found/i.test(error.message || '')) throw error;
     });
-    res.setHeader('Set-Cookie', clearRoomCookie());
+    res.setHeader('Set-Cookie', [clearRoomCookie(), clearRoomCookie(req.roomSessionSelector)]);
     await safeAudit({ actor: req.roomSession.identity, action: 'ROOM_ENDED', target: updated.id, room: updated.room, ...auditContext(req) });
     res.json({ ended: true });
   }));
