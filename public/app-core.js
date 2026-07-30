@@ -60,6 +60,43 @@
     return `${year}-${month}-${day}`;
   }
 
+  function calendarRange(anchor, view = 'month') {
+    const date = validDate(anchor) || new Date();
+    let start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    let count = 1;
+    if (view === 'month') {
+      start = new Date(date.getFullYear(), date.getMonth(), 1);
+      start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      count = 42;
+    } else if (view === 'week') {
+      start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      count = 7;
+    }
+    return Array.from({ length: count }, (_, index) => {
+      const day = new Date(start);
+      day.setDate(start.getDate() + index);
+      return day;
+    });
+  }
+
+  function meetingsForLocalDay(items, day) {
+    const key = localDateKey(day);
+    return (Array.isArray(items) ? items : [])
+      .filter((meeting) => localDateKey(meeting?.scheduledAt) === key)
+      .sort((a, b) => String(a.scheduledAt || '').localeCompare(String(b.scheduledAt || '')));
+  }
+
+  function upcomingMeetings(items, now = new Date(), limit = 5) {
+    const threshold = (validDate(now) || new Date()).getTime();
+    return (Array.isArray(items) ? items : [])
+      .filter((meeting) => {
+        const scheduled = validDate(meeting?.scheduledAt);
+        return scheduled && scheduled.getTime() >= threshold && !['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status);
+      })
+      .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt))
+      .slice(0, Math.max(0, limit));
+  }
+
   function normalizeMeeting(raw = {}) {
     const source = raw && typeof raw === 'object' ? raw : {};
     const durationMinutes = Number.isInteger(Number(source.durationMinutes)) && Number(source.durationMinutes) > 0 ? Number(source.durationMinutes) : 60;
@@ -245,12 +282,15 @@
     RecordingStateMachine,
     createFloatingModel,
     createUnreadCounter,
+    calendarRange,
     localDateKey,
+    meetingsForLocalDay,
     normalizeMeeting,
     roleLabel,
     roomConnectionErrorMessage,
     safeHttpUrl,
     shouldSubmitChat,
+    upcomingMeetings,
     validDate,
   };
 }));

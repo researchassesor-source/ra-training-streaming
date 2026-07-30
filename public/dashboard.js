@@ -12,7 +12,7 @@ const state = {
 };
 
 const STATUS_LABELS = {
-  DRAFT: 'Borrador', SCHEDULED: 'Programada', LIVE: 'En vivo', COMPLETED: 'Completada',
+  DRAFT: 'Borrador', SCHEDULED: 'Programada', LIVE: 'En vivo', COMPLETED: 'Finalizada',
   CANCELLED: 'Cancelada', ARCHIVED: 'Archivada',
 };
 const TYPE_LABELS = { WEBINAR: 'Webinar', SESSION: 'Sesión', CLASS: 'Clase' };
@@ -32,6 +32,8 @@ const AUDIT_LABELS = {
   TRANSCRIPTION_COMPLETED: 'Transcripción completada', TRANSCRIPTION_FAILED: 'Transcripción fallida',
   TRANSCRIPTION_EDITED: 'Transcripción editada', TRANSCRIPTION_RETRIED: 'Transcripción regenerada',
   TRANSCRIPTION_CANCELLED: 'Transcripción cancelada', TRANSCRIPTION_DELETED: 'Transcripción eliminada',
+  ROOM_OPEN_ATTEMPT: 'Intento de abrir reunión', ROOM_CONNECTION_FAILED: 'Error de conexión a la reunión',
+  ROOM_RETRY: 'Reintento de conexión', ROOM_CONNECTED: 'Reunión iniciada', ROOM_ENDED: 'Reunión finalizada',
 };
 const fmtDate = new Intl.DateTimeFormat('es-EC', { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -42,7 +44,7 @@ function formatDate(value, fallback = 'Fecha por definir') {
 
 function emptyState(title, detail = '') {
   const empty = document.createElement('div'); empty.className = 'empty-state branded-empty';
-  const image = document.createElement('img'); image.src = 'assets/streaming-app-logo-192.png'; image.alt = 'Icono de R.A. Training Streaming';
+  const image = document.createElement('img'); image.src = 'assets/icon-192.png'; image.alt = 'Icono de R.A. Training Streaming';
   empty.append(image, textElement('strong', title));
   if (detail) empty.appendChild(textElement('span', detail, 'muted'));
   return empty;
@@ -65,11 +67,15 @@ function askConfirmation({ title, message, confirmLabel = 'Confirmar', danger = 
 function requestPassword(username) {
   const dialog = document.getElementById('passwordDialog');
   dialog.querySelector('[data-password-user]').textContent = username;
-  const input = dialog.querySelector('input'); input.value = ''; input.type = 'password';
+  const input = dialog.querySelector('[data-password-new]'); const confirmation = dialog.querySelector('[data-password-confirm]');
+  input.value = ''; confirmation.value = ''; input.type = 'password'; confirmation.type = 'password';
   RATPasswordToggle.sync(dialog);
   const error = dialog.querySelector('.form-error'); error.textContent = '';
   return new Promise((resolve) => {
-    const close = () => { dialog.removeEventListener('close', close); resolve(dialog.returnValue === 'confirm' ? input.value : ''); };
+    const form = dialog.querySelector('form');
+    const validate = (event) => { if (event.submitter?.value === 'confirm' && input.value !== confirmation.value) { event.preventDefault(); error.textContent = 'Las contraseñas no coinciden.'; confirmation.focus(); } };
+    const close = () => { dialog.removeEventListener('close', close); form.removeEventListener('submit', validate); resolve(dialog.returnValue === 'confirm' ? input.value : ''); };
+    form.addEventListener('submit', validate);
     dialog.addEventListener('close', close);
     dialog.showModal(); input.focus();
   });
@@ -116,7 +122,11 @@ function showSection(name) {
     else button.removeAttribute('aria-current');
   });
   document.getElementById('dashboardSidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('visible');
   document.getElementById('menuToggle').setAttribute('aria-expanded', 'false');
+  const titles = { summary: 'Panel organizador', calendar: 'Calendario', meetings: 'Reuniones', recordings: 'Grabaciones', users: 'Usuarios', audit: 'Auditoría', settings: 'Configuración' };
+  document.title = `${titles[name] || 'Panel organizador'} | R.A. Training Streaming`;
+  history.replaceState(null, '', `#${name}`);
   if (name === 'recordings') loadRecordings();
   if (name === 'users' && state.user.role === 'ADMIN') loadUsers();
   if (name === 'audit' && state.user.role === 'ADMIN') loadAudit();
@@ -379,58 +389,47 @@ function filteredCalendarMeetings() {
   );
 }
 
-function startOfWeek(date) {
-  const copy = new Date(date);
-  const day = (copy.getDay() + 6) % 7;
-  copy.setDate(copy.getDate() - day);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
-}
-
 function renderCalendar() {
   const grid = document.getElementById('calendarGrid');
   if (!grid) return;
   grid.replaceChildren();
   grid.className = `calendar-grid view-${state.calendarView}`;
   const date = new Date(state.calendarDate);
-  let start;
-  let days;
+  const calendarDays = RATCore.calendarRange(date, state.calendarView);
   if (state.calendarView === 'month') {
-    start = new Date(date.getFullYear(), date.getMonth(), 1);
-    const offset = (start.getDay() + 6) % 7;
-    start.setDate(start.getDate() - offset);
-    days = 42;
-    document.getElementById('calendarLabel').textContent = new Intl.DateTimeFormat('es-EC', { month: 'long', year: 'numeric' }).format(date);
+    const label = new Intl.DateTimeFormat('es-EC', { month: 'long', year: 'numeric' }).format(date);
+    document.getElementById('calendarLabel').textContent = label.charAt(0).toUpperCase() + label.slice(1);
   } else if (state.calendarView === 'week') {
-    start = startOfWeek(date);
-    days = 7;
+    const start = calendarDays[0];
     document.getElementById('calendarLabel').textContent = `${start.toLocaleDateString('es-EC')} – ${new Date(start.getTime() + 6 * 86_400_000).toLocaleDateString('es-EC')}`;
   } else {
-    start = new Date(date); start.setHours(0, 0, 0, 0); days = 1;
-    document.getElementById('calendarLabel').textContent = new Intl.DateTimeFormat('es-EC', { dateStyle: 'full' }).format(date);
+    const label = new Intl.DateTimeFormat('es-EC', { dateStyle: 'full' }).format(date);
+    document.getElementById('calendarLabel').textContent = label.charAt(0).toUpperCase() + label.slice(1);
   }
   const items = filteredCalendarMeetings();
-  for (let index = 0; index < days; index += 1) {
-    const day = new Date(start); day.setDate(start.getDate() + index);
+  for (const day of calendarDays) {
     const isoDay = RATCore.localDateKey(day);
     const cell = document.createElement('article');
     cell.className = 'calendar-day';
     cell.setAttribute('aria-label', new Intl.DateTimeFormat('es-EC', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(day));
     if (state.calendarView === 'month' && day.getMonth() !== date.getMonth()) cell.classList.add('adjacent-month');
     if (isoDay === RATCore.localDateKey(new Date())) { cell.classList.add('today'); cell.setAttribute('aria-current', 'date'); }
-    cell.appendChild(textElement('h3', new Intl.DateTimeFormat('es-EC', { weekday: 'short', day: 'numeric', month: days === 1 ? 'long' : undefined }).format(day)));
-    const dayMeetings = items.filter((meeting) => RATCore.localDateKey(meeting.scheduledAt) === isoDay);
+    cell.appendChild(textElement('h3', new Intl.DateTimeFormat('es-EC', { weekday: 'short', day: 'numeric', month: calendarDays.length === 1 ? 'long' : undefined }).format(day)));
+    const dayMeetings = RATCore.meetingsForLocalDay(items, day);
     if (!dayMeetings.length) cell.appendChild(textElement('span', 'Sin reuniones', 'muted calendar-empty'));
-    for (const meeting of dayMeetings) {
+    const visibleMeetings = state.calendarView === 'month' ? dayMeetings.slice(0, 3) : dayMeetings;
+    for (const meeting of visibleMeetings) {
       const event = document.createElement('button');
       event.type = 'button';
       event.className = `calendar-event status-${meeting.status.toLowerCase()}`;
       const meetingDate = RATCore.validDate(meeting.scheduledAt);
       event.setAttribute('aria-label', `${meeting.title}, ${STATUS_LABELS[meeting.status] || 'Programada'}, ${meetingDate ? meetingDate.toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' }) : 'hora por definir'}`);
-      event.append(textElement('strong', meeting.title), textElement('span', meetingDate ? meetingDate.toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' }) : 'Sin hora'));
+      const time = meetingDate ? meetingDate.toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' }) : 'Sin hora';
+      event.append(textElement('strong', state.calendarView === 'month' ? `${time} — ${meeting.title}` : meeting.title), textElement('span', state.calendarView === 'month' ? STATUS_LABELS[meeting.status] : `${time} · ${meeting.trainerName} · ${STATUS_LABELS[meeting.status]}`));
       event.addEventListener('click', () => openMeetingDialog(meeting));
       cell.appendChild(event);
     }
+    if (state.calendarView === 'month' && dayMeetings.length > visibleMeetings.length) cell.appendChild(textElement('span', `+${dayMeetings.length - visibleMeetings.length} más`, 'calendar-more'));
     grid.appendChild(cell);
   }
 }
@@ -438,11 +437,11 @@ function renderCalendar() {
 function renderUpcoming() {
   const container = document.getElementById('upcomingList');
   container.replaceChildren();
-  const next = state.meetings.filter((meeting) => meeting.scheduledAt && new Date(meeting.scheduledAt) >= new Date() && !['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)).slice(0, 5);
+  const next = RATCore.upcomingMeetings(state.meetings, new Date(), 5);
   if (!next.length) return container.appendChild(textElement('p', 'No hay reuniones próximas.', 'empty-state'));
   for (const meeting of next) {
     const row = document.createElement('button'); row.type = 'button'; row.className = 'compact-list-item';
-    row.append(textElement('strong', meeting.title), textElement('span', `${fmtDate.format(new Date(meeting.scheduledAt))} · ${meeting.trainerName}`));
+    row.append(textElement('strong', meeting.title), textElement('span', `${fmtDate.format(new Date(meeting.scheduledAt))} · ${meeting.trainerName} · ${STATUS_LABELS[meeting.status]}`), textElement('span', 'Ver reunión', 'quick-action'));
     row.addEventListener('click', () => { showSection('meetings'); openMeetingDialog(meeting); });
     container.appendChild(row);
   }
@@ -464,20 +463,21 @@ async function loadSummary() {
   const cards = document.getElementById('summaryCards'); cards.replaceChildren(
     summaryCard('Reuniones de hoy', data.meetingsToday, 'programadas'),
     summaryCard('Reuniones activas', data.activeMeetings, 'en vivo ahora'),
-    summaryCard('Próxima capacitación', data.nextMeeting ? (RATCore.validDate(data.nextMeeting.scheduledAt)?.toLocaleDateString('es-EC') || 'Fecha por definir') : '—', data.nextMeeting?.title || 'Sin próximas reuniones'),
+    summaryCard('Próxima capacitación', data.nextMeeting ? (RATCore.validDate(data.nextMeeting.scheduledAt)?.toLocaleDateString('es-EC') || 'Fecha por definir') : '—', data.nextMeeting?.title || 'No hay reuniones próximas'),
     summaryCard('Credenciales activas', state.user.role === 'ADMIN' ? data.activeCredentials : '—', state.user.role === 'ADMIN' ? 'usuarios habilitados' : 'Visible para administradores'),
-    summaryCard('Errores recientes', data.recentErrors, data.recentErrors === null ? 'Visible para administradores' : 'intentos fallidos registrados')
+    summaryCard('Intentos fallidos de acceso', data.recentErrors, data.recentErrors === null ? 'Visible para administradores' : 'últimas 24 horas')
   );
   const services = document.getElementById('serviceStatus'); services.replaceChildren();
-  for (const [name, value] of [['Almacenamiento', serviceLabel(data.storage)], ['LiveKit', serviceLabel(data.livekit)], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada'], ['Transcripción', data.transcriptionConfigured ? 'Configurada' : 'Deshabilitada']]) {
-    const row = document.createElement('div'); row.append(textElement('span', name), textElement('strong', value)); services.appendChild(row);
+  const livekitLabel = `${data.livekit?.mode === 'local' ? 'Local' : 'Remoto'} — ${data.livekit?.available ? 'disponible' : 'no disponible'}`;
+  for (const [name, value, stateName] of [['Almacenamiento', serviceLabel(data.storage), data.storage === 'local' ? 'warning' : 'available'], ['LiveKit', livekitLabel, data.livekit?.available ? 'available' : 'unavailable'], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada', data.recordingConfigured ? 'available' : 'disabled'], ['Transcripción', data.transcriptionConfigured ? 'Configurada' : 'Deshabilitada', data.transcriptionConfigured ? 'available' : 'disabled']]) {
+    const row = document.createElement('div'); row.className = `service-row service-${stateName}`; row.append(textElement('span', name), textElement('strong', value)); services.appendChild(row);
   }
   const settings = document.getElementById('settingsIntegrations'); settings.replaceChildren();
   const environment = String(data.environment || 'development').toLowerCase();
   const provider = String(data.transcriptionProvider || '').toLowerCase();
   const rows = [
     ['Entorno', ENVIRONMENT_LABELS[environment] || 'Desarrollo'], ['Modo', environment === 'production' ? 'Producción' : 'Local / desarrollo'],
-    ['Almacenamiento', serviceLabel(data.storage)], ['LiveKit', serviceLabel(data.livekit)], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada'],
+    ['Almacenamiento', serviceLabel(data.storage)], ['LiveKit · modo', data.livekit?.mode === 'local' ? 'Local' : 'Remoto'], ['LiveKit · estado', data.livekit?.available ? 'Disponible' : 'No disponible · inicia el servidor local'], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada'],
     ['Transcripción', data.transcriptionConfigured ? `Configurada · ${PROVIDER_LABELS[provider] || 'Proveedor externo'}` : 'Deshabilitada'],
     ['Cookies seguras', data.security?.secureCookies ? 'Activadas' : 'Solo desarrollo local'], ['Salas abiertas de desarrollo', data.security?.openDevRooms ? 'Activadas' : 'Desactivadas'],
     ['Versión', data.version && data.version !== 'local' ? data.version : 'Versión local'], ['Configuración pendiente', data.missingConfiguration?.length ? data.missingConfiguration.join(', ') : 'Ninguna'],
@@ -491,13 +491,10 @@ function userActions(user) {
     wrap.appendChild(textElement('span', 'Gestionado por entorno', 'muted small'));
     return wrap;
   }
-  wrap.append(
-    meetingAction('Editar', () => openUserDialog(user), user),
-    meetingAction('Contraseña', () => resetUserPassword(user), user),
-    meetingAction(user.active ? 'Desactivar' : 'Activar', () => toggleUser(user), user),
-    meetingAction('Revocar sesiones', () => revokeUserSessions(user), user),
-    meetingAction('Eliminar', () => deleteUser(user), user, 'danger compact')
-  );
+  wrap.appendChild(meetingAction('Editar', () => openUserDialog(user), user));
+  const menu = document.createElement('details'); menu.className = 'action-menu'; const summary = document.createElement('summary'); summary.textContent = 'Más acciones';
+  const items = document.createElement('div'); items.className = 'action-menu-items'; items.append(meetingAction('Cambiar contraseña', () => resetUserPassword(user), user), meetingAction(user.active ? 'Desactivar' : 'Activar', () => toggleUser(user), user), meetingAction('Revocar sesiones', () => revokeUserSessions(user), user), meetingAction('Eliminar', () => deleteUser(user), user, 'danger compact'));
+  menu.append(summary, items); wrap.appendChild(menu);
   return wrap;
 }
 
@@ -506,8 +503,10 @@ async function loadUsers() {
   const tbody = document.getElementById('usersTable'); tbody.replaceChildren();
   for (const user of data.users) {
     const row = document.createElement('tr');
-    for (const value of [user.username, ROLE_LABELS[user.role] || 'Usuario', user.active ? 'Activo' : 'Inactivo', user.createdAt ? fmtDate.format(new Date(user.createdAt)) : 'Entorno', user.lastLoginAt ? fmtDate.format(new Date(user.lastLoginAt)) : 'Nunca']) row.appendChild(textElement('td', value));
-    const actions = document.createElement('td'); actions.appendChild(userActions(user)); row.appendChild(actions); tbody.appendChild(row);
+    const values = [user.username, ROLE_LABELS[user.role] || 'Usuario', user.active ? 'Activo' : 'Inactivo', user.createdAt ? fmtDate.format(new Date(user.createdAt)) : 'Entorno', user.lastLoginAt ? fmtDate.format(new Date(user.lastLoginAt)) : 'Nunca'];
+    const labels = ['Usuario', 'Rol', 'Estado', 'Creado', 'Último acceso'];
+    values.forEach((value, index) => { const cell = textElement('td', value); cell.dataset.label = labels[index]; row.appendChild(cell); });
+    const actions = document.createElement('td'); actions.dataset.label = 'Acciones'; actions.appendChild(userActions(user)); row.appendChild(actions); tbody.appendChild(row);
   }
 }
 
@@ -519,8 +518,12 @@ function openUserDialog(user = null) {
   document.getElementById('userRole').value = user?.role || 'ORGANIZER';
   document.getElementById('userActive').checked = user ? user.active : true;
   document.getElementById('userPasswordLabel').hidden = Boolean(user);
+  document.getElementById('userPasswordConfirmLabel').hidden = Boolean(user);
   document.getElementById('userPassword').required = !user;
+  document.getElementById('userPasswordConfirm').required = !user;
   document.getElementById('userPassword').value = '';
+  document.getElementById('userPasswordConfirm').value = '';
+  document.getElementById('userPasswordMatch').textContent = '';
   document.getElementById('userPassword').type = 'password';
   RATPasswordToggle.sync(document.getElementById('userDialog'));
   document.getElementById('userFormError').textContent = '';
@@ -535,6 +538,7 @@ async function saveUser(event) {
     if (original) {
       await api(`/api/auth/users/${encodeURIComponent(original)}`, { method: 'PATCH', body: { role: document.getElementById('userRole').value, active: document.getElementById('userActive').checked } });
     } else {
+      if (document.getElementById('userPassword').value !== document.getElementById('userPasswordConfirm').value) throw new Error('Las contraseñas no coinciden.');
       await api('/api/auth/users', { method: 'POST', body: { username: document.getElementById('userUsername').value.trim(), password: document.getElementById('userPassword').value, role: document.getElementById('userRole').value, active: document.getElementById('userActive').checked } });
     }
     document.getElementById('userDialog').close(); notice('Usuario guardado.'); await loadUsers();
@@ -590,7 +594,13 @@ async function loadRecordings() {
   } catch (error) {
     state.recordings = [];
     renderMeetings();
-    if (error.code === 'STORAGE_NOT_CONFIGURED') container.replaceChildren(emptyState('Las grabaciones no están disponibles en este entorno local.', 'Configura almacenamiento compatible con S3 para habilitarlas.'));
+    if (error.code === 'STORAGE_NOT_CONFIGURED') {
+      const empty = emptyState('Las grabaciones no están disponibles en este entorno local.', 'Configura almacenamiento compatible con S3/R2 y LiveKit Egress.');
+      const actions = document.createElement('div'); actions.className = 'dialog-actions';
+      const settings = document.createElement('a'); settings.className = 'button secondary compact'; settings.href = '#settings'; settings.textContent = 'Ver configuración'; settings.addEventListener('click', () => showSection('settings'));
+      const guide = document.createElement('a'); guide.className = 'button secondary compact'; guide.href = '/docs/LOCAL_DEVELOPMENT.md'; guide.target = '_blank'; guide.rel = 'noopener'; guide.textContent = 'Consultar guía';
+      actions.append(settings, guide); empty.appendChild(actions); container.replaceChildren(empty);
+    }
     else container.replaceChildren(textElement('p', error.message, 'form-error'));
   }
 }
@@ -617,7 +627,10 @@ async function loadAudit() {
     const details = document.createElement('details'); details.className = 'technical-detail'; const summary = document.createElement('summary'); summary.textContent = 'Código técnico'; details.append(summary, textElement('code', item.action)); actionCell.appendChild(details);
     for (const value of [formatDate(item.timestamp), item.actor || 'Sistema']) row.appendChild(textElement('td', value));
     row.appendChild(actionCell);
-    for (const value of [item.target || '—', item.room || '—']) row.appendChild(textElement('td', value));
+    const meeting = state.meetings.find((entry) => entry.id === item.target || entry.room === item.room);
+    const targetCell = document.createElement('td'); targetCell.appendChild(textElement('span', meeting?.title || item.target || '—'));
+    if (meeting && item.target) { const technical = document.createElement('details'); technical.className = 'technical-detail'; const heading = document.createElement('summary'); heading.textContent = 'Detalles técnicos'; technical.append(heading, textElement('code', item.target)); targetCell.appendChild(technical); }
+    row.append(targetCell, textElement('td', item.room || '—'));
     tbody.appendChild(row);
   }
 }
@@ -649,6 +662,8 @@ async function initialize() {
     for (const type of Object.keys(TYPE_LABELS)) document.getElementById('filterType').appendChild(new Option(TYPE_LABELS[type], type));
     await Promise.all([loadMeetings(), loadSummary()]);
     await loadRecordings();
+    const requestedSection = location.hash.slice(1);
+    if (document.querySelector(`[data-section="${CSS.escape(requestedSection)}"]`)) showSection(requestedSection);
   } catch (error) { notice(error.message, 'error'); }
 }
 
@@ -669,7 +684,11 @@ document.querySelectorAll('[data-calendar-view]').forEach((button) => button.add
 document.getElementById('calendarPrev').addEventListener('click', () => { const amount = state.calendarView === 'month' ? -1 : state.calendarView === 'week' ? -7 : -1; if (state.calendarView === 'month') state.calendarDate.setMonth(state.calendarDate.getMonth() + amount); else state.calendarDate.setDate(state.calendarDate.getDate() + amount); renderCalendar(); });
 document.getElementById('calendarNext').addEventListener('click', () => { const amount = state.calendarView === 'month' ? 1 : state.calendarView === 'week' ? 7 : 1; if (state.calendarView === 'month') state.calendarDate.setMonth(state.calendarDate.getMonth() + amount); else state.calendarDate.setDate(state.calendarDate.getDate() + amount); renderCalendar(); });
 document.getElementById('calendarToday').addEventListener('click', () => { state.calendarDate = new Date(); renderCalendar(); });
-document.getElementById('menuToggle').addEventListener('click', () => { const sidebar = document.getElementById('dashboardSidebar'); const open = sidebar.classList.toggle('open'); document.getElementById('menuToggle').setAttribute('aria-expanded', String(open)); });
+function closeSidebar() { document.getElementById('dashboardSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('visible'); document.getElementById('menuToggle').setAttribute('aria-expanded', 'false'); }
+document.getElementById('menuToggle').addEventListener('click', () => { const sidebar = document.getElementById('dashboardSidebar'); const open = sidebar.classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('visible', open); document.getElementById('menuToggle').setAttribute('aria-expanded', String(open)); if (open) sidebar.querySelector('button:not([hidden])')?.focus(); });
+document.getElementById('sidebarOverlay').addEventListener('click', closeSidebar);
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeSidebar(); document.getElementById('menuToggle').focus(); } });
+for (const id of ['userPassword', 'userPasswordConfirm']) document.getElementById(id).addEventListener('input', () => { const password = document.getElementById('userPassword').value; const confirmation = document.getElementById('userPasswordConfirm').value; const match = document.getElementById('userPasswordMatch'); match.textContent = confirmation ? (password === confirmation ? 'Las contraseñas coinciden.' : 'Las contraseñas no coinciden.') : ''; match.className = `password-match ${password === confirmation ? 'matches' : 'mismatch'}`; });
 document.getElementById('logoutButton').addEventListener('click', async () => { try { await api('/api/auth/logout', { method: 'POST', body: {} }); } finally { window.location.replace('/index.html'); } });
 bindDialog(document.getElementById('meetingDialog'), '[data-close-dialog]');
 bindDialog(document.getElementById('userDialog'), '[data-close-user]');

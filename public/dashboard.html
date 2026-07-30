@@ -4,9 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
-  <title>Panel organizador | Streaming</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/streaming-app-logo-32.png" />
-  <link rel="apple-touch-icon" sizes="180x180" href="assets/streaming-app-logo-180.png" />
+  <title>Panel organizador | R.A. Training Streaming</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -22,6 +23,7 @@
       <button id="logoutButton" class="secondary compact" type="button">Cerrar sesión</button>
     </div>
   </header>
+  <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="Cerrar navegación" tabindex="-1"></button>
 
   <div class="dashboard-layout">
     <aside id="dashboardSidebar" class="dashboard-sidebar" aria-label="Navegación principal">
@@ -214,6 +216,7 @@
       <label>Usuario<input id="userUsername" minlength="3" maxlength="50" required /></label>
       <label>Rol<select id="userRole"><option value="ADMIN">Administrador</option><option value="ORGANIZER">Organizador</option><option value="PANELIST">Panelista</option><option value="VIEWER">Asistente</option></select></label>
       <label id="userPasswordLabel">Contraseña<div class="password-field"><input id="userPassword" type="password" minlength="10" maxlength="128" autocomplete="new-password" /><button class="password-toggle" type="button" data-password-toggle="userPassword" aria-label="Mostrar contraseña" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/><path class="password-hide-stroke" d="m4 4 16 16"/></svg></button></div></label>
+      <label id="userPasswordConfirmLabel">Confirmar contraseña<div class="password-field"><input id="userPasswordConfirm" type="password" minlength="10" maxlength="128" autocomplete="new-password" /><button class="password-toggle" type="button" data-password-toggle="userPasswordConfirm" aria-label="Mostrar confirmación de contraseña" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/><path class="password-hide-stroke" d="m4 4 16 16"/></svg></button></div><small class="field-help">Mínimo 10 caracteres; usa mayúsculas, minúsculas y números.</small><span id="userPasswordMatch" class="password-match" aria-live="polite"></span></label>
       <label class="check-row"><input id="userActive" type="checkbox" checked /> Usuario activo</label>
       <p id="userFormError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-user>Cancelar</button><button class="primary" type="submit">Guardar</button></div>
@@ -225,7 +228,7 @@
   </dialog>
 
   <dialog id="passwordDialog" class="app-dialog small-dialog">
-    <form method="dialog"><h2>Cambiar contraseña</h2><p>Nueva contraseña para <strong data-password-user></strong>.</p><label>Contraseña nueva<div class="password-field"><input id="resetUserPassword" type="password" minlength="10" maxlength="128" autocomplete="new-password" required /><button class="password-toggle" type="button" data-password-toggle="resetUserPassword" aria-label="Mostrar contraseña" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/><path class="password-hide-stroke" d="m4 4 16 16"/></svg></button></div></label><p class="form-error" role="alert"></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button class="primary" value="confirm">Cambiar contraseña</button></div></form>
+    <form method="dialog"><h2>Cambiar contraseña</h2><p>Nueva contraseña para <strong data-password-user></strong>.</p><label>Contraseña nueva<div class="password-field"><input id="resetUserPassword" data-password-new type="password" minlength="10" maxlength="128" autocomplete="new-password" required /><button class="password-toggle" type="button" data-password-toggle="resetUserPassword" aria-label="Mostrar contraseña" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/><path class="password-hide-stroke" d="m4 4 16 16"/></svg></button></div></label><label>Confirmar contraseña<div class="password-field"><input id="resetUserPasswordConfirm" data-password-confirm type="password" minlength="10" maxlength="128" autocomplete="new-password" required /><button class="password-toggle" type="button" data-password-toggle="resetUserPasswordConfirm" aria-label="Mostrar confirmación de contraseña" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/><path class="password-hide-stroke" d="m4 4 16 16"/></svg></button></div><small class="field-help">Mínimo 10 caracteres; usa mayúsculas, minúsculas y números.</small></label><p class="form-error" role="alert"></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button class="primary" value="confirm">Cambiar contraseña</button></div></form>
   </dialog>
 
   <script src="brand.js"></script>
