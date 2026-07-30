@@ -26,6 +26,7 @@ const LEGACY_DEFAULTS = Object.freeze({
   allowFiles: true,
   allowReactions: true,
   allowRaiseHand: true,
+  allowQuestions: true,
   allowRecording: false,
   recordingConsentRequired: false,
   allowTranscription: false,
@@ -120,7 +121,7 @@ function normalizeStoredMeeting(stored) {
     type: TYPES.includes(String(source.type || '').toUpperCase()) ? String(source.type).toUpperCase() : LEGACY_DEFAULTS.type,
     status: STATUSES.includes(String(source.status || '').toUpperCase()) ? String(source.status).toUpperCase() : LEGACY_DEFAULTS.status,
   };
-  for (const name of ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand', 'allowRecording', 'recordingConsentRequired', 'allowTranscription', 'transcriptionConsentRequired', 'allowPanelistTranscriptAccess']) {
+  for (const name of ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand', 'allowQuestions', 'allowRecording', 'recordingConsentRequired', 'allowTranscription', 'transcriptionConsentRequired', 'allowPanelistTranscriptAccess']) {
     normalized[name] = typeof source[name] === 'boolean' ? source[name] : LEGACY_DEFAULTS[name];
   }
   normalized.transcriptionLanguage = typeof source.transcriptionLanguage === 'string' && /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(source.transcriptionLanguage)
@@ -173,6 +174,7 @@ function normalizeMeetingInput(input, { partial = false } = {}) {
     allowFiles: true,
     allowReactions: true,
     allowRaiseHand: true,
+    allowQuestions: true,
     allowRecording: false,
     recordingConsentRequired: false,
     allowTranscription: false,

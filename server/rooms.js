@@ -6,6 +6,7 @@ const { config } = require('./config');
 const KEY_PREFIX = 'room-configs/';
 const CACHE_TTL_MS = 30_000;
 const cache = new Map();
+const admissionLocks = new Map();
 
 function keyFor(room) {
   return `${KEY_PREFIX}${encodeURIComponent(room)}.json`;
@@ -27,12 +28,17 @@ async function persist(room, record) {
 }
 
 async function createRoom(room, { meetingId = null, status = 'ACTIVE' } = {}) {
+  const existing = await getRoom(room);
   return persist(room, {
+    ...(existing || {}),
     room,
     meetingId,
     status,
-    createdAt: new Date().toISOString(),
+    createdAt: existing?.createdAt || new Date().toISOString(),
     revokedAt: null,
+    locked: existing?.locked === true,
+    lockedAt: existing?.lockedAt || null,
+    lockedBy: existing?.lockedBy || null,
   });
 }
 
@@ -51,15 +57,47 @@ async function getRoom(room) {
   }
 }
 
-async function checkAccess(room) {
+async function checkAccess(room, { allowLocked = false } = {}) {
   try {
     const record = await getRoom(room);
-    if (record?.status === 'ACTIVE' && !record.revokedAt) return { allowed: true, room: record };
+    if (record?.status === 'ACTIVE' && !record.revokedAt) {
+      if (record.locked && !allowLocked) return { allowed: false, reason: 'ROOM_LOCKED', room: record };
+      return { allowed: true, room: record };
+    }
     if (!record && config.allowOpenDevRooms) return { allowed: true, devOpenRoom: true };
     return { allowed: false, reason: record?.revokedAt ? 'ROOM_REVOKED' : 'ROOM_NOT_REGISTERED' };
   } catch (error) {
     if (config.allowOpenDevRooms) return { allowed: true, devOpenRoom: true, storageError: true };
     return { allowed: false, reason: 'ROOM_STORAGE_UNAVAILABLE' };
+  }
+}
+
+async function setRoomLock(room, locked, actor) {
+  return withAdmissionLock(room, async () => {
+    const existing = await getRoom(room);
+    if (!existing || existing.status !== 'ACTIVE' || existing.revokedAt) {
+      throw new Error('La sala no está activa');
+    }
+    const now = new Date().toISOString();
+    return persist(room, {
+      ...existing,
+      locked: Boolean(locked),
+      lockedAt: locked ? now : null,
+      lockedBy: locked ? String(actor || '').slice(0, 100) : null,
+    });
+  });
+}
+
+async function withAdmissionLock(room, operation) {
+  const key = String(room);
+  const previous = admissionLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  admissionLocks.set(key, current);
+  await previous;
+  try { return await operation(); } finally {
+    release();
+    if (admissionLocks.get(key) === current) admissionLocks.delete(key);
   }
 }
 
@@ -72,4 +110,4 @@ async function revokeRoom(room) {
   });
 }
 
-module.exports = { checkAccess, createRoom, getRoom, revokeRoom };
+module.exports = { checkAccess, createRoom, getRoom, revokeRoom, setRoomLock, withAdmissionLock };

@@ -12,6 +12,7 @@ const auth = require('./auth');
 const meetings = require('./meetings');
 const invitations = require('./invitations');
 const audit = require('./audit');
+const questions = require('./questions');
 const transcriptions = require('./transcriptions');
 const { createTranscriptionProvider } = require('./transcription-provider');
 const {
@@ -157,6 +158,12 @@ function createApp(overrides = {}) {
     max: config.chatRateLimitMax,
     key: (req) => req.roomSession?.sid || req.ip,
     message: 'Has enviado demasiados mensajes o archivos. Espera un momento.',
+  });
+  const interactionLimiter = createRateLimiter({
+    windowMs: 60_000,
+    max: 30,
+    key: (req) => `${req.roomSession?.sid || req.ip}:interaction`,
+    message: 'Has realizado demasiadas acciones seguidas. Espera un momento.',
   });
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -403,13 +410,19 @@ function createApp(overrides = {}) {
   }));
 
   app.get('/i/:token', asyncHandler(async (req, res) => {
-    const invitation = await invitations.consumeInvitation(req.params.token);
-    const meeting = await meetings.getMeeting(invitation.room);
+    const preview = await invitations.peekInvitation(req.params.token);
+    const meeting = await meetings.getMeeting(preview.room);
     if (!meeting || meeting.deletedAt || ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(meeting.status)) {
       throw new AppError(410, 'Esta reunión ya no admite accesos', 'MEETING_NOT_JOINABLE');
     }
-    const access = await roomRegistry.checkAccess(meeting.room);
-    if (!access.allowed) throw new AppError(503, 'La sala no está disponible', access.reason);
+    const invitation = await roomRegistry.withAdmissionLock(meeting.room, async () => {
+      const access = await roomRegistry.checkAccess(meeting.room);
+      if (!access.allowed) {
+        const locked = access.reason === 'ROOM_LOCKED';
+        throw new AppError(locked ? 423 : 503, locked ? 'La sala está bloqueada y no admite nuevos accesos' : 'La sala no está disponible', access.reason);
+      }
+      return invitations.consumeInvitation(req.params.token);
+    });
     const created = createRoomSession({
       room: meeting.room,
       meetingId: meeting.id,
@@ -424,6 +437,7 @@ function createApp(overrides = {}) {
   app.get('/api/room-session', requireRoomSession, asyncHandler(async (req, res) => {
     const meeting = await meetings.getMeeting(req.roomSession.room);
     if (!meeting || meeting.id !== req.roomSession.meetingId || meeting.deletedAt) throw new AppError(410, 'La reunión ya no está disponible', 'MEETING_NOT_JOINABLE');
+    const roomState = await roomRegistry.getRoom(meeting.room);
     res.json({
       room: req.roomSession.room,
       role: req.roomSession.role,
@@ -435,7 +449,9 @@ function createApp(overrides = {}) {
         title: meeting.title,
         trainerName: meeting.trainerName,
         status: meeting.status,
+        type: meeting.type,
         scheduledAt: meeting.scheduledAt,
+        startedAt: meeting.startedAt,
         allowRecording: meeting.allowRecording,
         recordingConsentRequired: meeting.recordingConsentRequired,
         allowTranscription: meeting.allowTranscription,
@@ -444,6 +460,8 @@ function createApp(overrides = {}) {
         allowFiles: meeting.allowFiles,
         allowReactions: meeting.allowReactions,
         allowRaiseHand: meeting.allowRaiseHand,
+        allowQuestions: meeting.allowQuestions,
+        roomLocked: roomState?.locked === true,
       },
     });
   }));
@@ -459,24 +477,25 @@ function createApp(overrides = {}) {
     res.json({ displayName, csrfToken: updated.session.csrf });
   }));
 
-  app.post('/api/room-session/leave', requireRoomSession, requireRoomCsrf, (req, res) => {
+  app.post('/api/room-session/leave', requireRoomSession, requireRoomCsrf, asyncHandler(async (req, res) => {
+    await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_LEFT', target: req.roomSession.meetingId, room: req.roomSession.room, ...auditContext(req) });
     res.setHeader('Set-Cookie', clearRoomCookie());
     res.json({ left: true });
-  });
+  }));
 
   app.get('/api/token', requireRoomSession, asyncHandler(async (req, res) => {
     const meeting = await meetings.getMeeting(req.roomSession.room);
     if (!meeting || meeting.id !== req.roomSession.meetingId || meeting.deletedAt || ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(meeting.status)) {
       throw new AppError(410, 'La reunión finalizó o tu acceso fue retirado', 'ROOM_ENDED');
     }
-    const access = await roomRegistry.checkAccess(meeting.room);
+    const access = await roomRegistry.checkAccess(meeting.room, { allowLocked: true });
     if (!access.allowed) throw new AppError(403, 'Tu acceso a la sala fue retirado', access.reason);
     if (req.roomSession.role === 'VIEWER' && meeting.status !== 'LIVE') throw new AppError(409, 'La reunión todavía no ha comenzado', 'MEETING_NOT_LIVE');
     const canPublish = ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role);
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: req.roomSession.identity,
       name: req.roomSession.displayName,
-      metadata: JSON.stringify({ role: req.roomSession.role }),
+      metadata: JSON.stringify({ role: req.roomSession.role, invitationId: req.roomSession.invitationId || null, joinedAt: new Date().toISOString() }),
     });
     token.addGrant({
       room: meeting.room,
@@ -494,7 +513,7 @@ function createApp(overrides = {}) {
       role: req.roomSession.role,
       recordingConfigured,
       transcriptionConfigured: transcriptionProvider.isConfigured(),
-      meeting: { id: meeting.id, title: meeting.title, status: meeting.status },
+      meeting: { id: meeting.id, title: meeting.title, status: meeting.status, type: meeting.type, startedAt: meeting.startedAt },
     });
   }));
 
@@ -518,10 +537,15 @@ function createApp(overrides = {}) {
 
   app.post('/api/room/connection', requireRoomSession, requireRoomCsrf, roomMeeting, asyncHandler(async (req, res) => {
     const event = String(req.body?.event || 'connected').toLowerCase();
-    if (!['attempt', 'retry', 'failed', 'connected'].includes(event)) throw new AppError(400, 'Evento de conexión no válido', 'VALIDATION_ERROR');
+    if (!['attempt', 'retry', 'failed', 'connected', 'joined', 'reconnected'].includes(event)) throw new AppError(400, 'Evento de conexión no válido', 'VALIDATION_ERROR');
     const action = { attempt: 'ROOM_OPEN_ATTEMPT', retry: 'ROOM_RETRY', failed: 'ROOM_CONNECTION_FAILED' }[event];
     if (action) {
       await safeAudit({ actor: req.roomSession.identity, action, target: req.meeting.id, room: req.meeting.room, metadata: { reason: String(req.body?.reason || '').slice(0, 80) }, ...auditContext(req) });
+      return res.json({ acknowledged: true, meetingStatus: req.meeting.status });
+    }
+    if (event === 'joined' || event === 'reconnected') {
+      await assertCallerPresent(req);
+      await safeAudit({ actor: req.roomSession.identity, action: event === 'joined' ? 'PARTICIPANT_JOINED' : 'PARTICIPANT_RECONNECTED', target: req.meeting.id, room: req.meeting.room, ...auditContext(req) });
       return res.json({ acknowledged: true, meetingStatus: req.meeting.status });
     }
     if (!['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role)) throw new AppError(403, 'Solo un organizador o panelista puede iniciar la reunión', 'ROOM_FORBIDDEN');
@@ -529,10 +553,10 @@ function createApp(overrides = {}) {
     if (!participants.some((participant) => participant.identity === req.roomSession.identity)) {
       throw new AppError(409, 'LiveKit todavía no confirma tu conexión', 'LIVEKIT_PARTICIPANT_NOT_CONFIRMED');
     }
-    const wasLive = req.meeting.status === 'LIVE';
-    const updated = wasLive ? req.meeting : await meetings.transitionMeeting(req.meeting.room, 'start', { livekitConfirmedAt: new Date().toISOString() });
-    if (!wasLive) await safeAudit({ actor: req.roomSession.identity, action: 'ROOM_CONNECTED', target: updated.id, room: updated.room, ...auditContext(req) });
-    res.json({ connected: true, meetingStatus: updated.status, started: !wasLive });
+    const hasConfirmedStart = req.meeting.status === 'LIVE' && Boolean(req.meeting.startedAt);
+    const updated = hasConfirmedStart ? req.meeting : await meetings.transitionMeeting(req.meeting.room, 'start', { livekitConfirmedAt: new Date().toISOString() });
+    if (!hasConfirmedStart) await safeAudit({ actor: req.roomSession.identity, action: 'ROOM_CONNECTED', target: updated.id, room: updated.room, ...auditContext(req) });
+    res.json({ connected: true, meetingStatus: updated.status, started: !hasConfirmedStart });
   }));
 
   async function relayRoomData(req, message, destinationIdentities) {
@@ -541,7 +565,107 @@ function createApp(overrides = {}) {
     await roomService.sendData(req.roomSession.room, data, DataPacket_Kind.RELIABLE, options);
   }
 
-  app.post('/api/participants/promote', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER', 'PANELIST'), roomMeeting, asyncHandler(async (req, res) => {
+  app.get('/api/room/lock', requireRoomSession, roomMeeting, asyncHandler(async (req, res) => {
+    const state = await roomRegistry.getRoom(req.roomSession.room);
+    res.json({ locked: state?.locked === true, lockedAt: state?.lockedAt || null });
+  }));
+
+  app.post('/api/room/lock', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    await assertCallerPresent(req);
+    const locked = req.body?.locked === true;
+    const state = await roomRegistry.setRoomLock(req.roomSession.room, locked, req.roomSession.identity);
+    const message = { kind: 'room-lock', locked, changedBy: req.roomSession.displayName, sentAt: new Date().toISOString() };
+    await relayRoomData(req, message);
+    await safeAudit({ actor: req.roomSession.identity, action: locked ? 'ROOM_LOCKED' : 'ROOM_UNLOCKED', target: req.meeting.id, room: req.meeting.room, ...auditContext(req) });
+    res.json({ locked: state.locked, lockedAt: state.lockedAt, message });
+  }));
+
+  app.post('/api/room/invitations', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    await assertCallerPresent(req);
+    const created = await invitations.createInvitation({
+      meetingId: req.meeting.id,
+      room: req.meeting.room,
+      role: req.body?.role,
+      expiresInMinutes: req.body?.expiresInMinutes,
+      singleUse: req.body?.singleUse === true,
+      maxUses: req.body?.maxUses,
+      createdBy: req.roomSession.username || req.roomSession.identity,
+    });
+    await safeAudit({ actor: req.roomSession.identity, action: 'INVITATION_CREATED', target: created.invitation.id, room: req.meeting.room, metadata: { role: created.invitation.role, source: 'in-room' }, ...auditContext(req) });
+    res.status(201).json({ invitation: created.invitation, path: `/i/${created.token}` });
+  }));
+
+  app.post('/api/room/media-state', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    const event = String(req.body?.event || '').toLowerCase();
+    const actions = {
+      'microphone-muted': 'MICROPHONE_MUTED',
+      'screen-started': 'SCREEN_SHARE_STARTED',
+      'screen-stopped': 'SCREEN_SHARE_STOPPED',
+    };
+    if (!actions[event]) throw new AppError(400, 'Estado multimedia no válido', 'VALIDATION_ERROR');
+    await assertCallerPresent(req);
+    await safeAudit({ actor: req.roomSession.identity, action: actions[event], target: req.meeting.id, room: req.meeting.room, ...auditContext(req) });
+    if (event.startsWith('screen-')) await relayRoomData(req, { kind: 'screen-status', event, identity: req.roomSession.identity, displayName: req.roomSession.displayName, sentAt: new Date().toISOString() });
+    res.json({ acknowledged: true });
+  }));
+
+  app.get('/api/questions', requireRoomSession, roomMeeting, asyncHandler(async (req, res) => {
+    const items = await questions.list(req.roomSession.room);
+    res.json({ questions: items.map((item) => questions.publicQuestion(item, req.roomSession.identity)) });
+  }));
+
+  app.post('/api/questions', requireRoomSession, requireRoomCsrf, chatLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (!req.meeting.allowQuestions || req.meeting.status !== 'LIVE') throw new AppError(409, 'Las preguntas no están disponibles', 'QUESTIONS_DISABLED');
+    await assertCallerPresent(req);
+    const record = await questions.create({
+      room: req.roomSession.room,
+      meetingId: req.meeting.id,
+      text: req.body?.text,
+      authorIdentity: req.roomSession.identity,
+      authorName: req.roomSession.displayName,
+      authorRole: req.roomSession.role,
+    });
+    const item = questions.publicQuestion(record, req.roomSession.identity);
+    await relayRoomData(req, { kind: 'question-changed', questionId: record.id, sentAt: record.createdAt });
+    await safeAudit({ actor: req.roomSession.identity, action: 'QUESTION_CREATED', target: record.id, room: req.meeting.room, ...auditContext(req) });
+    res.status(201).json({ question: item });
+  }));
+
+  app.patch('/api/questions/:id', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    await assertCallerPresent(req);
+    const before = await questions.get(req.roomSession.room, req.params.id);
+    const record = await questions.update(req.roomSession.room, req.params.id, req.body || {}, {
+      identity: req.roomSession.identity, role: req.roomSession.role, name: req.roomSession.displayName,
+    });
+    await relayRoomData(req, { kind: 'question-changed', questionId: record.id, sentAt: record.updatedAt });
+    let action = 'QUESTION_EDITED';
+    if (record.status === 'DISMISSED' && before?.status !== record.status) action = 'QUESTION_DISMISSED';
+    else if (record.status.startsWith('ANSWERED') && before?.status !== record.status) action = 'QUESTION_ANSWERED';
+    await safeAudit({ actor: req.roomSession.identity, action, target: record.id, room: req.meeting.room, metadata: { status: record.status }, ...auditContext(req) });
+    res.json({ question: questions.publicQuestion(record, req.roomSession.identity) });
+  }));
+
+  app.post('/api/questions/:id/vote', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    await assertCallerPresent(req);
+    const record = await questions.toggleVote(req.roomSession.room, req.params.id, req.roomSession.identity);
+    await relayRoomData(req, { kind: 'question-changed', questionId: record.id, sentAt: record.updatedAt });
+    res.json({ question: questions.publicQuestion(record, req.roomSession.identity) });
+  }));
+
+  app.delete('/api/questions/:id', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    await assertCallerPresent(req);
+    const record = await questions.remove(req.roomSession.room, req.params.id, { identity: req.roomSession.identity, role: req.roomSession.role });
+    await relayRoomData(req, { kind: 'question-deleted', questionId: record.id, sentAt: new Date().toISOString() });
+    res.json({ deleted: true });
+  }));
+
+  app.post('/api/participants/promote', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
     if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
     const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
     const participants = await assertCallerPresent(req);
@@ -554,10 +678,11 @@ function createApp(overrides = {}) {
     res.json({ promoted: true });
   }));
 
-  app.post('/api/participants/demote', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER', 'PANELIST'), roomMeeting, asyncHandler(async (req, res) => {
+  app.post('/api/participants/demote', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
     if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
     const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
-    await assertCallerPresent(req);
+    const participants = await assertCallerPresent(req);
+    if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
     await roomService.updateParticipant(req.roomSession.room, targetIdentity, {
       permission: { canPublish: false, canSubscribe: true, canPublishData: false },
     });
@@ -573,15 +698,43 @@ function createApp(overrides = {}) {
     res.json({ demoted: true });
   }));
 
-  app.post('/api/participants/remove', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), roomMeeting, asyncHandler(async (req, res) => {
+  app.post('/api/participants/remove', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
     const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
-    await assertCallerPresent(req);
+    const participants = await assertCallerPresent(req);
+    if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
     await roomService.removeParticipant(req.roomSession.room, targetIdentity);
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_REMOVED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     res.json({ removed: true });
   }));
 
-  app.post('/api/participants/mute', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), roomMeeting, asyncHandler(async (req, res) => {
+  app.post('/api/participants/block', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
+    const participants = await assertCallerPresent(req);
+    const target = participants.find((participant) => participant.identity === targetIdentity);
+    if (!target) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
+    let metadata = {};
+    try { metadata = JSON.parse(target.metadata || '{}'); } catch (_error) { metadata = {}; }
+    if (metadata.invitationId) await invitations.revokeInvitation(metadata.invitationId, req.roomSession.room);
+    await roomService.removeParticipant(req.roomSession.room, targetIdentity);
+    await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_BLOCKED', target: targetIdentity, room: req.roomSession.room, metadata: { invitationRevoked: Boolean(metadata.invitationId) }, ...auditContext(req) });
+    res.json({ blocked: true, invitationRevoked: Boolean(metadata.invitationId) });
+  }));
+
+  app.post('/api/participants/request-media', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
+    const action = String(req.body?.action || 'request-microphone');
+    if (!['request-microphone', 'request-camera-off'].includes(action)) throw new AppError(400, 'Solicitud multimedia no válida', 'VALIDATION_ERROR');
+    const participants = await assertCallerPresent(req);
+    if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
+    await relayRoomData(req, { kind: action, from: req.roomSession.displayName, sentAt: new Date().toISOString() }, [targetIdentity]);
+    res.json({ sent: true });
+  }));
+
+  app.post('/api/participants/mute', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
     const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
     const participants = await assertCallerPresent(req);
     const target = participants.find((participant) => participant.identity === targetIdentity);
@@ -589,6 +742,7 @@ function createApp(overrides = {}) {
     const microphoneTrack = (target.tracks || []).find((track) => String(track.source).toUpperCase().includes('MICROPHONE') || track.type === 0);
     if (!microphoneTrack?.sid) throw new AppError(409, 'El participante no tiene un micrófono publicado', 'MICROPHONE_NOT_PUBLISHED');
     await roomService.mutePublishedTrack(req.roomSession.room, targetIdentity, microphoneTrack.sid, true);
+    await safeAudit({ actor: req.roomSession.identity, action: 'MICROPHONE_MUTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     res.json({ muted: true });
   }));
 
@@ -636,7 +790,7 @@ function createApp(overrides = {}) {
     } else if (kind === 'reaction') {
       if (!req.meeting.allowReactions) throw new AppError(409, 'Las reacciones están deshabilitadas', 'REACTIONS_DISABLED');
       const reaction = sanitizeText(req.body?.reaction, { field: 'reaction', min: 1, max: 8, required: true });
-      if (!['👏', '👍', '❤️', '🎉', '✅'].includes(reaction)) throw new AppError(400, 'Reacción no válida', 'VALIDATION_ERROR');
+      if (!['👏', '👍', '❤️', '😂', '🎉', '✅'].includes(reaction)) throw new AppError(400, 'Reacción no válida', 'VALIDATION_ERROR');
       message = { kind, reaction, from: req.roomSession.displayName, fromIdentity: req.roomSession.identity, sentAt: new Date().toISOString() };
     } else {
       throw new AppError(400, 'Evento de sala no válido', 'VALIDATION_ERROR');
@@ -950,7 +1104,7 @@ function createApp(overrides = {}) {
 
   app.locals.services = services;
   app.locals.livekitProbe = livekitProbe;
-  app.locals.rateLimiters = { loginLimiter, meetingLimiter, transcriptionLimiter, chatLimiter };
+  app.locals.rateLimiters = { loginLimiter, meetingLimiter, transcriptionLimiter, chatLimiter, interactionLimiter };
   return app;
 }
 

@@ -155,6 +155,20 @@ async function consumeInvitation(token) {
   }
 }
 
+async function peekInvitation(token) {
+  if (typeof token !== 'string' || token.length < 40 || token.length > 100) {
+    throw new AppError(404, 'Invitación no válida', 'INVITATION_INVALID');
+  }
+  const record = await getByToken(token);
+  if (!record) throw new AppError(404, 'Invitación no válida', 'INVITATION_INVALID');
+  const status = deriveStatus(record);
+  if (status !== 'ACTIVE') {
+    const messages = { EXPIRED: 'La invitación expiró', REVOKED: 'La invitación fue revocada', USED: 'La invitación ya fue utilizada' };
+    throw new AppError(410, messages[status] || 'La invitación no está activa', `INVITATION_${status}`);
+  }
+  return publicInvitation(record);
+}
+
 async function revokeInvitation(id, room) {
   let records;
   if (storageConfigured) {
@@ -180,6 +194,7 @@ module.exports = {
   deriveStatus,
   getByToken,
   listInvitations,
+  peekInvitation,
   publicInvitation,
   revokeInvitation,
   tokenHash,
