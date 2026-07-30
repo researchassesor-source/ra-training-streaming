@@ -15,6 +15,7 @@ const ui = {
   microphoneBusy: false,
   cameraBusy: false,
   screen: false,
+  screenBusy: false,
   recording: false,
   recordingConfigured: false,
   egressId: null,
@@ -22,6 +23,7 @@ const ui = {
   activeTab: 'chat',
   effectsLoaded: false,
   backgroundObjectUrl: null,
+  connectionAttempts: 0,
 };
 const handQueue = new RATCore.HandQueue();
 const floatingModel = RATCore.createFloatingModel();
@@ -188,7 +190,28 @@ async function startPreview() {
   }
 }
 
-function setupPreflight() {
+async function refreshLiveKitStatus() {
+  const status = document.getElementById('livekitStatus');
+  const button = document.getElementById('enterRoomButton');
+  status.textContent = 'Comprobando el servicio de videoconferencia…';
+  status.className = 'service-notice checking';
+  try {
+    const livekit = await requestLiveKitStatus();
+    status.textContent = livekit.available
+      ? `LiveKit ${livekit.mode} — disponible.`
+      : `LiveKit ${livekit.mode} — no disponible. Inicia el servidor antes de entrar.`;
+    status.className = `service-notice ${livekit.available ? 'available' : 'unavailable'}`;
+    button.disabled = !livekit.available;
+    return livekit;
+  } catch (error) {
+    status.textContent = 'No fue posible comprobar el servicio de videoconferencia.';
+    status.className = 'service-notice unavailable';
+    button.disabled = true;
+    throw error;
+  }
+}
+
+async function setupPreflight() {
   const viewer = ui.session.role === 'VIEWER';
   document.querySelectorAll('.viewer-option').forEach((element) => { element.hidden = !viewer; });
   document.querySelectorAll('.presenter-option').forEach((element) => { element.hidden = viewer; });
@@ -206,12 +229,19 @@ function setupPreflight() {
   document.getElementById('preflightMeeting').textContent = `${ui.session.meeting.title} · ${ui.session.meeting.trainerName}`;
   document.getElementById('recordingConsentLabel').hidden = !viewer || !ui.session.meeting.recordingConsentRequired;
   document.getElementById('transcriptionConsentLabel').hidden = !viewer || !ui.session.meeting.transcriptionConsentRequired;
-  document.getElementById('processingNotice').hidden = !ui.session.meeting.allowRecording && !ui.session.meeting.allowTranscription;
+  const processingNotice = document.getElementById('processingNotice');
+  const recording = ui.session.meeting.allowRecording;
+  const transcription = ui.session.meeting.allowTranscription;
+  processingNotice.hidden = !recording && !transcription;
+  processingNotice.textContent = recording && transcription
+    ? 'Esta reunión puede grabarse y transcribirse. La transcripción automática puede contener errores.'
+    : recording ? 'Esta reunión puede grabarse.' : 'Esta reunión puede transcribirse. La transcripción automática puede contener errores.';
   const connection = navigator.connection;
   document.getElementById('networkStatus').textContent = connection
     ? `Red estimada: ${connection.effectiveType || 'desconocida'}${connection.downlink ? ` · ${connection.downlink} Mbps` : ''}`
     : 'El navegador no informa una estimación previa de red.';
   document.getElementById('preflightDialog').showModal();
+  await refreshLiveKitStatus().catch(() => null);
 }
 
 async function submitPreflight(event) {
@@ -230,6 +260,8 @@ async function submitPreflight(event) {
   button.setAttribute('aria-busy', 'true');
   button.textContent = 'Conectando…';
   try {
+    const livekit = await refreshLiveKitStatus();
+    if (!livekit.available) throw Object.assign(new Error('El servicio de videoconferencia no está disponible.'), { code: 'LIVEKIT_UNAVAILABLE', status: 503 });
     const displayName = document.getElementById('displayNameInput').value.trim();
     if (displayName !== ui.session.displayName) {
       const updated = await updateRoomProfile(displayName, ui.session.csrfToken);
@@ -239,16 +271,19 @@ async function submitPreflight(event) {
     const joinMicrophone = !viewer && document.getElementById('joinMicrophone').checked;
     stopPreview();
     connectionAttempted = true;
+    if (ui.connectionAttempts > 0) await reportRoomConnection('retry', ui.session.csrfToken);
+    ui.connectionAttempts += 1;
     await connectRoom({ joinCamera, joinMicrophone });
     document.getElementById('preflightDialog').close();
   } catch (requestError) {
     shouldRetry = connectionAttempted;
+    if (connectionAttempted) await reportRoomConnection('failed', ui.session.csrfToken, requestError.code || requestError.name || 'CONNECTION_FAILED').catch(() => null);
     statusMachine.set('waiting_for_room');
     error.textContent = connectionAttempted ? RATCore.roomConnectionErrorMessage(requestError) : requestError.message;
     error.focus();
   } finally {
     button.dataset.busy = 'false';
-    button.disabled = false;
+    button.disabled = document.getElementById('livekitStatus').classList.contains('unavailable');
     button.setAttribute('aria-busy', 'false');
     button.textContent = shouldRetry ? 'Reintentar conexión' : 'Entrar a la reunión';
   }
@@ -400,11 +435,20 @@ function renderMediaPermissions() {
   }
 }
 
+function withMediaTimeout(operation, label, timeoutMs = 12_000) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} no respondió. Revisa los permisos y el dispositivo antes de reintentar.`)), timeoutMs);
+  });
+  return Promise.race([operation, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 async function toggleMicrophone() {
   if (!ui.room || !hasPublishPermission() || ui.microphoneBusy) return;
   ui.microphoneBusy = true; document.getElementById('btnMic').disabled = true; document.getElementById('btnMic').setAttribute('aria-busy', 'true');
   try {
-    ui.microphone = !ui.microphone; await ui.room.localParticipant.setMicrophoneEnabled(ui.microphone);
+    ui.microphone = !ui.microphone;
+    await withMediaTimeout(ui.room.localParticipant.setMicrophoneEnabled(ui.microphone), 'El micrófono');
     setButtonState(document.getElementById('btnMic'), ui.microphone, 'Silenciar', 'Micrófono'); floatingModel.update({ microphone: ui.microphone });
   } catch (error) { ui.microphone = false; document.getElementById('btnMic').title = 'Permiso bloqueado o dispositivo no disponible.'; showMessage(`Micrófono: ${error.message}`, true); }
   finally { ui.microphoneBusy = false; document.getElementById('btnMic').disabled = !hasPublishPermission(); document.getElementById('btnMic').setAttribute('aria-busy', 'false'); }
@@ -414,7 +458,8 @@ async function toggleCamera() {
   if (!ui.room || !hasPublishPermission() || ui.cameraBusy) return;
   ui.cameraBusy = true; document.getElementById('btnCam').disabled = true; document.getElementById('btnCam').setAttribute('aria-busy', 'true');
   try {
-    ui.camera = !ui.camera; await ui.room.localParticipant.setCameraEnabled(ui.camera);
+    ui.camera = !ui.camera;
+    await withMediaTimeout(ui.room.localParticipant.setCameraEnabled(ui.camera), 'La cámara');
     setButtonState(document.getElementById('btnCam'), ui.camera, 'Apagar', 'Cámara'); floatingModel.update({ camera: ui.camera });
     const publication = ui.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
     if (ui.camera && publication?.track) ui.stage.setTrack(ui.session.identity, `${ui.session.displayName} (tú)`, 'camera', publication.track, { muted: true });
@@ -426,16 +471,22 @@ async function toggleCamera() {
 async function toggleScreen() {
   if (!navigator.mediaDevices?.getDisplayMedia) return showMessage('Compartir pantalla no está disponible en este dispositivo o navegador.', true);
   if (!hasPublishPermission()) return showMessage('Tu rol no permite compartir pantalla.', true);
+  if (ui.screenBusy) return;
+  const button = document.getElementById('btnScreen');
+  ui.screenBusy = true;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
   try {
     ui.screen = !ui.screen;
-    await ui.room.localParticipant.setScreenShareEnabled(ui.screen, { audio: true });
-    document.getElementById('btnScreen').textContent = ui.screen ? 'Detener pantalla' : 'Compartir pantalla';
+    await withMediaTimeout(ui.room.localParticipant.setScreenShareEnabled(ui.screen, { audio: true }), 'La selección de pantalla');
+    button.textContent = ui.screen ? 'Detener pantalla' : 'Compartir pantalla';
     if (ui.screen) {
       ui.stage.setSelfSharePlaceholder(ui.session.identity, `${ui.session.displayName} (pantalla)`);
       const publication = ui.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
       publication?.track?.mediaStreamTrack?.addEventListener('ended', () => { ui.screen = false; ui.stage.removeTrack(ui.session.identity, 'screen'); document.getElementById('btnScreen').textContent = 'Compartir pantalla'; }, { once: true });
     } else ui.stage.removeTrack(ui.session.identity, 'screen');
   } catch (error) { ui.screen = false; showMessage(`Pantalla: ${error.message}`, true); }
+  finally { ui.screenBusy = false; button.disabled = false; button.setAttribute('aria-busy', 'false'); }
 }
 
 async function loadEffects() {
@@ -615,6 +666,8 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
   try {
     statusMachine.set('connecting_media');
     await room.connect(tokenData.wsUrl, tokenData.token);
+    ui.roomUi.updateCount();
+    if (ui.session.role !== 'VIEWER') await reportRoomConnection('connected', ui.session.csrfToken);
     ui.roomUi.machine.set('connected');
     statusMachine.set('connected');
     floatingModel.update({ title: tokenData.meeting.title, live: true });
@@ -670,10 +723,10 @@ async function initializeRoom() {
     document.getElementById('trainerName').textContent = ui.session.meeting.trainerName;
     floatingModel.update({ title: ui.session.meeting.title, connection: 'waiting_for_room' });
     statusMachine.set('waiting_for_room');
-    await enumerateDevices(); setupPreflight();
+    await enumerateDevices(); await setupPreflight();
   } catch (error) {
     statusMachine.set(error.code === 'ROOM_ENDED' ? 'room_ended' : 'access_denied', error.message);
-    document.querySelector('.room-layout').innerHTML = `<div class="access-denied branded-empty"><img src="assets/streaming-app-logo-192.png" alt="Icono de R.A. Training Streaming"><h1>Acceso no disponible</h1><p></p><a class="button primary" href="/index.html">Volver al inicio</a></div>`;
+    document.querySelector('.room-layout').innerHTML = `<div class="access-denied branded-empty"><img src="assets/icon-192.png" alt="Icono de R.A. Training Streaming"><h1>Acceso no disponible</h1><p></p><a class="button primary" href="/index.html">Volver al inicio</a></div>`;
     document.querySelector('.access-denied p').textContent = error.message;
     document.getElementById('roomControls').hidden = true;
   }

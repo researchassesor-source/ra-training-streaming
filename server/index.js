@@ -5,10 +5,10 @@ const { createApp, recordingConfigured } = require('./app');
 assertRuntimeConfig();
 
 const app = createApp();
-const server = app.listen(config.port, () => {
-  const livekitUrl = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
+const server = app.listen(config.port, async () => {
   console.info(`R.A. Training disponible en http://localhost:${config.port}`);
-  console.info(`LiveKit: ${livekitUrl.startsWith('ws://localhost') ? 'local' : 'configurado'} | Grabación: ${recordingConfigured ? 'configurada' : 'deshabilitada'}`);
+  const livekit = await app.locals.livekitProbe({ fresh: true });
+  console.info(`LiveKit ${livekit.mode}: ${livekit.available ? 'disponible' : 'no disponible'} | Grabación: ${recordingConfigured ? 'configurada' : 'deshabilitada'}`);
 });
 
 function shutdown(signal) {

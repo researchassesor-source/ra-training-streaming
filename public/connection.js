@@ -24,7 +24,7 @@ function attachConnectionUI(room, { statusBadge, countBadge, floatingModel, onPa
     participantDisconnected() { updateCount(); playLeaveSound(); },
     permissionsChanged() { onParticipantsChanged?.(participants()); },
     reconnecting() { machine.set('reconnecting'); playAlert('unstable'); systemNotification('Problema de conexión', 'Intentando reconectar con la reunión.'); },
-    reconnected() { machine.set('connected'); playAlert('reconnected'); onReconnected?.(); },
+    reconnected() { machine.set('connected'); updateCount(); playAlert('reconnected'); onReconnected?.(); },
     disconnected(reason) { machine.set(String(reason || '').toLowerCase().includes('removed') ? 'removed' : 'disconnected'); playAlert('critical'); },
     qualityChanged(quality, participant) {
       if (participant?.isLocal && String(quality).toLowerCase().includes('poor')) machine.set('poor_connection');

@@ -4,9 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
-  <title>Asistente | Streaming</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/streaming-app-logo-32.png" />
-  <link rel="apple-touch-icon" sizes="180x180" href="assets/streaming-app-logo-180.png" />
+  <title>Sala | R.A. Training Streaming</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -89,30 +90,27 @@
   </div>
   <dialog id="preflightDialog" class="app-dialog preflight-dialog">
     <form id="preflightForm" method="dialog">
-      <img class="preflight-app-logo" src="assets/streaming-app-logo-192.png" alt="Icono de R.A. Training Streaming" />
-      <p class="eyebrow">Sala de preparación</p>
-      <h1 id="preflightTitle">Antes de entrar</h1>
-      <p id="preflightMeeting" class="muted"></p>
-      <div class="preflight-grid">
-        <div class="preview-wrap"><video id="previewVideo" autoplay muted playsinline></video><div id="previewPlaceholder">La vista previa aparecerá aquí.</div></div>
-        <div class="preflight-fields">
-          <label>Nombre visible<input id="displayNameInput" maxlength="80" autocomplete="name" required /></label>
-          <button id="previewButton" class="secondary" type="button">Activar vista previa y probar micrófono</button>
-          <label>Cámara<select id="preflightCamera"></select></label>
-          <label>Micrófono<select id="preflightMicrophone"></select></label>
-          <label>Altavoz<select id="preflightSpeaker"></select></label>
-          <div class="meter" aria-label="Nivel de micrófono"><span id="microphoneMeter"></span></div>
-          <p id="networkStatus" class="muted"></p>
-          <label class="check-row presenter-option"><input id="joinCamera" type="checkbox" /> Entrar con cámara</label>
-          <label class="check-row presenter-option"><input id="joinMicrophone" type="checkbox" /> Entrar con micrófono</label>
-          <label class="check-row viewer-option"><input id="privacyConsent" type="checkbox" required /> Leí el aviso de privacidad y acepto participar.</label>
-          <label class="check-row viewer-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label>
-          <label class="check-row viewer-option" id="transcriptionConsentLabel"><input id="transcriptionConsent" type="checkbox" /> Entiendo que la grabación puede transcribirse.</label>
-          <p id="processingNotice" class="privacy-notice">Esta reunión puede grabarse y transcribirse. La transcripción automática puede contener errores.</p>
+      <header class="preflight-header">
+        <img class="preflight-app-logo" src="assets/icon-192.png" alt="Icono de R.A. Training Streaming" />
+        <div><p class="eyebrow">Sala de preparación</p><h1 id="preflightTitle">Antes de entrar</h1><p id="preflightMeeting" class="muted"></p></div>
+      </header>
+      <div class="preflight-scroll">
+        <p id="livekitStatus" class="service-notice" aria-live="polite">Comprobando el servicio de videoconferencia…</p>
+        <div class="preflight-grid">
+          <div class="preview-wrap"><video id="previewVideo" autoplay muted playsinline></video><div id="previewPlaceholder">La vista previa aparecerá aquí.</div></div>
+          <div class="preflight-fields">
+            <label>Nombre visible<input id="displayNameInput" maxlength="80" autocomplete="name" required /></label>
+            <button id="previewButton" class="secondary" type="button">Activar vista previa y probar micrófono</button>
+            <label>Cámara<select id="preflightCamera"></select></label><label>Micrófono<select id="preflightMicrophone"></select></label><label>Altavoz<select id="preflightSpeaker"></select></label>
+            <div class="meter" aria-label="Nivel de micrófono"><span id="microphoneMeter"></span></div><p id="networkStatus" class="muted"></p>
+            <label class="check-row presenter-option"><input id="joinCamera" type="checkbox" /> Entrar con cámara</label><label class="check-row presenter-option"><input id="joinMicrophone" type="checkbox" /> Entrar con micrófono</label>
+            <label class="check-row viewer-option"><input id="privacyConsent" type="checkbox" required /> Leí el aviso de privacidad y acepto participar.</label>
+            <label class="check-row viewer-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label><label class="check-row viewer-option" id="transcriptionConsentLabel"><input id="transcriptionConsent" type="checkbox" /> Entiendo que la grabación puede transcribirse.</label>
+            <p id="processingNotice" class="privacy-notice"></p>
+          </div>
         </div>
       </div>
-      <p id="preflightError" class="form-error" role="alert" aria-live="assertive" tabindex="-1"></p>
-      <div class="dialog-actions"><a class="button secondary" href="/index.html">Cancelar</a><button id="enterRoomButton" class="primary" type="submit" aria-busy="false">Entrar a la reunión</button></div>
+      <footer class="preflight-footer"><p id="preflightError" class="form-error" role="alert" aria-live="assertive" tabindex="-1"></p><div class="dialog-actions"><a class="button secondary" href="/index.html">Cancelar</a><button id="enterRoomButton" class="primary" type="submit" aria-busy="false">Entrar a la reunión</button></div></footer>
     </form>
   </dialog>
   <dialog id="confirmationDialog" class="app-dialog confirmation-dialog">

@@ -36,6 +36,7 @@ const LEGACY_DEFAULTS = Object.freeze({
   deletedAt: null,
   cancelledAt: null,
   archivedAt: null,
+  livekitConfirmedAt: null,
 });
 
 function keyFor(room) {
@@ -128,7 +129,7 @@ function normalizeStoredMeeting(stored) {
   normalized.transcriptionRetentionDays = Number.isInteger(Number(source.transcriptionRetentionDays)) && Number(source.transcriptionRetentionDays) > 0
     ? Number(source.transcriptionRetentionDays)
     : LEGACY_DEFAULTS.transcriptionRetentionDays;
-  for (const name of ['deletedAt', 'cancelledAt', 'archivedAt']) normalized[name] = validStoredDate(source[name]);
+  for (const name of ['deletedAt', 'cancelledAt', 'archivedAt', 'livekitConfirmedAt']) normalized[name] = validStoredDate(source[name]);
   normalized.endsAt = validStoredDate(source.endsAt) || calculateEndsAt(scheduledAt, durationMinutes);
   return normalized;
 }
@@ -217,6 +218,7 @@ async function createMeeting(input) {
     archivedAt: null,
     startedAt: null,
     completedAt: null,
+    livekitConfirmedAt: null,
   };
   return writeMeeting(record);
 }
@@ -246,7 +248,7 @@ async function transitionMeeting(room, action, data = {}) {
     cancel: { status: 'CANCELLED', cancelledAt: now },
     archive: { status: 'ARCHIVED', archivedAt: now },
     restore: { status: existing.scheduledAt ? 'SCHEDULED' : 'DRAFT', deletedAt: null, cancelledAt: null, archivedAt: null },
-    start: { status: 'LIVE', startedAt: existing.startedAt || now },
+    start: { status: 'LIVE', startedAt: existing.startedAt || now, livekitConfirmedAt: validStoredDate(data.livekitConfirmedAt) || now },
     complete: { status: 'COMPLETED', completedAt: now },
     delete: { status: 'ARCHIVED', deletedAt: now },
   };

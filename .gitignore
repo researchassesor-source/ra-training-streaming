@@ -4,3 +4,5 @@ bin/
 *.log
 
 .local-data/
+.local-runtime/
+.tools/

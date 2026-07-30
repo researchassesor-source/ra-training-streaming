@@ -24,6 +24,7 @@ const {
   updateDisplayName,
 } = require('./room-session');
 const { createRateLimiter } = require('./rate-limit');
+const { createLiveKitStatusProbe } = require('./livekit-status');
 const {
   AppError,
   asyncHandler,
@@ -113,6 +114,7 @@ function createApp(overrides = {}) {
   const roomService = services.roomService;
   const egressClient = services.egressClient;
   const transcriptionProvider = services.transcriptionProvider;
+  const livekitProbe = overrides.livekitProbe || createLiveKitStatusProbe({ roomService, wsUrl: LIVEKIT_WS_URL });
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -135,6 +137,7 @@ function createApp(overrides = {}) {
     },
   }));
   app.use('/vendor/livekit-client', express.static(path.join(__dirname, '..', 'node_modules', 'livekit-client', 'dist')));
+  app.use('/docs', express.static(path.join(__dirname, '..', 'docs'), { etag: true, maxAge: 0 }));
 
   const loginLimiter = createRateLimiter({
     windowMs: config.loginRateLimitWindowMs,
@@ -332,14 +335,14 @@ function createApp(overrides = {}) {
 
   app.post('/api/meetings/:room/actions/:action', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
     const action = req.params.action;
-    const allowed = new Set(['reschedule', 'cancel', 'archive', 'restore', 'start', 'complete']);
+    const allowed = new Set(['reschedule', 'cancel', 'archive', 'restore', 'complete']);
     if (!allowed.has(action)) throw new AppError(400, 'Acción no válida', 'VALIDATION_ERROR');
     const updated = await meetings.transitionMeeting(req.params.room, action, req.body || {});
     if (action === 'cancel' || action === 'archive' || action === 'complete') await roomRegistry.revokeRoom(updated.room);
-    if (action === 'restore' || action === 'start') await roomRegistry.createRoom(updated.room, { meetingId: updated.id });
+    if (action === 'restore') await roomRegistry.createRoom(updated.room, { meetingId: updated.id });
     const auditAction = {
       reschedule: 'MEETING_RESCHEDULED', cancel: 'MEETING_CANCELLED', archive: 'MEETING_ARCHIVED',
-      restore: 'MEETING_RESTORED', start: 'MEETING_STARTED', complete: 'MEETING_ENDED',
+      restore: 'MEETING_RESTORED', complete: 'ROOM_ENDED',
     }[action];
     await safeAudit({ actor: req.auth.u, action: auditAction, target: updated.id, room: updated.room, ...auditContext(req) });
     res.json(updated);
@@ -383,12 +386,20 @@ function createApp(overrides = {}) {
     if (req.meeting.deletedAt || ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(req.meeting.status)) {
       throw new AppError(409, 'La reunión no se puede iniciar en su estado actual', 'MEETING_NOT_JOINABLE');
     }
-    const updated = req.meeting.status === 'LIVE' ? req.meeting : await meetings.transitionMeeting(req.params.room, 'start');
-    await roomRegistry.createRoom(updated.room, { meetingId: updated.id });
-    const created = createRoomSession({ room: updated.room, meetingId: updated.id, role: req.auth.role, username: req.auth.u, displayName: req.auth.u });
+    await safeAudit({ actor: req.auth.u, action: 'ROOM_OPEN_ATTEMPT', target: req.meeting.id, room: req.meeting.room, ...auditContext(req) });
+    const livekit = await livekitProbe({ fresh: true });
+    if (!livekit.available) {
+      await safeAudit({ actor: req.auth.u, action: 'ROOM_CONNECTION_FAILED', target: req.meeting.id, room: req.meeting.room, metadata: { reason: livekit.errorCode || livekit.state }, ...auditContext(req) });
+      throw new AppError(503, 'El servicio de videoconferencia no está disponible. Inicia LiveKit local antes de abrir la sala.', 'LIVEKIT_UNAVAILABLE');
+    }
+    await roomRegistry.createRoom(req.meeting.room, { meetingId: req.meeting.id });
+    const created = createRoomSession({ room: req.meeting.room, meetingId: req.meeting.id, role: req.auth.role, username: req.auth.u, displayName: req.auth.u });
     res.setHeader('Set-Cookie', roomCookie(created.token));
-    await safeAudit({ actor: req.auth.u, action: 'MEETING_STARTED', target: updated.id, room: updated.room, ...auditContext(req) });
     res.json({ redirect: '/presenter.html' });
+  }));
+
+  app.get('/api/livekit/status', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (_req, res) => {
+    res.json(await livekitProbe({ fresh: true }));
   }));
 
   app.get('/i/:token', asyncHandler(async (req, res) => {
@@ -437,6 +448,10 @@ function createApp(overrides = {}) {
     });
   }));
 
+  app.get('/api/room/livekit-status', requireRoomSession, asyncHandler(async (_req, res) => {
+    res.json(await livekitProbe({ fresh: true }));
+  }));
+
   app.patch('/api/room-session/profile', requireRoomSession, requireRoomCsrf, asyncHandler(async (req, res) => {
     const displayName = sanitizeText(req.body?.displayName, { field: 'displayName', min: 2, max: 80, required: true });
     const updated = updateDisplayName(req.roomSession, displayName);
@@ -456,6 +471,7 @@ function createApp(overrides = {}) {
     }
     const access = await roomRegistry.checkAccess(meeting.room);
     if (!access.allowed) throw new AppError(403, 'Tu acceso a la sala fue retirado', access.reason);
+    if (req.roomSession.role === 'VIEWER' && meeting.status !== 'LIVE') throw new AppError(409, 'La reunión todavía no ha comenzado', 'MEETING_NOT_LIVE');
     const canPublish = ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role);
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: req.roomSession.identity,
@@ -499,6 +515,25 @@ function createApp(overrides = {}) {
     if (!caller) throw new AppError(403, 'Debes estar conectado a la sala para realizar esta acción', 'NOT_IN_ROOM');
     return participants;
   }
+
+  app.post('/api/room/connection', requireRoomSession, requireRoomCsrf, roomMeeting, asyncHandler(async (req, res) => {
+    const event = String(req.body?.event || 'connected').toLowerCase();
+    if (!['attempt', 'retry', 'failed', 'connected'].includes(event)) throw new AppError(400, 'Evento de conexión no válido', 'VALIDATION_ERROR');
+    const action = { attempt: 'ROOM_OPEN_ATTEMPT', retry: 'ROOM_RETRY', failed: 'ROOM_CONNECTION_FAILED' }[event];
+    if (action) {
+      await safeAudit({ actor: req.roomSession.identity, action, target: req.meeting.id, room: req.meeting.room, metadata: { reason: String(req.body?.reason || '').slice(0, 80) }, ...auditContext(req) });
+      return res.json({ acknowledged: true, meetingStatus: req.meeting.status });
+    }
+    if (!['ADMIN', 'ORGANIZER', 'PANELIST'].includes(req.roomSession.role)) throw new AppError(403, 'Solo un organizador o panelista puede iniciar la reunión', 'ROOM_FORBIDDEN');
+    const participants = await roomService.listParticipants(req.roomSession.room);
+    if (!participants.some((participant) => participant.identity === req.roomSession.identity)) {
+      throw new AppError(409, 'LiveKit todavía no confirma tu conexión', 'LIVEKIT_PARTICIPANT_NOT_CONFIRMED');
+    }
+    const wasLive = req.meeting.status === 'LIVE';
+    const updated = wasLive ? req.meeting : await meetings.transitionMeeting(req.meeting.room, 'start', { livekitConfirmedAt: new Date().toISOString() });
+    if (!wasLive) await safeAudit({ actor: req.roomSession.identity, action: 'ROOM_CONNECTED', target: updated.id, room: updated.room, ...auditContext(req) });
+    res.json({ connected: true, meetingStatus: updated.status, started: !wasLive });
+  }));
 
   async function relayRoomData(req, message, destinationIdentities) {
     const data = Buffer.from(JSON.stringify(message), 'utf8');
@@ -720,7 +755,7 @@ function createApp(overrides = {}) {
       if (!/not found/i.test(error.message || '')) throw error;
     });
     res.setHeader('Set-Cookie', clearRoomCookie());
-    await safeAudit({ actor: req.roomSession.identity, action: 'MEETING_ENDED', target: updated.id, room: updated.room, ...auditContext(req) });
+    await safeAudit({ actor: req.roomSession.identity, action: 'ROOM_ENDED', target: updated.id, room: updated.room, ...auditContext(req) });
     res.json({ ended: true });
   }));
 
@@ -864,17 +899,19 @@ function createApp(overrides = {}) {
     const allMeetings = (await meetings.listMeetings({ includeDeleted: false })).filter((meeting) => meetingVisibleTo(req.auth, meeting));
     const today = localDateKey();
     const users = req.auth.role === 'ADMIN' ? await auth.listUsers() : [];
+    const since = Date.now() - 24 * 60 * 60_000;
     const recentErrors = req.auth.role === 'ADMIN'
-      ? (await audit.listEvents({ limit: 100 })).filter((item) => item.action === 'AUTH_LOGIN_FAILED').length
+      ? (await audit.listEvents({ limit: 1_000 })).filter((item) => item.action === 'AUTH_LOGIN_FAILED' && new Date(item.timestamp).getTime() >= since).length
       : null;
+    const livekit = await livekitProbe();
     res.json({
-      meetingsToday: allMeetings.filter((meeting) => localDateKey(meeting.scheduledAt) === today).length,
-      activeMeetings: allMeetings.filter((meeting) => meeting.status === 'LIVE').length,
+      meetingsToday: allMeetings.filter((meeting) => meeting.status === 'SCHEDULED' && localDateKey(meeting.scheduledAt) === today).length,
+      activeMeetings: livekit.available ? allMeetings.filter((meeting) => meeting.status === 'LIVE' && meeting.livekitConfirmedAt).length : 0,
       nextMeeting: allMeetings.filter((meeting) => meeting.scheduledAt && new Date(meeting.scheduledAt) >= new Date() && !['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)).sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt))[0] || null,
       activeCredentials: users.filter((user) => user.active).length,
       recentErrors,
       storage: storageConfigured ? 'configured' : 'local',
-      livekit: LIVEKIT_WS_URL.startsWith('ws://localhost') ? 'local' : 'configured',
+      livekit,
       recordingConfigured,
       transcriptionConfigured: transcriptionProvider.isConfigured(),
       transcriptionProvider: config.transcriptionProvider,
@@ -890,9 +927,10 @@ function createApp(overrides = {}) {
     });
   }));
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, storage: storageConfigured ? 's3' : 'local', livekitConfigured: LIVEKIT_API_KEY !== 'devkey', recordingConfigured, transcriptionConfigured: transcriptionProvider.isConfigured() });
-  });
+  app.get('/api/health', asyncHandler(async (_req, res) => {
+    const livekit = await livekitProbe();
+    res.json({ ok: true, storage: storageConfigured ? 's3' : 'local', livekit, recordingConfigured, transcriptionConfigured: transcriptionProvider.isConfigured() });
+  }));
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint no encontrado', code: 'NOT_FOUND' }));
   app.use((error, _req, res, _next) => {
@@ -911,6 +949,7 @@ function createApp(overrides = {}) {
   });
 
   app.locals.services = services;
+  app.locals.livekitProbe = livekitProbe;
   app.locals.rateLimiters = { loginLimiter, meetingLimiter, transcriptionLimiter, chatLimiter };
   return app;
 }

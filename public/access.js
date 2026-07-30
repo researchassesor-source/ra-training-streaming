@@ -29,3 +29,11 @@ function updateRoomProfile(displayName, csrfToken) {
 function requestToken() {
   return roomRequest('/api/token');
 }
+
+function requestLiveKitStatus() {
+  return roomRequest('/api/room/livekit-status');
+}
+
+function reportRoomConnection(event, csrfToken, reason = '') {
+  return roomRequest('/api/room/connection', { method: 'POST', body: { event, reason } }, csrfToken);
+}
