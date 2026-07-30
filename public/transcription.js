@@ -58,7 +58,7 @@ function renderSegments() {
   const segments = filteredSegments();
   if (!segments.length) {
     const empty = document.createElement('div'); empty.className = 'empty-state branded-empty';
-    const image = document.createElement('img'); image.src = 'assets/streaming-app-logo-192.png'; image.alt = 'Icono de R.A. Training Streaming';
+    const image = document.createElement('img'); image.src = 'assets/icon-192.png'; image.alt = 'Icono de R.A. Training Streaming';
     const message = document.createElement('strong'); message.textContent = COMPLETE.has(page.transcript?.status) ? 'No hay intervenciones que coincidan con la búsqueda.' : 'La transcripción todavía no contiene intervenciones.';
     empty.append(image, message); container.appendChild(empty); return;
   }

@@ -38,7 +38,7 @@ function attachCompanionWindow(button, model, actions = {}) {
   function build(documentRef) {
     documentRef.head.innerHTML = `<meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="${location.origin}/style.css">`;
     documentRef.body.innerHTML = `<main id="companionRoot" class="companion-window">
-      <div class="companion-heading"><img src="${location.origin}/assets/streaming-app-logo-192.png" alt="Icono de R.A. Training Streaming"><span class="companion-live" data-live></span></div><h1 data-title></h1>
+      <div class="companion-heading"><img src="${location.origin}/assets/icon-192.png" alt="Icono de R.A. Training Streaming"><span class="companion-live" data-live></span></div><h1 data-title></h1>
       <div class="companion-metrics"><span data-participants></span><span data-hands></span><span data-messages></span><span data-questions></span></div>
       <p data-connection class="muted"></p>
       <div class="companion-actions"><button data-mic></button><button data-camera></button><button data-chat>Chat</button><button data-return>Volver</button></div>

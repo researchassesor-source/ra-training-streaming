@@ -4,9 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
-  <title>Panel organizador | Streaming</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/streaming-app-logo-32.png" />
-  <link rel="apple-touch-icon" sizes="180x180" href="assets/streaming-app-logo-180.png" />
+  <title>Iniciar sesión | R.A. Training Streaming</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -14,6 +15,11 @@
   <main class="login-shell">
     <section class="login-visual" aria-label="Plataforma R.A. Training Streaming">
       <div class="login-pixel-field" aria-hidden="true"></div>
+      <div id="brand"></div>
+      <picture class="login-mascot" aria-hidden="true">
+        <source srcset="assets/mascot-login.webp" type="image/webp" />
+        <img src="assets/mascot-login.png" alt="" />
+      </picture>
       <div class="login-message">
         <p class="eyebrow">Plataforma de capacitación</p>
         <h1>Capacitaciones en vivo, administradas con seguridad.</h1>
@@ -21,8 +27,7 @@
       </div>
     </section>
     <section class="login-card" aria-labelledby="loginTitle">
-      <div id="brand"></div>
-      <p class="eyebrow">Panel organizador</p>
+      <p class="eyebrow">Acceso seguro</p>
       <h2 id="loginTitle">Iniciar sesión</h2>
       <p class="muted">Usa tus credenciales administrativas. La sesión se guarda en una cookie segura y no en el navegador.</p>
       <form id="loginForm" novalidate>

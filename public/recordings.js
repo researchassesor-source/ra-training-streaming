@@ -10,7 +10,7 @@ async function loadRecordings() {
     const data = await response.json();
     if (!response.ok) { const error = new Error(data.error || 'No se pudieron cargar las grabaciones'); error.code = data.code; throw error; }
     list.replaceChildren();
-    if (!data.items.length) { list.className = 'empty-state branded-empty'; const image = document.createElement('img'); image.src = 'assets/streaming-app-logo-192.png'; image.alt = 'Icono de R.A. Training Streaming'; const message = document.createElement('strong'); message.textContent = 'No hay grabaciones disponibles.'; list.append(image, message); return; }
+    if (!data.items.length) { list.className = 'empty-state branded-empty'; const image = document.createElement('img'); image.src = 'assets/icon-192.png'; image.alt = 'Icono de R.A. Training Streaming'; const message = document.createElement('strong'); message.textContent = 'No hay grabaciones disponibles.'; list.append(image, message); return; }
     list.className = 'recordings-list';
     for (const item of data.items) {
       const card = document.createElement('article'); card.className = 'recording-card';
@@ -25,7 +25,7 @@ async function loadRecordings() {
     }
   } catch (error) {
     list.replaceChildren(); list.className = error.code === 'STORAGE_NOT_CONFIGURED' ? 'empty-state branded-empty' : 'form-error';
-    if (error.code === 'STORAGE_NOT_CONFIGURED') { const image = document.createElement('img'); image.src = 'assets/streaming-app-logo-192.png'; image.alt = 'Icono de R.A. Training Streaming'; const title = document.createElement('strong'); title.textContent = 'Las grabaciones no están disponibles en este entorno local.'; const detail = document.createElement('span'); detail.textContent = 'Configura almacenamiento compatible con S3 para habilitarlas.'; list.append(image, title, detail); }
+    if (error.code === 'STORAGE_NOT_CONFIGURED') { const image = document.createElement('img'); image.src = 'assets/icon-192.png'; image.alt = 'Icono de R.A. Training Streaming'; const title = document.createElement('strong'); title.textContent = 'Las grabaciones no están disponibles en este entorno local.'; const detail = document.createElement('span'); detail.textContent = 'Configura almacenamiento compatible con S3/R2 y LiveKit Egress para habilitarlas.'; const actions = document.createElement('div'); actions.className = 'dialog-actions'; const settings = document.createElement('a'); settings.href = '/dashboard.html#settings'; settings.className = 'button secondary compact'; settings.textContent = 'Ver configuración'; const guide = document.createElement('a'); guide.href = '/docs/LOCAL_DEVELOPMENT.md'; guide.className = 'button secondary compact'; guide.textContent = 'Consultar guía'; guide.target = '_blank'; guide.rel = 'noopener'; actions.append(settings, guide); list.append(image, title, detail, actions); }
     else list.textContent = error.message;
   }
 }

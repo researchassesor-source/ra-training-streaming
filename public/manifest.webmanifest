@@ -1,7 +1,7 @@
 {
   "name": "R.A. Training Streaming",
   "short_name": "R.A. Streaming",
-  "description": "Plataforma segura de reuniones y capacitaciones de Research Assessor & Training.",
+  "description": "Plataforma segura de reuniones y capacitaciones de R.A. Training.",
   "lang": "es",
   "start_url": "/",
   "scope": "/",
@@ -10,13 +10,13 @@
   "theme_color": "#ff6b1a",
   "icons": [
     {
-      "src": "/assets/streaming-app-logo-192.png",
+      "src": "/assets/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/assets/streaming-app-logo-512.png",
+      "src": "/assets/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
