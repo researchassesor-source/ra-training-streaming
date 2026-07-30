@@ -8,7 +8,7 @@ function createMeetingNotifier(container) {
     return Notification.permission;
   }
 
-  function renderToast(key, { title, message, tone = 'info', actionLabel, onAction, duration = 5_000 }) {
+  function renderToast(key, { title, message, tone = 'info', actionLabel, onAction, secondaryLabel, onSecondary, duration = 5_000 }) {
     const existing = active.get(key);
     if (existing) {
       existing.count += 1;
@@ -38,6 +38,14 @@ function createMeetingNotifier(container) {
       action.textContent = actionLabel;
       action.onclick = () => { onAction(); dismiss(key); };
       root.appendChild(action);
+    }
+    if (secondaryLabel && onSecondary) {
+      const secondary = document.createElement('button');
+      secondary.type = 'button';
+      secondary.className = 'text-button secondary-action';
+      secondary.textContent = secondaryLabel;
+      secondary.onclick = () => { onSecondary(); dismiss(key); };
+      root.appendChild(secondary);
     }
     container.appendChild(root);
     const record = { root, message: body, count: 1, timer: setTimeout(() => dismiss(key), duration) };

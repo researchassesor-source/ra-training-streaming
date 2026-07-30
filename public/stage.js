@@ -1,6 +1,20 @@
+function normalizeTrackSource(source) {
+  return String(source || '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function classifyTrackSource(publication) {
+  const source = normalizeTrackSource(publication?.source);
+  if (source.includes('screenshareaudio')) return 'screen-audio';
+  if (source.includes('screenshare') || source === 'screen') return 'screen';
+  if (source.includes('camera')) return 'camera';
+  if (source.includes('microphone')) return 'microphone';
+  return publication?.track?.kind === 'audio' ? 'audio' : 'camera';
+}
+
 function createStage(containerElement, placeholderText, onSpotlightChange) {
   const tiles = new Map();
   const participantStates = new Map();
+  const screenAudioStates = new Map();
   let spotlightActive = false;
   const placeholder = document.createElement('div');
   placeholder.className = 'stage-placeholder';
@@ -62,7 +76,7 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
     mic.setAttribute('aria-label', 'Micrófono apagado');
     mic.textContent = 'Mic apagado';
     root.append(video, avatar, labelElement, mic);
-    const entry = { root, video, avatar, labelElement, mic, identity, source, local: options.local === true, dragBound: false, dragPosition: null };
+    const entry = { root, video, avatar, labelElement, mic, identity, source, track: null, local: options.local === true, dragBound: false, dragPosition: null };
     tiles.set(key, entry);
     makeContainedDraggable(entry);
     return entry;
@@ -71,7 +85,7 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
   function applyParticipantState(entry) {
     const state = participantStates.get(entry.identity) || {};
     if (entry.source === 'camera') {
-      entry.root.classList.toggle('camera-off', !entry.video.srcObject);
+      entry.root.classList.toggle('camera-off', !entry.root.classList.contains('has-video'));
       entry.mic.hidden = state.microphone === true;
       entry.mic.textContent = state.speaking ? 'Hablando' : 'Mic apagado';
       entry.root.classList.toggle('is-speaking', state.speaking === true);
@@ -95,20 +109,29 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
 
   function setTrack(identity, label, source, track, options = {}) {
     const entry = tile(identity, source, label, options);
+    if (!track || track.kind !== 'video') return false;
+    if (entry.track === track && entry.root.classList.contains('has-video')) return true;
+    if (entry.track && entry.track !== track) entry.track.detach?.(entry.video);
+    entry.track = track;
     entry.local = options.local === true || participantStates.get(identity)?.local === true;
     entry.labelElement.textContent = label;
     entry.avatar.textContent = initials(label);
     entry.video.hidden = false;
+    entry.root.classList.remove('self-share-placeholder');
     entry.root.querySelector('.tile-self-placeholder')?.remove();
     track.attach(entry.video);
+    entry.root.classList.add('has-video');
     entry.video.muted = options.muted === true;
     entry.video.play?.().catch(() => {});
     applyParticipantState(entry);
+    if (source === 'screen') setScreenAudio(identity, screenAudioStates.get(identity) === true);
     layout();
+    return true;
   }
 
   function setSelfSharePlaceholder(identity, label, { audio = false } = {}) {
     const entry = tile(identity, 'screen', label, { local: true });
+    entry.root.classList.add('self-share-placeholder');
     entry.video.hidden = true;
     let message = entry.root.querySelector('.tile-self-placeholder');
     if (!message) {
@@ -121,6 +144,7 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
   }
 
   function setScreenAudio(identity, active) {
+    screenAudioStates.set(identity, active === true);
     const entry = tiles.get(`${identity}|screen`);
     if (!entry) return;
     let indicator = entry.root.querySelector('.screen-audio-indicator');
@@ -137,6 +161,9 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
     const key = `${identity}|${source}`;
     const entry = tiles.get(key);
     if (!entry) return;
+    entry.track?.detach?.(entry.video);
+    entry.track = null;
+    entry.root.classList.remove('has-video');
     if (source === 'camera' && participantStates.get(identity)?.keepVisible) {
       entry.video.srcObject = null;
       applyParticipantState(entry);
@@ -150,8 +177,11 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
 
   function removeParticipant(identity) {
     participantStates.delete(identity);
+    screenAudioStates.delete(identity);
     for (const source of ['camera', 'screen']) {
       const entry = tiles.get(`${identity}|${source}`);
+      entry?.track?.detach?.(entry.video);
+      if (entry?.video) entry.video.srcObject = null;
       entry?.root.remove();
       tiles.delete(`${identity}|${source}`);
     }
@@ -220,46 +250,94 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
 }
 
 function attachRemoteStageEvents(room, stage) {
+  const audioElements = new Map();
   if (!document.documentElement.dataset.mediaResumeBound) {
     document.documentElement.dataset.mediaResumeBound = 'true';
     document.addEventListener('click', () => document.querySelectorAll('video, audio').forEach((media) => { if (media.paused) media.play?.().catch(() => {}); }));
   }
   const handlers = {
     subscribed(track, publication, participant) {
+      const source = classifyTrackSource(publication);
       if (track.kind === 'audio') {
         const element = track.attach();
+        const key = `${participant.identity}|${source}`;
+        const previous = audioElements.get(key);
+        if (previous?.element && previous.element !== element) previous.track?.detach?.(previous.element);
+        previous?.element?.remove();
+        element.classList.add('room-remote-audio');
+        element.dataset.identity = participant.identity;
+        element.dataset.source = source;
+        document.body.appendChild(element);
+        audioElements.set(key, { element, track });
         const speaker = document.getElementById('speakerSelect')?.value;
         if (speaker) element.setSinkId?.(speaker).catch(() => {});
-        if (publication.source === LivekitClient.Track.Source.ScreenShareAudio) stage.setScreenAudio(participant.identity, true);
+        if (source === 'screen-audio') stage.setScreenAudio(participant.identity, true);
         return;
       }
-      const source = publication.source === LivekitClient.Track.Source.ScreenShare ? 'screen' : 'camera';
       const label = participant.name || participant.identity;
-      stage.setParticipantState(participant.identity, label, { microphone: !participant.getTrackPublication?.(LivekitClient.Track.Source.Microphone)?.isMuted });
+      stage.setParticipantState(participant.identity, label, { microphone: publicationHasActiveMicrophone(participant), keepVisible: true });
       stage.setTrack(participant.identity, source === 'screen' ? `${label} (pantalla)` : label, source, track);
     },
     unsubscribed(track, publication, participant) {
-      if (track.kind !== 'audio') stage.removeTrack(participant.identity, publication.source === LivekitClient.Track.Source.ScreenShare ? 'screen' : 'camera');
-      else if (publication.source === LivekitClient.Track.Source.ScreenShareAudio) stage.setScreenAudio(participant.identity, false);
+      const source = classifyTrackSource(publication);
+      if (track.kind !== 'audio') stage.removeTrack(participant.identity, source);
+      else {
+        const key = `${participant.identity}|${source}`;
+        const attached = audioElements.get(key);
+        attached?.track?.detach?.(attached.element);
+        attached?.element?.remove();
+        audioElements.delete(key);
+        if (source === 'screen-audio') stage.setScreenAudio(participant.identity, false);
+      }
       track.detach?.().forEach?.((element) => element.remove());
+    },
+    published(publication, participant) {
+      const source = classifyTrackSource(publication);
+      if (publication.track?.kind === 'video' && publication.isMuted !== true) handlers.subscribed(publication.track, publication, participant);
+      else if (source === 'camera') stage.setParticipantState(participant.identity, participant.name || participant.identity, { keepVisible: true });
+    },
+    unpublished(publication, participant) {
+      const source = classifyTrackSource(publication);
+      if (source === 'screen-audio') stage.setScreenAudio(participant.identity, false);
+      else if (source === 'screen' || source === 'camera') stage.removeTrack(participant.identity, source);
     },
     participantDisconnected(participant) { stage.removeParticipant(participant.identity); },
     activeSpeakers(participants) { stage.setSpeaking(participants.map((participant) => participant.identity)); },
     trackMuted(publication, participant) {
-      if (publication.source === LivekitClient.Track.Source.Microphone) stage.setParticipantState(participant.identity, participant.name || participant.identity, { microphone: false });
+      const source = classifyTrackSource(publication);
+      if (source === 'microphone') stage.setParticipantState(participant.identity, participant.name || participant.identity, { microphone: false, keepVisible: true });
+      if (source === 'camera' || source === 'screen') stage.removeTrack(participant.identity, source);
     },
     trackUnmuted(publication, participant) {
-      if (publication.source === LivekitClient.Track.Source.Microphone) stage.setParticipantState(participant.identity, participant.name || participant.identity, { microphone: true });
+      const source = classifyTrackSource(publication);
+      if (source === 'microphone') stage.setParticipantState(participant.identity, participant.name || participant.identity, { microphone: true, keepVisible: true });
+      if ((source === 'camera' || source === 'screen') && publication.track) handlers.subscribed(publication.track, publication, participant);
     },
   };
+  function publicationHasActiveMicrophone(participant) {
+    const publication = participant.getTrackPublication?.(LivekitClient.Track.Source.Microphone);
+    const mediaTrack = publication?.track?.mediaStreamTrack;
+    return Boolean(publication?.track && !publication.isMuted && (!mediaTrack || mediaTrack.readyState === 'live'));
+  }
   const bindings = [
     [LivekitClient.RoomEvent.TrackSubscribed, handlers.subscribed],
     [LivekitClient.RoomEvent.TrackUnsubscribed, handlers.unsubscribed],
+    [LivekitClient.RoomEvent.TrackPublished, handlers.published],
+    [LivekitClient.RoomEvent.TrackUnpublished, handlers.unpublished],
     [LivekitClient.RoomEvent.ParticipantDisconnected, handlers.participantDisconnected],
     [LivekitClient.RoomEvent.ActiveSpeakersChanged, handlers.activeSpeakers],
     [LivekitClient.RoomEvent.TrackMuted, handlers.trackMuted],
     [LivekitClient.RoomEvent.TrackUnmuted, handlers.trackUnmuted],
   ].filter(([event]) => event);
   bindings.forEach(([event, handler]) => room.on(event, handler));
-  return { dispose() { bindings.forEach(([event, handler]) => room.off(event, handler)); } };
+  return { dispose() {
+    bindings.forEach(([event, handler]) => room.off(event, handler));
+    for (const { element, track } of audioElements.values()) {
+      track?.detach?.(element);
+      element.remove();
+    }
+    audioElements.clear();
+  } };
 }
+
+if (typeof module === 'object' && module.exports) module.exports = { classifyTrackSource, normalizeTrackSource };

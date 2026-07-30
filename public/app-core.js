@@ -283,6 +283,13 @@
     }
   }
 
+  function isLivePublication(publication, kind) {
+    const track = publication?.track;
+    if (!track || publication.isMuted === true || (kind && track.kind !== kind)) return false;
+    const mediaTrack = track.mediaStreamTrack;
+    return !mediaTrack || mediaTrack.readyState === 'live';
+  }
+
   return {
     CONNECTION_STATES,
     MEETING_DEFAULTS,
@@ -296,6 +303,7 @@
     calendarRange,
     localDateKey,
     meetingsForLocalDay,
+    isLivePublication,
     normalizeMeeting,
     roleLabel,
     roomConnectionErrorMessage,

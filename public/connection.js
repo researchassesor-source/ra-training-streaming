@@ -23,6 +23,7 @@ function attachConnectionUI(room, { statusBadge, countBadge, qualityBadge, float
     participantConnected(participant) { updateCount(); playJoinSound(); onParticipantEvent?.('joined', participant); },
     participantDisconnected(participant) { updateCount(); playLeaveSound(); onParticipantEvent?.('left', participant); },
     permissionsChanged() { onParticipantsChanged?.(participants()); },
+    mediaChanged() { onParticipantsChanged?.(participants()); },
     reconnecting() { machine.set('reconnecting'); playAlert('unstable'); systemNotification('Problema de conexión', 'Intentando reconectar con la reunión.'); },
     reconnected() { machine.set('connected'); updateCount(); playAlert('reconnected'); onReconnected?.(); },
     disconnected(reason) { machine.set(String(reason || '').toLowerCase().includes('removed') ? 'removed' : 'disconnected'); playAlert('critical'); },
@@ -45,6 +46,17 @@ function attachConnectionUI(room, { statusBadge, countBadge, qualityBadge, float
   room.on(LivekitClient.RoomEvent.ParticipantConnected, handlers.participantConnected);
   room.on(LivekitClient.RoomEvent.ParticipantDisconnected, handlers.participantDisconnected);
   room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, handlers.permissionsChanged);
+  const mediaEvents = [
+    LivekitClient.RoomEvent.TrackPublished,
+    LivekitClient.RoomEvent.TrackUnpublished,
+    LivekitClient.RoomEvent.TrackSubscribed,
+    LivekitClient.RoomEvent.TrackUnsubscribed,
+    LivekitClient.RoomEvent.TrackMuted,
+    LivekitClient.RoomEvent.TrackUnmuted,
+    LivekitClient.RoomEvent.LocalTrackPublished,
+    LivekitClient.RoomEvent.LocalTrackUnpublished,
+  ].filter(Boolean);
+  mediaEvents.forEach((event) => room.on(event, handlers.mediaChanged));
   room.on(LivekitClient.RoomEvent.Reconnecting, handlers.reconnecting);
   room.on(LivekitClient.RoomEvent.Reconnected, handlers.reconnected);
   room.on(LivekitClient.RoomEvent.Disconnected, handlers.disconnected);
@@ -55,6 +67,7 @@ function attachConnectionUI(room, { statusBadge, countBadge, qualityBadge, float
     updateCount,
     dispose() {
       for (const [name, handler] of Object.entries(handlers)) {
+        if (name === 'mediaChanged') continue;
         const eventName = {
           participantConnected: LivekitClient.RoomEvent.ParticipantConnected,
           participantDisconnected: LivekitClient.RoomEvent.ParticipantDisconnected,
@@ -66,6 +79,7 @@ function attachConnectionUI(room, { statusBadge, countBadge, qualityBadge, float
         }[name];
         if (eventName) room.off(eventName, handler);
       }
+      mediaEvents.forEach((event) => room.off(event, handlers.mediaChanged));
     },
   };
 }
