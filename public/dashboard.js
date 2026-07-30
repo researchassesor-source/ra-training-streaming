@@ -16,6 +16,9 @@ const STATUS_LABELS = {
   CANCELLED: 'Cancelada', ARCHIVED: 'Archivada',
 };
 const TYPE_LABELS = { WEBINAR: 'Webinar', SESSION: 'Sesión', CLASS: 'Clase' };
+const ROLE_LABELS = { ADMIN: 'Administrador', ORGANIZER: 'Organizador', PANELIST: 'Panelista', VIEWER: 'Asistente' };
+const ENVIRONMENT_LABELS = { development: 'Desarrollo', production: 'Producción', test: 'Pruebas' };
+const PROVIDER_LABELS = { mock: 'Simulación local', http: 'Proveedor HTTP' };
 const AUDIT_LABELS = {
   AUTH_LOGIN: 'Inicio de sesión', AUTH_LOGIN_FAILED: 'Inicio de sesión fallido', AUTH_LOGOUT: 'Cierre de sesión',
   USER_CREATED: 'Usuario creado', USER_UPDATED: 'Usuario actualizado', USER_DEACTIVATED: 'Usuario desactivado',
@@ -62,7 +65,8 @@ function askConfirmation({ title, message, confirmLabel = 'Confirmar', danger = 
 function requestPassword(username) {
   const dialog = document.getElementById('passwordDialog');
   dialog.querySelector('[data-password-user]').textContent = username;
-  const input = dialog.querySelector('input'); input.value = '';
+  const input = dialog.querySelector('input'); input.value = ''; input.type = 'password';
+  RATPasswordToggle.sync(dialog);
   const error = dialog.querySelector('.form-error'); error.textContent = '';
   return new Promise((resolve) => {
     const close = () => { dialog.removeEventListener('close', close); resolve(dialog.returnValue === 'confirm' ? input.value : ''); };
@@ -434,7 +438,7 @@ function renderCalendar() {
 function renderUpcoming() {
   const container = document.getElementById('upcomingList');
   container.replaceChildren();
-  const next = state.meetings.filter((meeting) => meeting.scheduledAt && new Date(meeting.scheduledAt) >= new Date() && !['CANCELLED', 'ARCHIVED'].includes(meeting.status)).slice(0, 5);
+  const next = state.meetings.filter((meeting) => meeting.scheduledAt && new Date(meeting.scheduledAt) >= new Date() && !['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)).slice(0, 5);
   if (!next.length) return container.appendChild(textElement('p', 'No hay reuniones próximas.', 'empty-state'));
   for (const meeting of next) {
     const row = document.createElement('button'); row.type = 'button'; row.className = 'compact-list-item';
@@ -451,7 +455,7 @@ function summaryCard(label, value, detail) {
 }
 
 function serviceLabel(value) {
-  return ({ configured: 'Configurado', local: 'Local', s3: 'S3/R2' })[value] || String(value || 'No disponible');
+  return ({ configured: 'Configurado', local: 'Local', s3: 'S3/R2', disabled: 'Deshabilitado' })[value] || String(value || 'No disponible');
 }
 
 async function loadSummary() {
@@ -461,20 +465,22 @@ async function loadSummary() {
     summaryCard('Reuniones de hoy', data.meetingsToday, 'programadas'),
     summaryCard('Reuniones activas', data.activeMeetings, 'en vivo ahora'),
     summaryCard('Próxima capacitación', data.nextMeeting ? (RATCore.validDate(data.nextMeeting.scheduledAt)?.toLocaleDateString('es-EC') || 'Fecha por definir') : '—', data.nextMeeting?.title || 'Sin próximas reuniones'),
-    summaryCard('Credenciales activas', state.user.role === 'ADMIN' ? data.activeCredentials : '—', state.user.role === 'ADMIN' ? 'usuarios habilitados' : 'Visible para ADMIN'),
-    summaryCard('Errores recientes', data.recentErrors, data.recentErrors === null ? 'Visible para ADMIN' : 'intentos fallidos registrados')
+    summaryCard('Credenciales activas', state.user.role === 'ADMIN' ? data.activeCredentials : '—', state.user.role === 'ADMIN' ? 'usuarios habilitados' : 'Visible para administradores'),
+    summaryCard('Errores recientes', data.recentErrors, data.recentErrors === null ? 'Visible para administradores' : 'intentos fallidos registrados')
   );
   const services = document.getElementById('serviceStatus'); services.replaceChildren();
   for (const [name, value] of [['Almacenamiento', serviceLabel(data.storage)], ['LiveKit', serviceLabel(data.livekit)], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada'], ['Transcripción', data.transcriptionConfigured ? 'Configurada' : 'Deshabilitada']]) {
     const row = document.createElement('div'); row.append(textElement('span', name), textElement('strong', value)); services.appendChild(row);
   }
   const settings = document.getElementById('settingsIntegrations'); settings.replaceChildren();
+  const environment = String(data.environment || 'development').toLowerCase();
+  const provider = String(data.transcriptionProvider || '').toLowerCase();
   const rows = [
-    ['Entorno', data.environment || 'development'], ['Modo', data.environment === 'production' ? 'Producción' : 'Local/desarrollo'],
+    ['Entorno', ENVIRONMENT_LABELS[environment] || 'Desarrollo'], ['Modo', environment === 'production' ? 'Producción' : 'Local / desarrollo'],
     ['Almacenamiento', serviceLabel(data.storage)], ['LiveKit', serviceLabel(data.livekit)], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada'],
-    ['Transcripción', data.transcriptionConfigured ? `Configurada (${data.transcriptionProvider})` : 'Deshabilitada'],
+    ['Transcripción', data.transcriptionConfigured ? `Configurada · ${PROVIDER_LABELS[provider] || 'Proveedor externo'}` : 'Deshabilitada'],
     ['Cookies seguras', data.security?.secureCookies ? 'Activadas' : 'Solo desarrollo local'], ['Salas abiertas de desarrollo', data.security?.openDevRooms ? 'Activadas' : 'Desactivadas'],
-    ['Versión', data.version || 'local'], ['Configuración pendiente', data.missingConfiguration?.length ? data.missingConfiguration.join(', ') : 'Ninguna'],
+    ['Versión', data.version && data.version !== 'local' ? data.version : 'Versión local'], ['Configuración pendiente', data.missingConfiguration?.length ? data.missingConfiguration.join(', ') : 'Ninguna'],
   ];
   for (const [label, value] of rows) { const row = document.createElement('div'); row.append(textElement('span', label), textElement('strong', value)); settings.appendChild(row); }
 }
@@ -500,7 +506,7 @@ async function loadUsers() {
   const tbody = document.getElementById('usersTable'); tbody.replaceChildren();
   for (const user of data.users) {
     const row = document.createElement('tr');
-    for (const value of [user.username, user.role, user.active ? 'Activo' : 'Inactivo', user.createdAt ? fmtDate.format(new Date(user.createdAt)) : 'Entorno', user.lastLoginAt ? fmtDate.format(new Date(user.lastLoginAt)) : 'Nunca']) row.appendChild(textElement('td', value));
+    for (const value of [user.username, ROLE_LABELS[user.role] || 'Usuario', user.active ? 'Activo' : 'Inactivo', user.createdAt ? fmtDate.format(new Date(user.createdAt)) : 'Entorno', user.lastLoginAt ? fmtDate.format(new Date(user.lastLoginAt)) : 'Nunca']) row.appendChild(textElement('td', value));
     const actions = document.createElement('td'); actions.appendChild(userActions(user)); row.appendChild(actions); tbody.appendChild(row);
   }
 }
@@ -515,6 +521,8 @@ function openUserDialog(user = null) {
   document.getElementById('userPasswordLabel').hidden = Boolean(user);
   document.getElementById('userPassword').required = !user;
   document.getElementById('userPassword').value = '';
+  document.getElementById('userPassword').type = 'password';
+  RATPasswordToggle.sync(document.getElementById('userDialog'));
   document.getElementById('userFormError').textContent = '';
   document.getElementById('userDialog').showModal();
 }
@@ -589,7 +597,8 @@ async function loadRecordings() {
 
 async function loadAudit() {
   const actor = document.getElementById('auditActorFilter').value.trim();
-  const action = document.getElementById('auditActionFilter').value.trim();
+  const actionInput = document.getElementById('auditActionFilter').value.trim();
+  const action = Object.entries(AUDIT_LABELS).find(([code, label]) => code === actionInput.toUpperCase() || label.toLowerCase() === actionInput.toLowerCase())?.[0] || actionInput;
   const room = document.getElementById('auditRoomFilter').value.trim();
   const date = document.getElementById('auditDateFilter').value;
   const query = new URLSearchParams({ limit: '100' });
@@ -630,7 +639,7 @@ async function initialize() {
   try {
     const me = await api('/api/auth/me'); state.user = me.user; state.csrf = me.csrfToken;
     document.getElementById('currentUser').textContent = me.user.username;
-    document.getElementById('currentRole').textContent = me.user.role;
+    document.getElementById('currentRole').textContent = ROLE_LABELS[me.user.role] || 'Usuario';
     document.querySelectorAll('.admin-only').forEach((element) => { element.hidden = me.user.role !== 'ADMIN'; });
     for (const status of Object.keys(STATUS_LABELS)) {
       document.getElementById('meetingStatus').appendChild(new Option(STATUS_LABELS[status], status));
