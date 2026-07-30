@@ -277,7 +277,7 @@
     };
   }
 
-  function safeHttpUrl(value, base = 'http://localhost') {
+  function safeHttpUrl(value, base = 'https://app.invalid') {
     try {
       const parsed = new URL(String(value), base);
       return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null;

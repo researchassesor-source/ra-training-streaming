@@ -63,7 +63,7 @@ function renderRecordingState(snapshot) {
   floatingModel.update({ recording: snapshot.active });
   if (snapshot.active !== wasRecording) {
     playAlert(snapshot.active ? 'recordingStart' : 'recordingStop');
-    notifier.notify('recording-state', { title: snapshot.active ? 'Grabación iniciada' : 'Grabación detenida', message: snapshot.active ? 'La reunión se está grabando.' : 'La grabación dejó de estar activa.', tone: snapshot.active ? 'critical' : 'info' });
+    notifier.notify('recording-state', { title: snapshot.active ? 'Grabación iniciada' : 'Grabación detenida', message: snapshot.active ? 'Esta sesión está siendo grabada.' : 'La grabación dejó de estar activa.', tone: snapshot.active ? 'critical' : 'info' });
   }
 }
 
@@ -244,7 +244,7 @@ async function refreshLiveKitStatus() {
     const livekit = await requestLiveKitStatus();
     status.textContent = livekit.available
       ? `LiveKit ${livekit.mode} — disponible.`
-      : `LiveKit ${livekit.mode} — no disponible. Inicia el servidor antes de entrar.`;
+      : `LiveKit ${livekit.mode} — no disponible. Verifica la integración antes de entrar.`;
     status.className = `service-notice ${livekit.available ? 'available' : 'unavailable'}`;
     button.disabled = !livekit.available;
     return livekit;
@@ -271,6 +271,10 @@ async function setupPreflight() {
   document.getElementById('preflightSpeaker').parentElement.hidden = viewer;
   document.querySelector('.meter').hidden = viewer;
   document.getElementById('displayNameInput').value = ui.session.displayName || '';
+  const savedConsents = ui.session.consents || {};
+  privacyConsent.checked = savedConsents.privacy === true;
+  document.getElementById('recordingConsent').checked = savedConsents.recording === true;
+  document.getElementById('transcriptionConsent').checked = savedConsents.transcription === true;
   document.getElementById('preflightMeeting').textContent = `${ui.session.meeting.title} · ${ui.session.meeting.trainerName}`;
   document.getElementById('recordingConsentLabel').hidden = !viewer || !ui.session.meeting.recordingConsentRequired;
   document.getElementById('transcriptionConsentLabel').hidden = !viewer || !ui.session.meeting.transcriptionConsentRequired;
@@ -311,6 +315,15 @@ async function submitPreflight(event) {
     if (displayName !== ui.session.displayName) {
       const updated = await updateRoomProfile(displayName, ui.session.csrfToken);
       ui.session.displayName = updated.displayName; ui.session.csrfToken = updated.csrfToken;
+    }
+    if (viewer) {
+      const accepted = await recordRoomConsent({
+        privacy: document.getElementById('privacyConsent').checked,
+        recording: document.getElementById('recordingConsent').checked,
+        transcription: document.getElementById('transcriptionConsent').checked,
+      }, ui.session.csrfToken);
+      ui.session.consents = accepted.consents;
+      ui.session.csrfToken = accepted.csrfToken;
     }
     const joinCamera = !viewer && document.getElementById('joinCamera').checked;
     const joinMicrophone = !viewer && document.getElementById('joinMicrophone').checked;
@@ -955,8 +968,8 @@ async function copyText(value) {
 async function createInRoomInvitation(role) {
   try {
     const result = await roomRequest('/api/room/invitations', { method: 'POST', body: { role, expiresInMinutes: 240 } }, ui.session.csrfToken);
-    await copyText(new URL(result.path, location.origin).href);
-    notifier.notify(`invitation-${role}`, { title: 'Invitación copiada', message: `El enlace de ${role === 'PANELIST' ? 'panelista' : 'asistente'} vence en 4 horas.`, tone: 'success', system: false });
+    await copyText(result.message || result.url);
+    notifier.notify(`invitation-${role}`, { title: 'Invitación copiada', message: `El mensaje con enlace de ${role === 'PANELIST' ? 'panelista' : 'asistente'} vence en 4 horas.`, tone: 'success', system: false });
   } catch (error) { showMessage(error.message, true); }
 }
 

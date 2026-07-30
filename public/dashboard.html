@@ -134,7 +134,7 @@
       </section>
 
       <section class="dashboard-section" data-section-panel="settings" aria-labelledby="settingsTitle">
-        <div class="section-heading"><div><p class="eyebrow">Entorno e integraciones</p><h1 id="settingsTitle">Configuración</h1><p class="muted settings-intro">Estado operativo del entorno sin exponer valores secretos.</p></div></div>
+        <div class="section-heading"><div><p class="eyebrow">Entorno e integraciones</p><h1 id="settingsTitle">Configuración</h1><p class="muted settings-intro">Estado operativo del entorno sin exponer valores secretos.</p></div><button id="refreshSettings" class="secondary" type="button">Actualizar estado</button></div>
         <div class="settings-grid">
           <article class="dashboard-card settings-card settings-security">
             <p class="settings-kicker">Protección</p>
@@ -220,6 +220,21 @@
       <label class="check-row"><input id="userActive" type="checkbox" checked /> Usuario activo</label>
       <p id="userFormError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-user>Cancelar</button><button class="primary" type="submit">Guardar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="invitationDialog" class="app-dialog invitation-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Invitación profesional</p><h2 id="invitationDialogTitle">Compartir reunión</h2><p id="invitationRole" class="muted"></p></div><button class="icon-action" type="button" data-close-invitation aria-label="Cerrar">×</button></div>
+      <label>Mensaje<textarea id="invitationMessage" rows="12" readonly></textarea></label>
+      <label>Enlace privado<input id="invitationUrl" type="url" readonly /></label>
+      <p class="muted small">Cada apertura crea una invitación nueva con vencimiento y permisos definidos para el rol seleccionado.</p>
+      <div class="invitation-actions">
+        <button id="copyInvitationLink" class="secondary" type="button">Copiar enlace</button>
+        <button id="copyInvitationMessage" class="secondary" type="button">Copiar mensaje</button>
+        <button id="shareInvitation" class="secondary" type="button">Compartir</button>
+        <button id="shareInvitationWhatsApp" class="primary" type="button">Abrir WhatsApp</button>
+      </div>
     </form>
   </dialog>
 

@@ -7,6 +7,7 @@ const state = {
   recordings: [],
   users: [],
   summary: null,
+  invitation: null,
   calendarDate: new Date(),
   calendarView: 'month',
 };
@@ -17,7 +18,7 @@ const STATUS_LABELS = {
 };
 const TYPE_LABELS = { WEBINAR: 'Webinar', SESSION: 'Sesión', CLASS: 'Clase' };
 const ROLE_LABELS = { ADMIN: 'Administrador', ORGANIZER: 'Organizador', PANELIST: 'Panelista', VIEWER: 'Asistente' };
-const ENVIRONMENT_LABELS = { development: 'Desarrollo', production: 'Producción', test: 'Pruebas' };
+const ENVIRONMENT_LABELS = { development: 'Desarrollo', preview: 'Vista previa', production: 'Producción', test: 'Pruebas' };
 const PROVIDER_LABELS = { mock: 'Simulación local', http: 'Proveedor HTTP' };
 const AUDIT_LABELS = {
   AUTH_LOGIN: 'Inicio de sesión', AUTH_LOGIN_FAILED: 'Inicio de sesión fallido', AUTH_LOGOUT: 'Cierre de sesión',
@@ -34,6 +35,7 @@ const AUDIT_LABELS = {
   TRANSCRIPTION_CANCELLED: 'Transcripción cancelada', TRANSCRIPTION_DELETED: 'Transcripción eliminada',
   ROOM_OPEN_ATTEMPT: 'Intento de abrir reunión', ROOM_CONNECTION_FAILED: 'Error de conexión a la reunión',
   ROOM_RETRY: 'Reintento de conexión', ROOM_CONNECTED: 'Reunión iniciada', ROOM_ENDED: 'Reunión finalizada',
+  PARTICIPANT_CONSENT_RECORDED: 'Consentimiento de participante registrado',
 };
 const fmtDate = new Intl.DateTimeFormat('es-EC', { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -200,9 +202,8 @@ function renderMeetings() {
       const summary = document.createElement('summary'); summary.textContent = 'Más acciones'; menu.appendChild(summary);
       const menuItems = document.createElement('div'); menuItems.className = 'action-menu-items';
       menuItems.append(
-        meetingAction('Invitar panelista', (item) => copyInvitation(item, 'PANELIST'), meeting),
-        meetingAction('Invitar asistente', (item) => copyInvitation(item, 'VIEWER'), meeting),
-        meetingAction('Compartir por WhatsApp', (item) => shareWhatsApp(item), meeting),
+        meetingAction('Preparar invitación para panelista', (item) => openInvitationDialog(item, 'PANELIST'), meeting),
+        meetingAction('Preparar invitación para asistente', (item) => openInvitationDialog(item, 'VIEWER'), meeting),
         meetingAction('Duplicar', duplicateMeeting, meeting)
       );
       if (!['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)) menuItems.append(meetingAction('Cancelar', (item) => meetingTransition(item, 'cancel'), meeting));
@@ -342,23 +343,44 @@ async function createInvitation(meeting, role) {
   const data = await api(`/api/meetings/${encodeURIComponent(meeting.room)}/invitations`, {
     method: 'POST', body: { role, singleUse, expiresInMinutes: role === 'PANELIST' ? 720 : 1_440 },
   });
-  return `${location.origin}${data.path}`;
+  return data;
 }
 
-async function copyInvitation(meeting, role) {
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+  const input = document.createElement('textarea');
+  input.value = value; input.style.position = 'fixed'; input.style.opacity = '0';
+  document.body.appendChild(input); input.select();
+  const copied = document.execCommand('copy'); input.remove();
+  if (!copied) throw new Error('No se pudo copiar el contenido.');
+}
+
+async function openInvitationDialog(meeting, role) {
   try {
-    const url = await createInvitation(meeting, role);
-    await navigator.clipboard.writeText(url);
-    notice(`Enlace de ${role === 'PANELIST' ? 'panelista' : 'asistente'} copiado. Expira automáticamente.`);
+    const payload = await createInvitation(meeting, role);
+    state.invitation = { ...payload, title: meeting.title, role };
+    document.getElementById('invitationDialogTitle').textContent = meeting.title;
+    document.getElementById('invitationRole').textContent = role === 'PANELIST' ? 'Acceso de panelista · audio, cámara y pantalla' : 'Acceso de asistente';
+    document.getElementById('invitationMessage').value = payload.message;
+    document.getElementById('invitationUrl').value = payload.url;
+    document.getElementById('shareInvitation').hidden = typeof navigator.share !== 'function';
+    document.getElementById('invitationDialog').showModal();
   } catch (error) { notice(error.message, 'error'); }
 }
 
-async function shareWhatsApp(meeting) {
+async function copyCurrentInvitation(field) {
+  if (!state.invitation) return;
   try {
-    const url = await createInvitation(meeting, 'VIEWER');
-    const text = `Te invitamos a ${meeting.title}\n${meeting.scheduledAt ? fmtDate.format(new Date(meeting.scheduledAt)) : ''}\n${url}`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+    await copyText(state.invitation[field]);
+    notice(field === 'url' ? 'Enlace privado copiado.' : 'Mensaje de invitación copiado.');
   } catch (error) { notice(error.message, 'error'); }
+}
+
+async function shareCurrentInvitation() {
+  if (!state.invitation || typeof navigator.share !== 'function') return;
+  try {
+    await navigator.share({ title: state.invitation.title, text: state.invitation.message });
+  } catch (error) { if (error.name !== 'AbortError') notice('No fue posible abrir el menú para compartir.', 'error'); }
 }
 
 async function launchMeeting(meeting) {
@@ -454,7 +476,8 @@ function summaryCard(label, value, detail) {
 }
 
 function serviceLabel(value) {
-  return ({ configured: 'Configurado', local: 'Local', s3: 'S3/R2', disabled: 'Deshabilitado' })[value] || String(value || 'No disponible');
+  const mode = typeof value === 'object' ? value?.mode : value;
+  return ({ configured: 'Configurado', filesystem: 'Archivos de desarrollo', s3: 'S3/R2', disabled: 'Deshabilitado' })[mode] || String(mode || 'No disponible');
 }
 
 async function loadSummary() {
@@ -468,19 +491,21 @@ async function loadSummary() {
     summaryCard('Intentos fallidos de acceso', data.recentErrors, data.recentErrors === null ? 'Visible para administradores' : 'últimas 24 horas')
   );
   const services = document.getElementById('serviceStatus'); services.replaceChildren();
-  const livekitLabel = `${data.livekit?.mode === 'local' ? 'Local' : 'Remoto'} — ${data.livekit?.available ? 'disponible' : 'no disponible'}`;
-  for (const [name, value, stateName] of [['Almacenamiento', serviceLabel(data.storage), data.storage === 'local' ? 'warning' : 'available'], ['LiveKit', livekitLabel, data.livekit?.available ? 'available' : 'unavailable'], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada', data.recordingConfigured ? 'available' : 'disabled'], ['Transcripción', data.transcriptionConfigured ? 'Configurada' : 'Deshabilitada', data.transcriptionConfigured ? 'available' : 'disabled']]) {
+  const livekitLabel = `${data.livekit?.mode === 'local' ? 'Desarrollo' : 'Remoto'} — ${data.livekit?.available ? 'disponible' : 'no disponible'}`;
+  const recordingLabel = data.recordingAvailable ? 'Disponible' : data.recordingConfigured ? 'No disponible' : 'Deshabilitada';
+  const transcriptionLabel = data.transcriptionAvailable ? 'Disponible' : data.transcriptionConfigured ? 'No disponible' : 'Deshabilitada';
+  for (const [name, value, stateName] of [['Almacenamiento', `${serviceLabel(data.storage)} — ${data.storage?.available ? 'disponible' : 'no disponible'}`, data.storage?.available ? 'available' : 'unavailable'], ['LiveKit', livekitLabel, data.livekit?.available ? 'available' : 'unavailable'], ['Grabación', recordingLabel, data.recordingAvailable ? 'available' : data.recordingConfigured ? 'unavailable' : 'disabled'], ['Transcripción', transcriptionLabel, data.transcriptionAvailable ? 'available' : data.transcriptionConfigured ? 'unavailable' : 'disabled']]) {
     const row = document.createElement('div'); row.className = `service-row service-${stateName}`; row.append(textElement('span', name), textElement('strong', value)); services.appendChild(row);
   }
   const settings = document.getElementById('settingsIntegrations'); settings.replaceChildren();
   const environment = String(data.environment || 'development').toLowerCase();
   const provider = String(data.transcriptionProvider || '').toLowerCase();
   const rows = [
-    ['Entorno', ENVIRONMENT_LABELS[environment] || 'Desarrollo'], ['Modo', environment === 'production' ? 'Producción' : 'Local / desarrollo'],
-    ['Almacenamiento', serviceLabel(data.storage)], ['LiveKit · modo', data.livekit?.mode === 'local' ? 'Local' : 'Remoto'], ['LiveKit · estado', data.livekit?.available ? 'Disponible' : 'No disponible · inicia el servidor local'], ['Grabación', data.recordingConfigured ? 'Configurada' : 'Deshabilitada'],
-    ['Transcripción', data.transcriptionConfigured ? `Configurada · ${PROVIDER_LABELS[provider] || 'Proveedor externo'}` : 'Deshabilitada'],
+    ['Aplicación', data.app?.name || 'R.A. Training Streaming'], ['Entorno', data.displayEnvironment || ENVIRONMENT_LABELS[environment] || 'Desarrollo'],
+    ['Almacenamiento', `${serviceLabel(data.storage)} · ${data.storage?.available ? 'Disponible' : 'No disponible'}`], ['LiveKit · modo', data.livekit?.mode === 'local' ? 'Desarrollo' : 'Remoto'], ['LiveKit · estado', data.livekit?.available ? 'Disponible' : 'No disponible · revisa la integración'], ['Grabación', recordingLabel],
+    ['Transcripción', data.transcriptionConfigured ? `${transcriptionLabel} · ${PROVIDER_LABELS[provider] || 'Proveedor externo'}` : 'Deshabilitada'],
     ['Cookies seguras', data.security?.secureCookies ? 'Activadas' : 'Solo desarrollo local'], ['Salas abiertas de desarrollo', data.security?.openDevRooms ? 'Activadas' : 'Desactivadas'],
-    ['Versión', data.version && data.version !== 'local' ? data.version : 'Versión local'], ['Configuración pendiente', data.missingConfiguration?.length ? data.missingConfiguration.join(', ') : 'Ninguna'],
+    ['Versión', data.version || 'Sin identificar'], ['Última comprobación', data.livekit?.checkedAt ? formatDate(data.livekit.checkedAt) : 'No disponible'], ['Configuración pendiente', data.missingConfiguration?.length ? data.missingConfiguration.join(', ') : 'Ninguna'],
   ];
   for (const [label, value] of rows) { const row = document.createElement('div'); row.append(textElement('span', label), textElement('strong', value)); settings.appendChild(row); }
 }
@@ -595,7 +620,7 @@ async function loadRecordings() {
     state.recordings = [];
     renderMeetings();
     if (error.code === 'STORAGE_NOT_CONFIGURED') {
-      const empty = emptyState('Las grabaciones no están disponibles en este entorno local.', 'Configura almacenamiento compatible con S3/R2 y LiveKit Egress.');
+      const empty = emptyState('Las grabaciones no están disponibles en este entorno.', 'Revisa el estado de almacenamiento y grabación en Configuración.');
       const actions = document.createElement('div'); actions.className = 'dialog-actions';
       const settings = document.createElement('a'); settings.className = 'button secondary compact'; settings.href = '#settings'; settings.textContent = 'Ver configuración'; settings.addEventListener('click', () => showSection('settings'));
       const guide = document.createElement('a'); guide.className = 'button secondary compact'; guide.href = '/docs/LOCAL_DEVELOPMENT.md'; guide.target = '_blank'; guide.rel = 'noopener'; guide.textContent = 'Consultar guía';
@@ -675,6 +700,13 @@ document.getElementById('userForm').addEventListener('submit', saveUser);
 document.getElementById('openUserModal').addEventListener('click', () => openUserDialog());
 document.getElementById('loadRecordings').addEventListener('click', loadRecordings);
 document.getElementById('refreshAudit').addEventListener('click', loadAudit);
+document.getElementById('refreshSettings').addEventListener('click', async () => { try { await loadSummary(); notice('Estado de integraciones actualizado.'); } catch (error) { notice(error.message, 'error'); } });
+document.getElementById('copyInvitationLink').addEventListener('click', () => copyCurrentInvitation('url'));
+document.getElementById('copyInvitationMessage').addEventListener('click', () => copyCurrentInvitation('message'));
+document.getElementById('shareInvitation').addEventListener('click', shareCurrentInvitation);
+document.getElementById('shareInvitationWhatsApp').addEventListener('click', () => {
+  if (state.invitation?.whatsappUrl) window.open(state.invitation.whatsappUrl, '_blank', 'noopener,noreferrer');
+});
 for (const id of ['auditDateFilter', 'auditActorFilter', 'auditActionFilter', 'auditRoomFilter']) document.getElementById(id).addEventListener('change', loadAudit);
 document.getElementById('meetingSearch').addEventListener('input', renderMeetings);
 document.getElementById('meetingStatusFilter').addEventListener('change', renderMeetings);
@@ -692,6 +724,7 @@ for (const id of ['userPassword', 'userPasswordConfirm']) document.getElementByI
 document.getElementById('logoutButton').addEventListener('click', async () => { try { await api('/api/auth/logout', { method: 'POST', body: {} }); } finally { window.location.replace('/index.html'); } });
 bindDialog(document.getElementById('meetingDialog'), '[data-close-dialog]');
 bindDialog(document.getElementById('userDialog'), '[data-close-user]');
+bindDialog(document.getElementById('invitationDialog'), '[data-close-invitation]');
 document.getElementById('meetingAllowTranscription').addEventListener('change', (event) => {
   document.getElementById('meetingTranscriptionConsent').disabled = !event.target.checked;
   document.getElementById('meetingPanelistTranscript').disabled = !event.target.checked;

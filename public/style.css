@@ -742,6 +742,10 @@ label { display: grid; gap: 7px; color: #c9d4f1; font-size: 14px; }
 .options-fieldset .transcription-options label { display: grid; align-items: initial; }
 .options-fieldset .transcription-options select, .options-fieldset .transcription-options input { width: 100%; min-height: 44px; }
 .dialog-actions { margin-top: 18px; display: flex; justify-content: flex-end; gap: 10px; }
+.invitation-dialog { width: min(680px, calc(100vw - 24px)); }
+.invitation-dialog textarea { min-height: 260px; resize: vertical; line-height: 1.5; }
+.invitation-dialog input[readonly], .invitation-dialog textarea[readonly] { color: #eff4ff; background: #0b1831; }
+.invitation-actions { margin-top: 18px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
 .password-match { min-height: 18px; font-size: 11px; }
 .password-match.matches { color: #75e6ac; }
 .password-match.mismatch { color: #ffaaa0; }

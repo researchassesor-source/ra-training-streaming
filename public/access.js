@@ -56,6 +56,10 @@ function updateRoomProfile(displayName, csrfToken) {
   return roomRequest('/api/room-session/profile', { method: 'PATCH', body: { displayName } }, csrfToken);
 }
 
+function recordRoomConsent(consents, csrfToken) {
+  return roomRequest('/api/room-session/consent', { method: 'POST', body: consents }, csrfToken);
+}
+
 function requestToken() {
   return roomRequest('/api/token');
 }
