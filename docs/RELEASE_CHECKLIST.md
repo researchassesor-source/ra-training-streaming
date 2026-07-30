@@ -14,19 +14,23 @@
 
 ## Preview aislado
 
-No ejecutar sin aprobación humana.
+Ejecutar solo cuando el alcance de la entrega lo autorice expresamente. Esta lista nunca autoriza Producción.
 
-1. Crear Preview desde `feature/optimizacion-streaming-webinar`, nunca desde `main`.
-2. Configurar un `SESSION_SECRET` de Preview y bootstrap exclusivo.
-3. Usar LiveKit y bucket R2 de prueba, no Producción.
-4. Mantener `NODE_ENV=production`, `COOKIE_SECURE=true` y `ALLOW_OPEN_DEV_ROOMS=false`.
-5. Crear datos ficticios y ejecutar la matriz manual.
+1. Crear Preview desde `feature/optimizacion-streaming-webinar` con `render.preview.yaml`, nunca desde `main` ni con `render.yaml`.
+2. Configurar `APP_ENV=preview`, URL pública HTTPS, secretos de sesión/invitación y bootstrap exclusivos.
+3. Usar LiveKit, bucket R2/S3 y proveedor de transcripción de prueba; nunca credenciales o datos de Producción.
+4. Confirmar el aislamiento antes de definir `PREVIEW_ISOLATION_ACK=true`.
+5. Mantener `NODE_ENV=production`, `COOKIE_SECURE=true`, `ALLOW_OPEN_DEV_ROOMS=false` y despliegue automático desactivado.
+6. Comprobar `/health`, `X-Robots-Tag`, `/robots.txt` y crear únicamente datos ficticios.
+7. Ejecutar la matriz manual y registrar qué casos requieren hardware, dos navegadores o servicios externos.
 
 ## Matriz manual
 
 - [ ] Login correcto, incorrecto, rate limit y logout.
 - [ ] Crear, editar, reprogramar, duplicar, cancelar, archivar, eliminar lógicamente y restaurar reunión.
 - [ ] Crear/revocar invitaciones; probar expiración, uso único y URL limpia.
+- [ ] Confirmar que los mensajes de panelista/asistente usan la URL canónica de Preview, fecha, hora, zona, capacitador y codificación correcta de WhatsApp.
+- [ ] Confirmar que una invitación histórica SHA-256 sigue funcionando y que una nueva se almacena con HMAC sin token en claro.
 - [ ] Mantener organizador y asistente en dos pestañas del mismo perfil; cada una conserva identidad y CSRF al alternar chat, Q&A y moderación.
 - [ ] Crear/editar/desactivar usuario, cambiar contraseña y revocar sesiones.
 - [ ] Confirmar que ORGANIZER no administra ADMIN y VIEWER no se autopromueve.
@@ -40,6 +44,7 @@ No ejecutar sin aprobación humana.
 - [ ] Compartir pantalla y evento `ended`.
 - [ ] Salir no finaliza; **Finalizar para todos** sí desconecta y completa.
 - [ ] Grabación: consentimiento, inicio, aviso, stop, listado y enlace firmado.
+- [ ] El asistente no recibe token LiveKit antes de aceptar privacidad y consentimientos exigidos; el evento queda auditado sin secretos.
 - [ ] El indicador de grabación permanece apagado ante error, estado desconocido, reconexión y Egress finalizado.
 - [ ] Reunión histórica incompleta carga con valores seguros sin reescribir el objeto almacenado.
 - [ ] Calendario conserva la fecha local (incluido un caso del 30 de julio) y distingue el mes adyacente.
@@ -59,9 +64,9 @@ No ejecutar sin aprobación humana.
 - [ ] Teclado móvil, safe areas, rotación y ausencia de scroll horizontal.
 - [ ] Navegación por teclado, foco visible, Escape y foco atrapado en diálogos.
 
-## Antes de push o PR
+## Antes de push, PR o Preview
 
-Detenerse y presentar para aprobación:
+Registrar siempre:
 
 ```powershell
 git status
@@ -70,7 +75,7 @@ git diff main...HEAD --stat
 npm test
 ```
 
-Solo después de autorización: push a `feature/optimizacion-streaming-webinar`, PR draft y Preview. Nunca hacer push directo, merge o despliegue a `main` desde este flujo.
+Actuar estrictamente según la autorización vigente. Nunca hacer push directo a `main`, merge, cambio de DNS ni despliegue a Producción desde este flujo.
 
 ## Rollback
 

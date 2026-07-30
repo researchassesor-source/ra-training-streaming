@@ -11,9 +11,9 @@ Plataforma web para webinars, clases y sesiones en vivo de R.A. Training. Combin
 - **Transcripción desacoplada:** interfaz `TranscriptionProvider`, proveedor mock seguro para pruebas y adaptador HTTP configurable.
 - **Frontend vanilla:** HTML, CSS y JavaScript sin framework; vistas específicas para administración, escritorio, tablet y móvil.
 
-Los secretos de invitación se guardan como SHA-256. Al abrir `/i/<token>`, el servidor valida expiración, revocación y usos, crea una cookie HttpOnly de sala y redirige a una URL sin token. El navegador nunca decide su rol, sala ni identidad LiveKit.
+Los tokens de invitación nuevos se guardan como HMAC-SHA-256 con un secreto independiente. Los hashes SHA-256 históricos siguen siendo legibles para no romper invitaciones antiguas. Al abrir `/i/<token>`, el servidor valida expiración, revocación y usos, crea una cookie HttpOnly de sala y redirige a una URL sin token. El navegador nunca decide su rol, sala ni identidad LiveKit.
 
-Consulta [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md) y [Seguridad](docs/SECURITY.md) para el diseño completo.
+Consulta [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md), [Seguridad](docs/SECURITY.md), [Preview aislado](docs/PREVIEW_DEPLOYMENT.md) y [Promoción a Producción](docs/PRODUCTION_PROMOTION.md) para el diseño completo.
 
 ## Experiencia de reunión
 
@@ -46,9 +46,14 @@ Abre `http://localhost:3000`. No reutilices credenciales productivas en `.env` l
 
 | Variable | Propósito |
 |---|---|
-| `NODE_ENV` | `development`, `test` o `production`. |
+| `NODE_ENV` | Runtime Node: `development`, `test` o `production`. Preview usa `production`. |
+| `APP_ENV`, `APP_DISPLAY_ENV` | Identidad central: `development`, `test`, `preview` o `production`, y su nombre visible. |
+| `APP_NAME`, `APP_PUBLIC_URL` | Marca y origen canónico para invitaciones; HTTPS obligatorio fuera de desarrollo/pruebas. |
+| `APP_TIME_ZONE`, `APP_TIME_ZONE_LABEL` | Zona IANA y etiqueta humana empleadas en invitaciones. |
+| `PREVIEW_ISOLATION_ACK` | Confirmación explícita de recursos aislados; obligatoria solo en Preview. |
 | `PORT` | Puerto HTTP. |
 | `SESSION_SECRET` | Firma de sesiones; obligatorio y aleatorio en Producción. |
+| `INVITATION_HASH_SECRET` | HMAC de invitaciones nuevas; independiente y de 32+ caracteres en Preview/Producción. |
 | `SESSION_TTL_HOURS` | Caducidad de sesión administrativa. |
 | `ROOM_SESSION_TTL_HOURS` | Caducidad de sesión de reunión. |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Administrador bootstrap de recuperación. |
@@ -71,6 +76,7 @@ Abre `http://localhost:3000`. No reutilices credenciales productivas en `.env` l
 | `TRANSCRIPTION_MAX_DURATION_MINUTES` | Duración máxima aceptada por trabajo. |
 | `TRANSCRIPTION_RETENTION_DAYS` | Retención predeterminada del texto. |
 | `TRANSCRIPTION_API_URL`, `TRANSCRIPTION_API_KEY` | Endpoint y secreto del proveedor HTTP; nunca llegan al cliente. |
+| `TRANSCRIPTION_ALLOWED_HOSTS` | Hostnames autorizados del proveedor HTTP, separados por coma; obligatorio fuera de desarrollo/pruebas. |
 | `LOCAL_DATA_DIR` | Sobrescribe la carpeta local; útil para pruebas aisladas. |
 
 Los valores seguros de ejemplo están en [.env.example](.env.example). No configures todavía estas variables en Render sin completar el checklist de release.
@@ -108,7 +114,7 @@ git diff --check
 2. Confirma `git branch --show-current` y `git status` antes de editar.
 3. Ejecuta pruebas y build antes de commit.
 4. Revisa `git diff main...HEAD --stat`.
-5. Solicita aprobación humana antes de push, Pull Request, Preview, merge o despliegue.
+5. Sigue el alcance autorizado de cada entrega; nunca hagas merge o despliegue a Producción sin aprobación humana explícita.
 
 ## Render, LiveKit y R2
 
@@ -117,6 +123,7 @@ git diff --check
 - LiveKit debe usar una URL `wss://` en entornos publicados.
 - R2 se consume mediante su API S3 compatible; el bucket permanece privado y los archivos se entregan con URL firmada corta.
 - LiveKit Egress usa las variables `RECORDING_S3_*` sin exponerlas al frontend.
+- La Preview aislada se configura con [`render.preview.yaml`](render.preview.yaml) y [su guía](docs/PREVIEW_DEPLOYMENT.md); no modifica el Blueprint existente.
 
 ## Limitaciones conocidas
 

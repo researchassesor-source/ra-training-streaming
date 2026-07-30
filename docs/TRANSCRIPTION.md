@@ -17,6 +17,8 @@ La aplicación puede crear una transcripción a partir de una grabación privada
 | `TRANSCRIPTION_RETENTION_DAYS` | Fecha objetivo registrada en `retentionUntil`. |
 | `TRANSCRIPTION_RATE_LIMIT_MAX` | Creaciones o reintentos permitidos por hora y usuario. |
 
+El proveedor HTTP debe exponer `GET /health` autenticado con la misma clave. En Preview/Producción, `TRANSCRIPTION_ALLOWED_HOSTS` debe contener su hostname exacto. El panel y `/health` almacenan el resultado durante 30 segundos; por ello **configurado** y **disponible** son estados distintos.
+
 `NODE_ENV=production` rechaza una configuración habilitada con proveedor `mock`. No versionar `.env`, claves, URLs firmadas ni respuestas originales que contengan datos reales.
 
 ## Contrato del proveedor HTTP
