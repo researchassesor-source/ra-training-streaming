@@ -57,7 +57,7 @@ function setupChat(room, myIdentity, options = {}) {
     row.className = `chat-msg ${message.type === 'file' ? 'file' : ''}`;
     const header = document.createElement('div'); header.className = 'chat-msg-header';
     const who = document.createElement('strong'); who.className = isMe ? 'who me' : 'who'; who.textContent = from || 'Participante';
-    const role = document.createElement('span'); role.className = 'chat-role'; role.textContent = message.role || '';
+    const role = document.createElement('span'); role.className = 'chat-role'; role.textContent = RATCore.roleLabel(message.role);
     const time = document.createElement('time'); time.dateTime = message.sentAt || new Date().toISOString(); time.textContent = new Date(time.dateTime).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' });
     header.append(who, role, time); row.appendChild(header);
 

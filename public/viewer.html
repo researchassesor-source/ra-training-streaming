@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
-  <title>Asistente · R.A. Training Streaming</title>
+  <title>Asistente | Streaming</title>
   <link rel="icon" type="image/png" sizes="32x32" href="assets/streaming-app-logo-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="assets/streaming-app-logo-180.png" />
   <link rel="manifest" href="manifest.webmanifest" />
@@ -111,8 +111,8 @@
           <p id="processingNotice" class="privacy-notice">Esta reunión puede grabarse y transcribirse. La transcripción automática puede contener errores.</p>
         </div>
       </div>
-      <p id="preflightError" class="form-error" role="alert"></p>
-      <div class="dialog-actions"><a class="button secondary" href="/index.html">Cancelar</a><button id="enterRoomButton" class="primary" type="submit">Entrar a la reunión</button></div>
+      <p id="preflightError" class="form-error" role="alert" aria-live="assertive" tabindex="-1"></p>
+      <div class="dialog-actions"><a class="button secondary" href="/index.html">Cancelar</a><button id="enterRoomButton" class="primary" type="submit" aria-busy="false">Entrar a la reunión</button></div>
     </form>
   </dialog>
   <dialog id="confirmationDialog" class="app-dialog confirmation-dialog">

@@ -28,6 +28,13 @@
     FAILED: 'No se pudo consultar la grabación',
   });
 
+  const ROLE_LABELS = Object.freeze({
+    ADMIN: 'Administrador',
+    ORGANIZER: 'Organizador',
+    PANELIST: 'Panelista',
+    VIEWER: 'Asistente',
+  });
+
   const MEETING_DEFAULTS = Object.freeze({
     description: '', trainerName: 'Capacitador por definir', durationMinutes: 60,
     type: 'WEBINAR', status: 'SCHEDULED', capacity: 100, allowChat: true,
@@ -107,6 +114,20 @@
 
   function shouldSubmitChat(event = {}) {
     return event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229;
+  }
+
+  function roleLabel(role) {
+    return ROLE_LABELS[String(role || '').toUpperCase()] || 'Participante';
+  }
+
+  function roomConnectionErrorMessage(error = {}) {
+    const message = typeof error.message === 'string' ? error.message.trim() : '';
+    const code = String(error.code || error.name || '').toUpperCase();
+    const status = Number(error.status || 0);
+    if (status === 401 || status === 403 || status === 410 || ['ROOM_ENDED', 'ROOM_REVOKED', 'ROOM_NOT_REGISTERED', 'MEETING_NOT_JOINABLE'].includes(code)) {
+      return message || 'Tu acceso a la reunión ya no está disponible.';
+    }
+    return 'No se pudo conectar al servicio de videoconferencia. Verifica la disponibilidad del servidor LiveKit e inténtalo nuevamente.';
   }
 
   class ConnectionStateMachine {
@@ -218,6 +239,7 @@
     CONNECTION_STATES,
     MEETING_DEFAULTS,
     RECORDING_STATES,
+    ROLE_LABELS,
     ConnectionStateMachine,
     HandQueue,
     RecordingStateMachine,
@@ -225,6 +247,8 @@
     createUnreadCounter,
     localDateKey,
     normalizeMeeting,
+    roleLabel,
+    roomConnectionErrorMessage,
     safeHttpUrl,
     shouldSubmitChat,
     validDate,

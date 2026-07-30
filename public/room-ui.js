@@ -91,7 +91,7 @@ function participantName(participant) {
 }
 
 function participantRole(participant) {
-  try { return JSON.parse(participant?.metadata || '{}').role || 'VIEWER'; } catch { return 'VIEWER'; }
+  try { return RATCore.roleLabel(JSON.parse(participant?.metadata || '{}').role); } catch { return RATCore.roleLabel('VIEWER'); }
 }
 
 function isOrganizer() {
@@ -138,6 +138,8 @@ function stopPreview() {
   ui.previewStream?.getTracks().forEach((track) => track.stop());
   ui.previewStream = null;
   document.getElementById('previewVideo').srcObject = null;
+  document.getElementById('previewPlaceholder').hidden = false;
+  document.getElementById('microphoneMeter').style.width = '0%';
 }
 
 function startMeter(stream) {
@@ -190,6 +192,11 @@ function setupPreflight() {
   const viewer = ui.session.role === 'VIEWER';
   document.querySelectorAll('.viewer-option').forEach((element) => { element.hidden = !viewer; });
   document.querySelectorAll('.presenter-option').forEach((element) => { element.hidden = viewer; });
+  const privacyConsent = document.getElementById('privacyConsent');
+  privacyConsent.disabled = !viewer;
+  privacyConsent.required = false;
+  document.getElementById('recordingConsent').disabled = !viewer;
+  document.getElementById('transcriptionConsent').disabled = !viewer;
   document.getElementById('previewButton').hidden = viewer;
   document.getElementById('preflightCamera').parentElement.hidden = viewer;
   document.getElementById('preflightMicrophone').parentElement.hidden = viewer;
@@ -210,10 +217,18 @@ function setupPreflight() {
 async function submitPreflight(event) {
   event.preventDefault();
   const error = document.getElementById('preflightError'); error.textContent = '';
+  const button = document.getElementById('enterRoomButton');
+  if (button.dataset.busy === 'true') return;
   const viewer = ui.session.role === 'VIEWER';
   if (viewer && !document.getElementById('privacyConsent').checked) return void (error.textContent = 'Debes aceptar el aviso de privacidad para entrar.');
   if (viewer && ui.session.meeting.recordingConsentRequired && !document.getElementById('recordingConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de grabación para entrar.');
   if (viewer && ui.session.meeting.transcriptionConsentRequired && !document.getElementById('transcriptionConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de transcripción para entrar.');
+  let connectionAttempted = false;
+  let shouldRetry = false;
+  button.dataset.busy = 'true';
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = 'Conectando…';
   try {
     const displayName = document.getElementById('displayNameInput').value.trim();
     if (displayName !== ui.session.displayName) {
@@ -223,9 +238,20 @@ async function submitPreflight(event) {
     const joinCamera = !viewer && document.getElementById('joinCamera').checked;
     const joinMicrophone = !viewer && document.getElementById('joinMicrophone').checked;
     stopPreview();
-    document.getElementById('preflightDialog').close();
+    connectionAttempted = true;
     await connectRoom({ joinCamera, joinMicrophone });
-  } catch (requestError) { error.textContent = requestError.message; }
+    document.getElementById('preflightDialog').close();
+  } catch (requestError) {
+    shouldRetry = connectionAttempted;
+    statusMachine.set('waiting_for_room');
+    error.textContent = connectionAttempted ? RATCore.roomConnectionErrorMessage(requestError) : requestError.message;
+    error.focus();
+  } finally {
+    button.dataset.busy = 'false';
+    button.disabled = false;
+    button.setAttribute('aria-busy', 'false');
+    button.textContent = shouldRetry ? 'Reintentar conexión' : 'Entrar a la reunión';
+  }
 }
 
 function setupTabs() {
@@ -256,7 +282,9 @@ function renderParticipants(participants = []) {
     const camera = participant.getTrackPublication?.(LivekitClient.Track.Source.Camera);
     const microphone = participant.getTrackPublication?.(LivekitClient.Track.Source.Microphone);
     const permission = participant.permissions || participant.permission || {};
-    const quality = isOrganizer() && participant.connectionQuality ? ` · Red ${String(participant.connectionQuality).toLowerCase()}` : '';
+    const qualityLabels = { EXCELLENT: 'excelente', GOOD: 'buena', POOR: 'inestable', LOST: 'sin conexión' };
+    const qualityValue = String(participant.connectionQuality || '').toUpperCase();
+    const quality = isOrganizer() && qualityValue ? ` · Red ${qualityLabels[qualityValue] || 'desconocida'}` : '';
     info.append(
       Object.assign(document.createElement('strong'), { textContent: participantName(participant) }),
       Object.assign(document.createElement('span'), { textContent: `${participantRole(participant)} · Mic ${microphone && !microphone.isMuted ? 'activo' : 'apagado'} · Cámara ${camera && !camera.isMuted ? 'activa' : 'apagada'}${quality}` })
@@ -285,7 +313,8 @@ function renderHandQueue() {
   if (!isOrganizer() && ui.session.role !== 'PANELIST') return;
   for (const item of items) {
     const row = document.createElement('article'); row.className = 'hand-card';
-    const info = document.createElement('div'); info.append(Object.assign(document.createElement('strong'), { textContent: `${item.order}. ${item.displayName}` }), Object.assign(document.createElement('span'), { textContent: `${new Date(item.raisedAt).toLocaleTimeString('es-EC')} · ${item.status}` })); row.appendChild(info);
+    const handStatus = { PENDING: 'Pendiente', GRANTED: 'Con palabra', REJECTED: 'Rechazada' }[item.status] || 'Pendiente';
+    const info = document.createElement('div'); info.append(Object.assign(document.createElement('strong'), { textContent: `${item.order}. ${item.displayName}` }), Object.assign(document.createElement('span'), { textContent: `${new Date(item.raisedAt).toLocaleTimeString('es-EC')} · ${handStatus}` })); row.appendChild(info);
     const actions = document.createElement('div');
     for (const [label, action] of [['Dar palabra', () => promoteParticipant(item)], ['Rechazar', () => rejectHand(item)]]) {
       const button = document.createElement('button'); button.type = 'button'; button.className = label === 'Dar palabra' ? 'primary compact' : 'secondary compact'; button.textContent = label; button.onclick = action; actions.appendChild(button);
@@ -583,27 +612,36 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     onParticipantsChanged: renderParticipants,
     onReconnected: () => queryRecordingStatus(),
   });
-  statusMachine.set('connecting_media');
-  await room.connect(tokenData.wsUrl, tokenData.token);
-  ui.roomUi.machine.set('connected');
-  statusMachine.set('connected');
-  floatingModel.update({ title: tokenData.meeting.title, live: true });
-  ui.chat = setupChat(room, ui.session.identity, {
-    csrfToken: ui.session.csrfToken,
-    role: ui.session.role,
-    displayName: ui.session.displayName,
-    onMessage(_participant, message) {
-      const counter = message.kind === 'question' ? unreadQuestions : unreadChat;
-      if (ui.activeTab !== (message.kind === 'question' ? 'questions' : 'chat') || document.getElementById('sidePanel').classList.contains('closed')) counter.increment();
-      floatingModel.update({ unreadMessages: unreadChat.value, unreadQuestions: unreadQuestions.value });
-    },
-  });
-  setupControls(); renderMediaPermissions(); renderParticipants([room.localParticipant]);
-  await queryRecordingStatus();
-  await enumerateDevices();
-  if (joinMicrophone) await toggleMicrophone();
-  if (joinCamera) await toggleCamera();
-  playConnectedSound();
+  try {
+    statusMachine.set('connecting_media');
+    await room.connect(tokenData.wsUrl, tokenData.token);
+    ui.roomUi.machine.set('connected');
+    statusMachine.set('connected');
+    floatingModel.update({ title: tokenData.meeting.title, live: true });
+    ui.chat = setupChat(room, ui.session.identity, {
+      csrfToken: ui.session.csrfToken,
+      role: ui.session.role,
+      displayName: ui.session.displayName,
+      onMessage(_participant, message) {
+        const counter = message.kind === 'question' ? unreadQuestions : unreadChat;
+        if (ui.activeTab !== (message.kind === 'question' ? 'questions' : 'chat') || document.getElementById('sidePanel').classList.contains('closed')) counter.increment();
+        floatingModel.update({ unreadMessages: unreadChat.value, unreadQuestions: unreadQuestions.value });
+      },
+    });
+    setupControls(); renderMediaPermissions(); renderParticipants([room.localParticipant]);
+    await queryRecordingStatus();
+    await enumerateDevices().catch(() => showMessage('La reunión está conectada, pero no fue posible actualizar la lista de dispositivos.', true));
+    if (joinMicrophone) await toggleMicrophone();
+    if (joinCamera) await toggleCamera();
+    playConnectedSound();
+  } catch (connectionError) {
+    ui.roomUi?.dispose();
+    ui.roomUi = null;
+    ui.chat = null;
+    try { await Promise.resolve(room.disconnect()); } catch { /* Best-effort cleanup before retry. */ }
+    if (ui.room === room) ui.room = null;
+    throw connectionError;
+  }
 }
 
 async function initializeRoom() {
