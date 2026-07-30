@@ -1,0 +1,96 @@
+# Experiencia profesional de reunión
+
+Esta guía describe la sala de R.A. Training Streaming. Los controles se ejecutan sobre una única sesión LiveKit; abrir paneles o Picture-in-Picture no reconstruye la sala ni duplica tracks.
+
+## Roles y modos
+
+| Función | Organizador | Panelista | Asistente |
+|---|---:|---:|---:|
+| Publicar cámara, micrófono y pantalla | Sí | Sí | Al recibir palabra |
+| Finalizar, bloquear, invitar, grabar | Sí | No | No |
+| Dar/quitar palabra, silenciar, expulsar, bloquear participante | Sí | No | No |
+| Moderar Q&A | Sí | Sí | No |
+| Chat, pregunta, voto y reacción | Según flags | Según flags | Según flags |
+
+`WEBINAR` reserva publicación para organizador/panelistas. La mano del organizador se oculta y la cola queda en Participantes. El asistente solicita palabra; no puede autopromoverse. `SESSION` representa reunión y `CLASS` conserva el mismo contrato seguro, ajustado por flags. La UI oculta o deshabilita acciones que el rol no puede ejecutar.
+
+## Controles principales
+
+En escritorio están visibles micrófono, cámara, pantalla, chat, mano cuando corresponde, participantes, Más y Salir. En móvil se priorizan micrófono, cámara, chat, mano, Más y Salir; pantalla y participantes siguen disponibles dentro de Más. Los botones publican `aria-pressed`, `aria-busy`, nombre accesible, tooltip y estado deshabilitado.
+
+**Salir** desconecta solo al usuario. **Finalizar para todos** exige rol y confirmación. La grabación no se infiere de `LIVE`: sin Egress el control dice **Grabación no disponible** y explica qué integración falta.
+
+## Pantalla y cámara local
+
+La pantalla compartida ocupa el spotlight. La cámara local permanece como miniatura arrastrable; apagada se transforma en avatar con iniciales, nombre, etiqueta “tú” y estado de micrófono. Puede ocultarse durante la sesión desde Más.
+
+El navegador decide si comparte pestaña, ventana o pantalla completa. La aplicación solicita audio, pero solo muestra **Audio de pantalla incluido** cuando LiveKit publica el track `ScreenShareAudio`. El evento `ended` restaura escenario, botones, aviso y auditoría aunque la captura termine desde el indicador nativo.
+
+## Controles flotantes
+
+Al iniciar pantalla aparece un toast **Mantén los controles visibles mientras presentas**. La preferencia local **Abrir panel flotante al compartir** permite solicitar apertura automática desde ese gesto.
+
+Cuando `documentPictureInPicture` funciona se abre una ventana Document PiP con logo, título, temporizador, conexión, calidad, bloqueo, participantes, manos, mensajes, preguntas pendientes, reacción reciente y grabación real. Incluye micrófono, cámara, detener pantalla, chat, preguntas, participantes, mano/ver manos, Más, Salir y volver.
+
+Cerrar la ventana no altera reunión ni medios y el botón permite reabrirla. Si la API no existe, falla o cierra inmediatamente, se abre un panel arrastrable dentro de la reunión. Ese fallback conserva todos los controles, pero no puede permanecer sobre otra aplicación. No se promete “siempre encima” fuera de navegadores compatibles.
+
+## Panel lateral y chat
+
+Chat, Preguntas y Participantes comparten un panel. Cerrarlo añade `panel-closed` al layout, elimina la columna y entrega todo el ancho al escenario. En tablet el panel es lateral superpuesto y en móvil se comporta como hoja/pantalla completa sin destruir `Room`.
+
+El compositor conserva borradores por tipo, dos líneas autoexpandibles, Enter para enviar, Shift+Enter para nueva línea, protección IME, límites de 2.000/600 caracteres, adjuntos validados, envío, fallo y reintento. Con el panel cerrado, mensajes incrementan contador y producen sonido/toast agrupado; en segundo plano también se solicita notificación del sistema si el usuario otorgó permiso.
+
+## Q&A
+
+Las preguntas se guardan en `questions/` local o S3, no en el DOM. El asistente puede crear, editar/eliminar una pregunta propia pendiente y votar. Organizador/panelista puede destacar, responder por escrito, marcar respondida en vivo o descartar. Se ordenan por votos o fecha y el contador muestra pendientes.
+
+Solo se retransmite `question-changed`/`question-deleted`; cada cliente vuelve a consultar una proyección que no expone identidades internas ni la lista de votantes. Auditoría registra creación y decisiones de moderación, no el texto.
+
+## Participantes, mano y consentimiento
+
+Participantes muestra nombre, rol humano, micrófono, cámara, pantalla, mano, hora de entrada y calidad disponible. Al estar solo, el organizador ve enlaces de invitación de asistente y panelista.
+
+El organizador puede silenciar una pista publicada, pedir activación de micrófono, pedir apagar cámara, dar/quitar palabra, expulsar o bloquear. Las solicitudes aparecen como toast con decisión del participante: la plataforma nunca enciende cámara o micrófono remoto. Bloquear revoca la invitación asociada cuando existe.
+
+La cola de manos conserva orden y hora. En Webinar organizador/panelista revisa la cola; solo organizador cambia permisos de publicación. Sonido, toast, contador, notificación y modelo flotante comparten el mismo evento.
+
+## Reacciones, alertas y notificaciones
+
+Reacciones disponibles: 👍, 👏, ❤️, 😂, 🎉 y ✅. Se retransmiten con identidad, tienen rate limit y animación breve que respeta `prefers-reduced-motion`.
+
+Los toasts usan `aria-live`, cierre y caducidad; eventos repetidos se agrupan. El botón de notificaciones diferencia solicitando, concedido, rechazado y no compatible. `Notification.requestPermission()` solo se ejecuta desde el clic. Sonidos, volumen y categorías se conservan localmente sin datos sensibles.
+
+## Estado, temporizador y red
+
+El temporizador comienza tras conexión LiveKit confirmada y usa `meeting.startedAt`, por lo que no reinicia al reconectar. La calidad procede de `ConnectionQualityChanged`: excelente, buena, inestable o sin medir. Reconnecting/disconnected pertenecen a la máquina de conexión y nunca se mezclan con grabación.
+
+Bloquear sala impide nuevos canjes, no desconecta asistentes existentes ni revoca permanentemente enlaces. Desbloquear restaura invitaciones activas. El check y el consumo se serializan por sala dentro de una instancia.
+
+## Atajos y accesibilidad
+
+- Ctrl/Cmd+Shift+M: micrófono.
+- Ctrl/Cmd+Shift+V: cámara.
+- Ctrl/Cmd+Shift+S: pantalla.
+- Ctrl/Cmd+Shift+C: chat.
+- Ctrl/Cmd+Shift+H: mano o cola.
+- Ctrl/Cmd+Shift+P: participantes.
+- Escape: cerrar panel lateral/Más.
+
+No se ejecutan con foco en `input`, `textarea`, `select`, `contenteditable` o un diálogo. Hay foco visible, nombres accesibles, estados textuales, contraste y controles táctiles. Los diálogos nativos conservan foco modal; el preflight y confirmaciones restauran una salida clara.
+
+## Compatibilidad y rendimiento
+
+Document PiP funciona principalmente en Chromium compatible y exige contexto seguro (localhost cuenta). Firefox/Safari y políticas corporativas pueden usar solo el fallback interno. Selección de altavoz requiere `setSinkId`; compartir pantalla y audio dependen del dispositivo/navegador. Notificaciones pueden ser bloqueadas globalmente.
+
+La sala limita mensajes montados a 300, agrupa toasts, debounces recargas de Q&A, carga efectos bajo demanda, revoca Object URLs y elimina listeners/timers en retry o `pagehide`. Los fondos se procesan localmente; no se suben.
+
+## QA local
+
+1. `npm run livekit:up` y `npm start`.
+2. Organizador en navegador normal; asistente con invitación en incógnito/otro perfil.
+3. Probar chat bidireccional, Q&A, reacción, mano, promoción, moderación y bloqueos.
+4. Probar pantalla, evento `ended`, miniatura, audio, Document PiP o fallback y controles de medios.
+5. Probar conexión/reconexión, salir y finalizar.
+6. Revisar 360×640, 375×667, 390×844, 412×915, 768×1024, 1024×768, 1366×768 y 1920×1080 sin overflow.
+
+Limitaciones: una salida abrupta requiere webhook LiveKit para auditoría autoritativa; locks/rate limits en memoria requieren coordinación compartida con varias instancias; grabación y transcripción reales requieren Egress, almacenamiento y proveedor configurados; una herramienta automatizada no puede elegir de forma fiable el elemento del selector nativo de pantalla.

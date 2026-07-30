@@ -9,12 +9,13 @@
 - `invitations.js`: creación, hash, caducidad, usos y revocación.
 - `room-session.js`: identidad, rol y sala firmados en cookie HttpOnly.
 - `rooms.js`: registro de salas con política fail-closed.
+- `questions.js`: preguntas persistentes, votos por identidad, estados y respuestas moderadas.
 - `livekit-status.js`: comprobación real y cacheada de disponibilidad, con timeout y respuesta sin secretos.
 - `audit.js`: eventos persistentes con metadata filtrada.
 - `local-store.js`: JSON local atómico.
 - `s3.js`: cliente S3/R2 privado.
 
-El frontend usa `dashboard.js` para administración y `room-ui.js` para las dos superficies de reunión. `app-core.js` contiene lógica pura que también se prueba en Node.
+El frontend usa `dashboard.js` para administración y `room-ui.js` para las dos superficies de reunión. `stage.js`, `questions.js`, `meeting-notifications.js`, `connection.js` y `floating-bar.js` aíslan escenario, Q&A, toasts, calidad y controles complementarios. `app-core.js` contiene lógica pura que también se prueba en Node.
 
 ## Flujos de confianza
 
@@ -30,7 +31,7 @@ El frontend usa `dashboard.js` para administración y `room-ui.js` para las dos 
 
 1. ADMIN/ORGANIZER crea una invitación ligada a `meetingId`, `room`, rol, expiración y límite de usos.
 2. Solo se devuelve una vez un secreto aleatorio de 256 bits. Persistencia conserva únicamente SHA-256.
-3. `/i/:token` valida y consume el uso.
+3. `/i/:token` valida el estado de la reunión y, bajo un lock de admisión por sala, comprueba que la sala no esté bloqueada antes de consumir el uso.
 4. El servidor crea `rat_room_session` con sala, identidad aleatoria y rol firmados.
 5. Responde `303` a `presenter.html` o `viewer.html`; el secreto desaparece de URL e historial inmediato.
 6. `/api/token` ignora parámetros de cliente y crea el JWT LiveKit desde la sesión de sala.
@@ -44,9 +45,15 @@ El frontend usa `dashboard.js` para administración y `room-ui.js` para las dos 
 5. El servidor consulta los participantes reales de LiveKit y solo entonces escribe `LIVE`, `startedAt`, `livekitConfirmedAt` y `ROOM_CONNECTED`.
 6. Repetir la confirmación es idempotente y no duplica auditoría. Finalizar escribe `ROOM_ENDED`.
 
-### Chat, manos y moderación
+### Chat, Q&A, manos y moderación
 
-Los participantes no reciben permiso `canPublishData`. Mensajes y eventos pasan por Express, que valida sesión de sala, CSRF, estado, flags de reunión, pertenencia LiveKit y frecuencia. El servidor los retransmite con `RoomServiceClient.sendData`. Promoción, degradación y expulsión usan la identidad del actor firmada y nunca `panelistIdentity` del JSON.
+Los participantes no reciben permiso `canPublishData`. Mensajes y eventos pasan por Express, que valida sesión de sala, CSRF, estado, flags de reunión, pertenencia LiveKit y frecuencia. El servidor los retransmite con `RoomServiceClient.sendData`. Q&A se persiste bajo `questions/` y solo transmite avisos de invalidación; cada navegador vuelve a leer su proyección autorizada. Promoción, degradación, expulsión, bloqueo y solicitudes de medios verifican la identidad objetivo contra participantes reales de LiveKit.
+
+### Estado compartido de reunión
+
+`rooms.js` guarda `locked`, `lockedAt` y `lockedBy`. El bloqueo impide nuevos canjes sin revocar invitaciones, por lo que desbloquear restaura el acceso. Las sesiones ya emitidas pueden renovar su JWT mientras la sala siga activa. El temporizador usa `meeting.startedAt`, escrito en la primera conexión LiveKit confirmada incluso si el dashboard había preparado el estado `LIVE`.
+
+El modelo flotante del cliente es observable y sincroniza medios, pantalla, panel activo, manos, mensajes, preguntas pendientes, grabación, red, bloqueo y tiempo. Abrir o cerrar Document PiP no crea otra `Room`, no mueve tracks y no registra listeners de LiveKit adicionales.
 
 ## Modelo de reunión
 
@@ -67,14 +74,15 @@ Estados: `DRAFT` (Borrador), `SCHEDULED` (Programada), `LIVE` (En vivo confirmad
 | Iniciar/finalizar reunión | Sí | Sí | No | No |
 | Grabar | Sí | Sí | No | No |
 | Cámara/mic/pantalla | Sí | Sí | Sí | Solo al recibir palabra |
-| Moderar mano | Sí | Sí | Sí | No |
+| Ver cola y moderar Q&A | Sí | Sí | Sí | No |
+| Dar/quitar palabra y expulsar | Sí | Sí | No | No |
 | Chat/preguntas/reacciones | Según reunión | Según reunión | Según reunión | Según reunión |
 
 Un ORGANIZER solo administra reuniones creadas por él o donde coincide con `trainerId`. ADMIN puede administrar todas.
 
 ## Persistencia
 
-Con R2, cada entidad es un objeto JSON bajo `users/`, `meetings/`, `room-configs/`, `invitations/` o `audit/`. Sin R2, las mismas secciones viven bajo `.local-data/`. Las grabaciones y archivos de chat requieren S3/R2; no se simulan como archivos públicos locales.
+Con R2, cada entidad es un objeto JSON bajo `users/`, `meetings/`, `room-configs/`, `invitations/`, `questions/` o `audit/`. Sin R2, las mismas secciones viven bajo `.local-data/`. Las grabaciones y archivos de chat requieren S3/R2; no se simulan como archivos públicos locales.
 
 Para alto volumen o varias instancias, la evolución recomendada es PostgreSQL para entidades, Redis para rate limits/sesiones y una cola para trabajos de grabación.
 

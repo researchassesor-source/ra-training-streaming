@@ -13,7 +13,16 @@ Plataforma web para webinars, clases y sesiones en vivo de R.A. Training. Combin
 
 Los secretos de invitación se guardan como SHA-256. Al abrir `/i/<token>`, el servidor valida expiración, revocación y usos, crea una cookie HttpOnly de sala y redirige a una URL sin token. El navegador nunca decide su rol, sala ni identidad LiveKit.
 
-Consulta [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md) y [Seguridad](docs/SECURITY.md) para el diseño completo.
+Consulta [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md) y [Seguridad](docs/SECURITY.md) para el diseño completo.
+
+## Experiencia de reunión
+
+- Controles directos de micrófono, cámara, pantalla, chat, participantes, más opciones y salida; en móvil se priorizan seis acciones y pantalla/participantes pasan al panel **Más**.
+- Document Picture-in-Picture con estado, temporizador y controles sincronizados. Si la API no existe o falla al abrir, se conserva un panel arrastrable dentro de la pestaña con la limitación explicada al usuario.
+- Pantalla en spotlight, cámara local persistente como miniatura arrastrable o avatar, indicador veraz de audio de pantalla y recuperación del evento `ended`.
+- Q&A persistente con edición propia pendiente, votos, respuesta escrita/en vivo, destacado, descarte y orden por votos o fecha.
+- Bloqueo reversible de sala, invitaciones creadas dentro de la reunión, moderación con consentimiento, reacciones, toasts agrupados, notificaciones y atajos.
+- Temporizador desde conexión confirmada, calidad de red de LiveKit y grabación mostrada únicamente cuando Egress confirma `RECORDING`.
 
 ## Requisitos
 
@@ -91,7 +100,7 @@ node --check server\index.js
 git diff --check
 ```
 
-`npm test` usa `node:test`, servidores HTTP efímeros, almacenamiento temporal y servicios LiveKit/transcripción simulados. Cubre compatibilidad legada, grabación, permisos, exportaciones y sanitización sin tocar Producción.
+`npm test` usa `node:test`, servidores HTTP efímeros, almacenamiento temporal y servicios LiveKit/transcripción simulados. Cubre compatibilidad legada, bloqueo, Q&A, controles flotantes, notificaciones, grabación, permisos, exportaciones y sanitización sin tocar Producción.
 
 ## Flujo Git
 
@@ -113,7 +122,9 @@ git diff --check
 
 - Los rate limits son en memoria por proceso. Una instalación con varias instancias debe migrarlos a un almacén compartido.
 - La persistencia JSON/S3 es apropiada para el volumen actual, no sustituye transacciones de base de datos en alta concurrencia.
-- Document Picture-in-Picture depende del navegador; video PiP es el fallback y no ofrece los mismos controles.
+- Document Picture-in-Picture depende del navegador. El fallback con todos los controles vive dentro de la pestaña y no puede mantenerse sobre otras aplicaciones.
+- El selector de pantalla completa, ventana o pestaña es nativo del navegador; la aplicación no puede elegir por el usuario.
+- El bloqueo de canje se serializa por sala dentro de una instancia. Una topología multinodo necesita un lock o transacción compartida.
 - Cámara, micrófono, pantalla, reconexión real y Egress deben validarse en un Preview aislado con LiveKit de prueba.
 - La grabación actual usa `RoomComposite`: el audio resultante está mezclado. La identificación exacta por participante requiere Participant/Track Egress o diarización del proveedor y siempre admite corrección manual.
 - El proveedor `mock` no inventa texto: solo completa trabajos con fixtures explícitos y está prohibido en Producción.

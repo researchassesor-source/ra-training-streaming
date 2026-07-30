@@ -32,6 +32,7 @@ No ejecutar sin aprobación humana.
 - [ ] Abrir panelista y asistente con cámara/micrófono permitidos y denegados.
 - [ ] Confirmar que Programada cambia a En vivo solo después de conectar un participante autorizado y que auditoría contiene un único `ROOM_CONNECTED`.
 - [ ] Chat, preguntas, archivo permitido/rechazado, rate limit, no leídos y reintento.
+- [ ] Q&A persistente: editar propia pendiente, votar, ordenar, fijar, responder por escrito/en vivo y descartar.
 - [ ] Mano: levantar, cancelar, rechazar, dar/quitar palabra y expulsar.
 - [ ] Compartir pantalla y evento `ended`.
 - [ ] Salir no finaliza; **Finalizar para todos** sí desconecta y completa.
@@ -42,7 +43,13 @@ No ejecutar sin aprobación humana.
 - [ ] Transcripción: crear, procesar, completar, fallar, reintentar, cancelar, editar con conflicto, eliminar y exportar TXT/JSON/VTT/SRT.
 - [ ] PANELIST respeta el permiso de consulta; VIEWER recibe 403; ninguna respuesta o log expone claves ni `providerJobId`.
 - [ ] Probar búsqueda, filtro de participante, timestamps, confianza, nombres desconocidos y cambios sin guardar.
-- [ ] PiP de documento, fallback de video y mensaje sin soporte.
+- [ ] Document PiP: mic/cámara/pantalla/paneles/salida, cierre sin desconectar y reapertura; fallback interno completo y mensaje honesto.
+- [ ] Cerrar Chat/Preguntas/Participantes elimina la columna y expande inmediatamente el escenario.
+- [ ] Pantalla en spotlight, miniatura local arrastrable/avatar, audio veraz y recuperación al terminar desde el navegador.
+- [ ] Bloquear/desbloquear: una invitación no se consume al rechazar; la sesión existente continúa.
+- [ ] Invitaciones de asistente/panelista desde sala muestran confirmación sin exponer el token en UI persistente.
+- [ ] Calidad, temporizador y estado de grabación real coinciden en header y panel flotante.
+- [ ] Atajos Ctrl/Cmd+Shift no se ejecutan durante escritura; Escape cierra paneles.
 - [ ] Sonidos, volumen, preferencias y notificaciones con pestaña oculta.
 - [ ] Breakpoints: 360×640, 375×667, 390×844, 412×915, 768×1024, 1024×768, 1366×768, 1920×1080.
 - [ ] Teclado móvil, safe areas, rotación y ausencia de scroll horizontal.

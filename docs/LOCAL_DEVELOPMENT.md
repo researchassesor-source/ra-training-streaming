@@ -56,10 +56,12 @@ El instalador descarga `livekit_1.13.1_windows_amd64.zip` desde la publicación 
 3. Pulsa **Iniciar**: la reunión sigue Programada durante el preflight.
 4. Conecta al organizador/panelista; solo la confirmación de LiveKit cambia el estado a En vivo.
 5. Crea un enlace de asistente y ábrelo en otro navegador o perfil.
-6. Autoriza y prueba cámara, micrófono, participantes, chat, preguntas, mano levantada y pantalla.
-7. Prueba reconexión y **Salir**; luego usa **Finalizar para todos** desde el organizador.
-8. Comprueba auditoría: intento, reintento/fallo si corresponde, una única reunión iniciada y finalización.
-9. Detén Node con `Ctrl+C` y ejecuta `npm run livekit:down`.
+6. Autoriza y prueba cámara, micrófono, participantes, chat, Q&A persistente, reacciones, mano levantada y pantalla.
+7. Al compartir, abre el panel flotante, controla medios y detén la captura. Si Document PiP falla, confirma el fallback arrastrable dentro de la pestaña.
+8. Cierra el panel lateral y verifica que el escenario use todo el ancho. Prueba bloqueo/desbloqueo e invitaciones internas.
+9. Prueba reconexión y **Salir**; luego usa **Finalizar para todos** desde el organizador.
+10. Comprueba auditoría: entradas, reconexión, medios relevantes, preguntas respondidas, bloqueo y finalización.
+11. Detén Node con `Ctrl+C` y ejecuta `npm run livekit:down`.
 
 El dashboard distingue **configurado** de **disponible** mediante una consulta real a la API de LiveKit. Sin servicio, **Iniciar** devuelve un aviso, no crea un falso estado LIVE, no incrementa activas y no registra una reunión iniciada.
 
@@ -69,7 +71,7 @@ El dashboard distingue **configurado** de **disponible** mediante una consulta r
 - Prueba permiso denegado, dispositivo inexistente y dispositivo ocupado.
 - Cambia orientación sin recargar; la instancia `Room` debe permanecer igual.
 - Termina la captura de pantalla desde el indicador del navegador y confirma que el botón vuelve a **Compartir pantalla**.
-- Prueba Document PiP y, si no está, comprueba el mensaje de compatibilidad o video PiP.
+- Prueba Document PiP y, si no está o la ventana se cierra al abrir, comprueba el panel flotante interno y su mensaje de compatibilidad.
 - Pon la pestaña en segundo plano después de activar notificaciones mediante el botón; valida mensaje, mano y fallo de conexión.
 
 ## Pruebas automatizadas
@@ -81,6 +83,8 @@ git diff --check
 ```
 
 Las pruebas usan una carpeta temporal mediante `LOCAL_DATA_DIR`, puerto efímero y servicios LiveKit simulados. No apuntan al `.env` productivo.
+
+La matriz automatizada incluye bloqueo sin consumo de invitación, sesión existente durante bloqueo, creación/voto/respuesta de Q&A, permisos, sincronización del modelo flotante, fallback, agrupación anti-spam, limpieza de listeners y contratos responsive.
 
 ## Limpieza
 

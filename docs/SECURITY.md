@@ -13,12 +13,15 @@
 - Identidad, rol y sala LiveKit derivados exclusivamente de sesión firmada.
 - Salas fail-closed. `ALLOW_OPEN_DEV_ROOMS` nunca funciona con `NODE_ENV=production`.
 - JSON limitado, validación de tipos/longitudes, slugs únicos y errores internos no expuestos.
-- Rate limiting para login, reuniones y chat/eventos.
+- Rate limiting para login, reuniones, chat/preguntas y acciones interactivas de moderación.
 - Mensajes y eventos retransmitidos por servidor; `canPublishData=false` impide saltar el rate limit mediante SDK cliente.
 - Archivos ligados a sesión de sala, MIME allowlist, tamaño máximo, nombre de objeto aleatorio y URL firmada.
 - Grabación restringida a ADMIN/ORGANIZER presentes en una reunión `LIVE` que permite grabar.
 - Auditoría con IP acotada, user-agent limitado y eliminación de claves con apariencia de secreto.
 - Reuniones con eliminación lógica; la sala se revoca al cancelar, archivar, completar o eliminar.
+- Bloqueo reversible validado antes del consumo de invitación; participantes existentes continúan sin convertir el bloqueo en revocación.
+- Q&A con autor e identidad derivados de sesión, edición propia solo mientras está pendiente y moderación autorizada en servidor.
+- Solicitar micrófono o apagar cámara se comunica al participante; nunca se intenta encender remotamente un dispositivo sin consentimiento.
 
 ## Políticas de roles
 
@@ -32,9 +35,13 @@ Express emite `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `P
 
 - Rate limit en memoria: usar Redis cuando existan múltiples procesos o instancias.
 - S3 no ofrece las mismas garantías transaccionales que una base de datos. Para concurrencia elevada, migrar usuarios, reuniones, invitaciones y auditoría a PostgreSQL.
-- El consumo de invitación se serializa de forma efectiva dentro de una instancia; una topología con varias instancias requiere operación atómica compartida.
+- El consumo de invitación y el cambio de bloqueo se serializan por sala dentro de una instancia; una topología con varias instancias requiere operación atómica compartida.
 - Los links firmados de grabación tienen una hora de vigencia; quien reciba el link puede usarlo durante ese periodo.
-- La metadata LiveKit visible al cliente solo contiene el rol y no debe incluir información sensible.
+- La metadata LiveKit contiene rol, hora de entrada e identificador interno de invitación para moderación. No contiene el token ni otros secretos.
+
+## Auditoría de reunión
+
+Se registran entrada, salida explícita, reconexión, pantalla iniciada/detenida, micrófono silenciado, promoción, degradación, expulsión/bloqueo, bloqueo de sala, preguntas creadas/respondidas/descartadas, grabación y finalización. No se guardan textos completos del chat ni de las preguntas en auditoría. Una salida abrupta sin petición HTTP depende de futura integración de webhooks LiveKit para quedar registrada de forma autoritativa.
 
 ## Respuesta a incidentes
 
