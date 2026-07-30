@@ -29,8 +29,16 @@ const { createApp } = require('../server/app');
 const mockRoomService = {
   participants: [],
   sentData: [],
+  updates: [],
   async listParticipants() { return this.participants; },
-  async updateParticipant() {},
+  async updateParticipant(room, identity, update) {
+    this.updates.push({ room, identity, update });
+    const participant = this.participants.find((item) => item.identity === identity);
+    if (participant && update.permission) {
+      participant.permission = { ...(participant.permission || {}), ...update.permission };
+      participant.permissions = participant.permission;
+    }
+  },
   async removeParticipant() {},
   async mutePublishedTrack() {},
   async deleteRoom() {},
@@ -46,12 +54,13 @@ let mockLivekitAvailable = true;
 let server;
 let baseUrl;
 
-async function request(route, { method = 'GET', body, cookie, csrf, roomCsrf, redirect = 'follow' } = {}) {
+async function request(route, { method = 'GET', body, cookie, csrf, roomCsrf, roomSessionId, redirect = 'follow' } = {}) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (cookie) headers.Cookie = cookie;
   if (csrf) headers['X-CSRF-Token'] = csrf;
   if (roomCsrf) headers['X-Room-CSRF'] = roomCsrf;
+  if (roomSessionId) headers['X-Room-Session-ID'] = roomSessionId;
   const response = await fetch(`${baseUrl}${route}`, {
     method,
     headers,
@@ -61,7 +70,11 @@ async function request(route, { method = 'GET', body, cookie, csrf, roomCsrf, re
   let data = null;
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) data = await response.json();
-  return { response, data, cookie: response.headers.get('set-cookie')?.split(';')[0] || null };
+  const setCookieHeaders = typeof response.headers.getSetCookie === 'function'
+    ? response.headers.getSetCookie()
+    : [response.headers.get('set-cookie')].filter(Boolean);
+  const cookies = setCookieHeaders.map((value) => value.split(';')[0]);
+  return { response, data, cookies, cookie: cookies[0] || null };
 }
 
 async function login(username = 'rootadmin', password = 'Bootstrap-password-123') {
@@ -259,6 +272,100 @@ test('room locking rejects new redemptions without consuming invitations and pre
   mockRoomService.participants = [];
 });
 
+test('independent room cookies keep organizer and viewer actions valid in simultaneous tabs', async () => {
+  const meeting = await meetings.createMeeting({
+    title: 'Sala en dos pestañas', room: 'sala-dos-pestanas', trainerName: 'Trainer', scheduledAt: '2031-04-05T10:00:00.000Z',
+    durationMinutes: 60, status: 'LIVE', allowQuestions: true, createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const organizer = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', displayName: 'Organizador' });
+  const viewer = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'VIEWER', displayName: 'Asistente' });
+  const cookieJar = [
+    roomCookie(organizer.token, organizer.session.sid).split(';')[0],
+    roomCookie(viewer.token, viewer.session.sid).split(';')[0],
+  ].join('; ');
+  mockRoomService.participants = [
+    { identity: organizer.session.identity, permission: { canPublish: true }, tracks: [] },
+    { identity: viewer.session.identity, permission: { canPublish: false }, tracks: [] },
+  ];
+  mockRoomService.sentData = [];
+  mockRoomService.updates = [];
+
+  for (const session of [organizer, viewer]) {
+    const current = await request('/api/room-session', { cookie: cookieJar, roomSessionId: session.session.sid });
+    assert.equal(current.response.status, 200, JSON.stringify(current.data));
+    assert.equal(current.data.identity, session.session.identity);
+  }
+  const invalidCsrf = await request('/api/participants/promote', {
+    method: 'POST', cookie: cookieJar, roomSessionId: organizer.session.sid, roomCsrf: 'csrf-de-otra-pestana',
+    body: { targetIdentity: viewer.session.identity },
+  });
+  assert.equal(invalidCsrf.response.status, 403);
+  assert.equal(invalidCsrf.data.code, 'CSRF_INVALID');
+  assert.match(invalidCsrf.data.error, /sesión de sala cambió/i);
+  assert.deepEqual(invalidCsrf.data.diagnostic, { selectorPresent: true, selectedCookiePresent: true, csrfHeaderPresent: true });
+
+  const mediaRequest = await request('/api/participants/request-media', {
+    method: 'POST', cookie: cookieJar, roomSessionId: organizer.session.sid, roomCsrf: organizer.session.csrf,
+    body: { targetIdentity: viewer.session.identity, action: 'request-microphone' },
+  });
+  assert.equal(mediaRequest.response.status, 200, JSON.stringify(mediaRequest.data));
+  const accepted = await request('/api/participants/media-response', {
+    method: 'POST', cookie: cookieJar, roomSessionId: viewer.session.sid, roomCsrf: viewer.session.csrf,
+    body: { requestId: mediaRequest.data.requestId, status: 'accepted' },
+  });
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.data));
+  assert.equal(accepted.data.permissionGranted, true);
+  assert.equal(mockRoomService.participants[1].permission.canPublish, true);
+  assert.equal(await rooms.hasSpeakerGrant(meeting.room, viewer.session.identity), true);
+  const activated = await request('/api/participants/media-response', {
+    method: 'POST', cookie: cookieJar, roomSessionId: viewer.session.sid, roomCsrf: viewer.session.csrf,
+    body: { requestId: mediaRequest.data.requestId, status: 'activated' },
+  });
+  assert.equal(activated.data.status, 'activated');
+  const secondRequest = await request('/api/participants/request-media', {
+    method: 'POST', cookie: cookieJar, roomSessionId: organizer.session.sid, roomCsrf: organizer.session.csrf,
+    body: { targetIdentity: viewer.session.identity, action: 'request-microphone' },
+  });
+  const rejected = await request('/api/participants/media-response', {
+    method: 'POST', cookie: cookieJar, roomSessionId: viewer.session.sid, roomCsrf: viewer.session.csrf,
+    body: { requestId: secondRequest.data.requestId, status: 'rejected' },
+  });
+  assert.equal(rejected.data.status, 'rejected');
+
+  const demoted = await request('/api/participants/demote', {
+    method: 'POST', cookie: cookieJar, roomSessionId: organizer.session.sid, roomCsrf: organizer.session.csrf,
+    body: { targetIdentity: viewer.session.identity },
+  });
+  assert.equal(demoted.response.status, 200, JSON.stringify(demoted.data));
+  assert.equal(mockRoomService.participants[1].permission.canPublish, false);
+  assert.equal(await rooms.hasSpeakerGrant(meeting.room, viewer.session.identity), false);
+  const promoted = await request('/api/participants/promote', {
+    method: 'POST', cookie: cookieJar, roomSessionId: organizer.session.sid, roomCsrf: organizer.session.csrf,
+    body: { targetIdentity: viewer.session.identity },
+  });
+  assert.equal(promoted.response.status, 200, JSON.stringify(promoted.data));
+  assert.equal(mockRoomService.participants[1].permission.canPublish, true);
+  assert.equal(await rooms.hasSpeakerGrant(meeting.room, viewer.session.identity), true);
+  const forbidden = await request('/api/participants/promote', {
+    method: 'POST', cookie: cookieJar, roomSessionId: viewer.session.sid, roomCsrf: viewer.session.csrf,
+    body: { targetIdentity: viewer.session.identity },
+  });
+  assert.equal(forbidden.response.status, 403);
+
+  const chat = await request('/api/chat/message', {
+    method: 'POST', cookie: cookieJar, roomSessionId: viewer.session.sid, roomCsrf: viewer.session.csrf,
+    body: { text: 'Mensaje desde la sesión canjeada', kind: 'chat' },
+  });
+  assert.equal(chat.response.status, 200, JSON.stringify(chat.data));
+  const question = await request('/api/questions', {
+    method: 'POST', cookie: cookieJar, roomSessionId: organizer.session.sid, roomCsrf: organizer.session.csrf,
+    body: { text: '¿La sesión sigue vinculada a esta pestaña?' },
+  });
+  assert.equal(question.response.status, 201, JSON.stringify(question.data));
+  mockRoomService.participants = [];
+});
+
 test('persistent Q&A enforces ownership, supports voting and moderator answers', async () => {
   const meeting = await meetings.createMeeting({
     title: 'Preguntas profesionales', room: 'preguntas-profesionales', trainerName: 'Trainer', scheduledAt: '2031-05-01T10:00:00.000Z',
@@ -418,10 +525,22 @@ test('invitation redemption removes the token from the URL and creates a room co
   assert.match(invitation.data.path, /^\/i\/[A-Za-z0-9_-]{40,}$/);
   const redemption = await request(invitation.data.path, { redirect: 'manual' });
   assert.equal(redemption.response.status, 303);
-  assert.equal(redemption.response.headers.get('location'), '/viewer.html');
+  assert.match(redemption.response.headers.get('location'), /^\/viewer\.html\?roomSession=[a-f0-9-]{36}$/i);
   assert.match(redemption.response.headers.get('set-cookie'), /rat_room_session=.*HttpOnly/i);
+  const roomSessionId = new URL(redemption.response.headers.get('location'), baseUrl).searchParams.get('roomSession');
+  const cookieJar = redemption.cookies.join('; ');
+  const session = await request('/api/room-session', { cookie: cookieJar, roomSessionId });
+  assert.equal(session.response.status, 200, JSON.stringify(session.data));
+  assert.equal(session.data.role, 'VIEWER');
+  mockRoomService.participants = [{ identity: session.data.identity }];
+  const question = await request('/api/questions', {
+    method: 'POST', cookie: cookieJar, roomSessionId, roomCsrf: session.data.csrfToken,
+    body: { text: '¿Puedo seguir usando la sesión después de canjear el enlace?' },
+  });
+  assert.equal(question.response.status, 201, JSON.stringify(question.data));
   const reused = await request(invitation.data.path, { redirect: 'manual' });
   assert.equal(reused.response.status, 410);
+  mockRoomService.participants = [];
 });
 
 test('audit records actions without secret-like metadata', async () => {

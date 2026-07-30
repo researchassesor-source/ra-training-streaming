@@ -30,6 +30,10 @@ test('floating controls synchronize every critical state and fall back inside th
   assert.doesNotMatch(source, /disconnect\(/);
   assert.match(source, /fallback\.hidden = false/);
   assert.match(source, /if \(fallback\)[\s\S]*?model\.subscribe/);
+  assert.match(source, /let mode = 'compact'/);
+  assert.match(source, /data-mode="\$\{mode\}"/);
+  assert.match(source, /applyMode\(documentRef, mode === 'compact' \? 'expanded' : 'compact'\)/);
+  assert.match(source, /requestWindow\(\{ width: mode === 'compact' \? 760 : 460/);
 });
 
 test('stage keeps a draggable local avatar while screen sharing and cleans remote listeners', () => {
@@ -38,17 +42,23 @@ test('stage keeps a draggable local avatar while screen sharing and cleans remot
   assert.match(source, /makeContainedDraggable/);
   assert.match(source, /video-avatar/);
   assert.match(source, /setParticipantVisibility/);
-  assert.match(source, /ScreenShareAudio/);
+  assert.match(source, /screenshareaudio/);
+  assert.match(source, /TrackPublished/);
+  assert.match(source, /TrackUnpublished/);
+  assert.match(source, /classifyTrackSource/);
+  assert.match(source, /document\.body\.appendChild\(element\)/);
   assert.match(source, /dispose\(\).*room\.off/s);
   const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
   assert.match(css, /\.video-tile\.local-overlay/);
-  assert.match(css, /\.video-tile\.camera-off \.video-avatar/);
+  assert.match(css, /\.video-tile \.video-avatar\s*\{\s*display:\s*grid/);
+  assert.match(css, /\.video-tile\.has-video \.video-avatar\s*\{\s*display:\s*none/);
 });
 
 test('side panel collapse, mobile controls and reduced motion are explicit', () => {
   const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
   assert.match(css, /\.room-side-panel\.closed\s*\{\s*display:\s*none/);
-  assert.match(css, /\.room-layout\.panel-closed\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(css, /\.room-layout\.panel-closed\s*\{\s*grid-template-columns:\s*100%/);
+  assert.match(css, /\.room-layout\.panel-closed > \.room-side-panel\s*\{\s*display:\s*none/);
   assert.match(css, /@media \(max-width: 700px\)[\s\S]*?#btnScreen[\s\S]*?display:\s*none/);
   assert.match(css, /\.mobile-only\s*\{\s*display:\s*none/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
@@ -99,6 +109,24 @@ test('room implementation includes Q&A, notifications, locks, shortcuts and boun
   assert.match(room, /ui\.stageEvents\?\.dispose\(\)/);
   assert.match(room, /clearInterval\(ui\.elapsedTimer\)/);
   assert.match(room, /event\.ctrlKey \|\| event\.metaKey/);
+  assert.match(room, /Solicitar activar micrófono/);
+  assert.match(room, /Bloquear acceso/);
+  assert.match(room, /participant-more/);
+  assert.match(room, /askConfirmation\(\{[\s\S]*?Expulsar participante/);
+  assert.match(room, /handleMicrophoneRequest/);
+  assert.match(room, /media-response/);
   const questions = fs.readFileSync(path.join(publicDir, 'questions.js'), 'utf8');
   for (const feature of ['voteCount', 'ANSWERED_LIVE', 'ANSWERED_WRITTEN', 'DISMISSED', 'pinned', 'questionSort']) assert.match(questions, new RegExp(feature));
+});
+
+test('room requests bind the tab selector and failed chat or Q&A restores the draft', () => {
+  const access = fs.readFileSync(path.join(publicDir, 'access.js'), 'utf8');
+  assert.match(access, /credentials:\s*'same-origin'/);
+  assert.match(access, /X-Room-Session-ID/);
+  assert.match(access, /sessionStorage/);
+  assert.match(access, /X-Room-CSRF/);
+  const chat = fs.readFileSync(path.join(publicDir, 'chat.js'), 'utf8');
+  assert.match(chat, /inputEl\.value = ''[\s\S]*?const sent = await sendText[\s\S]*?if \(!sent && !inputEl\.value\) inputEl\.value = text/);
+  assert.match(chat, /if \(sending \|\| event\.isComposing\) return/);
+  assert.match(chat, /Reintentar/);
 });

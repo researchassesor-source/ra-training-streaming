@@ -12,8 +12,10 @@ const {
   safeHttpUrl,
   calendarRange,
   meetingsForLocalDay,
+  isLivePublication,
   upcomingMeetings,
 } = require('../public/app-core');
+const { classifyTrackSource } = require('../public/stage');
 const { nextPasswordType } = require('../public/password-toggle');
 
 test('connection state machine exposes one coherent Spanish state', () => {
@@ -57,6 +59,16 @@ test('floating companion model synchronizes counters and media state', () => {
     { participants: 18, hands: 2, messages: 4, mic: true }
   );
   unsubscribe();
+});
+
+test('camera state requires a real live publication and screen tracks keep their source', () => {
+  assert.equal(isLivePublication({ isMuted: false, track: { kind: 'video', mediaStreamTrack: { readyState: 'live' } } }, 'video'), true);
+  assert.equal(isLivePublication({ isMuted: false, track: null }, 'video'), false);
+  assert.equal(isLivePublication({ isMuted: true, track: { kind: 'video', mediaStreamTrack: { readyState: 'live' } } }, 'video'), false);
+  assert.equal(isLivePublication({ isMuted: false, track: { kind: 'video', mediaStreamTrack: { readyState: 'ended' } } }, 'video'), false);
+  assert.equal(classifyTrackSource({ source: 'screen_share', track: { kind: 'video' } }), 'screen');
+  assert.equal(classifyTrackSource({ source: 'screen_share_audio', track: { kind: 'audio' } }), 'screen-audio');
+  assert.equal(classifyTrackSource({ source: 'camera', track: { kind: 'video' } }), 'camera');
 });
 
 test('chat URL sanitizer blocks executable schemes', () => {
