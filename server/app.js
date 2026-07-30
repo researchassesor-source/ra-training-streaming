@@ -4,7 +4,7 @@ const express = require('express');
 const multer = require('multer');
 const { PutObjectCommand, ListObjectsV2Command, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { AccessToken, RoomServiceClient, EgressClient, EncodedFileType, DataPacket_Kind } = require('livekit-server-sdk');
+const { AccessToken, RoomServiceClient, EgressClient, EgressStatus, EncodedFileType, DataPacket_Kind } = require('livekit-server-sdk');
 const { s3, storageConfigured, bucket } = require('./s3');
 const { config } = require('./config');
 const roomRegistry = require('./rooms');
@@ -12,6 +12,8 @@ const auth = require('./auth');
 const meetings = require('./meetings');
 const invitations = require('./invitations');
 const audit = require('./audit');
+const transcriptions = require('./transcriptions');
+const { createTranscriptionProvider } = require('./transcription-provider');
 const {
   clearRoomCookie,
   createRoomSession,
@@ -28,6 +30,7 @@ const {
   limitedUserAgent,
   requestIp,
   sanitizeText,
+  slugify,
   validatePassword,
   validateUsername,
 } = require('./http-utils');
@@ -46,7 +49,25 @@ function defaultServices() {
   return {
     roomService: new RoomServiceClient(LIVEKIT_HTTP_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET),
     egressClient: new EgressClient(LIVEKIT_HTTP_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET),
+    transcriptionProvider: createTranscriptionProvider(),
   };
+}
+
+function recordingStateFromEgress(info) {
+  if (!info) return { state: 'IDLE', active: false, egressId: null };
+  const status = typeof info.status === 'string' ? info.status : EgressStatus[info.status];
+  const states = {
+    EGRESS_STARTING: 'STARTING', EGRESS_ACTIVE: 'RECORDING', EGRESS_ENDING: 'STOPPING',
+    EGRESS_COMPLETE: 'PROCESSING', EGRESS_FAILED: 'FAILED', EGRESS_ABORTED: 'FAILED', EGRESS_LIMIT_REACHED: 'FAILED',
+  };
+  const state = states[status] || 'FAILED';
+  return { state, active: state === 'RECORDING', egressId: state === 'RECORDING' ? info.egressId : null };
+}
+
+function localDateKey(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function canManageMeeting(actor, meeting) {
@@ -91,6 +112,7 @@ function createApp(overrides = {}) {
   const services = { ...defaultServices(), ...(overrides.services || {}) };
   const roomService = services.roomService;
   const egressClient = services.egressClient;
+  const transcriptionProvider = services.transcriptionProvider;
 
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -121,6 +143,12 @@ function createApp(overrides = {}) {
     message: 'Demasiados intentos de acceso. Intenta más tarde.',
   });
   const meetingLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: config.meetingRateLimitMax });
+  const transcriptionLimiter = createRateLimiter({
+    windowMs: 60 * 60_000,
+    max: config.transcriptionRateLimitMax,
+    key: (req) => `${req.auth?.u || req.ip}:transcription`,
+    message: 'Has realizado demasiadas solicitudes de transcripción. Intenta más tarde.',
+  });
   const chatLimiter = createRateLimiter({
     windowMs: 60_000,
     max: config.chatRateLimitMax,
@@ -131,6 +159,64 @@ function createApp(overrides = {}) {
     storage: multer.memoryStorage(),
     limits: { fileSize: config.maxChatFileSize, files: 1, fields: 2 },
   });
+
+  async function meetingByReference(reference) {
+    const direct = await meetings.getMeeting(reference);
+    if (direct) return direct;
+    return (await meetings.listMeetings({ includeDeleted: true })).find((meeting) => meeting.id === reference);
+  }
+
+  function canViewTranscript(actor, meeting) {
+    if (canManageMeeting(actor, meeting)) return true;
+    return actor?.role === 'PANELIST' && meeting?.allowPanelistTranscriptAccess === true && meeting?.trainerId === actor.u;
+  }
+
+  async function defaultRecordingResolver(recordingId, meeting) {
+    if (!storageConfigured) return null;
+    const key = sanitizeText(recordingId, { field: 'recordingId', min: 10, max: 512, required: true });
+    if (!/^recordings\/[a-z0-9-]{3,80}\/.+\.mp4$/i.test(key) || key.includes('..') || key.split('/')[1] !== meeting.room) return null;
+    const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: key, MaxKeys: 2 }));
+    const object = (listing.Contents || []).find((item) => item.Key === key);
+    if (!object) return null;
+    let metadata = {};
+    const metadataKey = key.replace(/\.mp4$/i, '.metadata.json');
+    try {
+      const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: metadataKey }));
+      metadata = JSON.parse(await response.Body.transformToString());
+    } catch (error) {
+      if (error.name !== 'NoSuchKey' && error.$metadata?.httpStatusCode !== 404) throw error;
+    }
+    return {
+      id: key,
+      key,
+      meetingId: meeting.id,
+      room: meeting.room,
+      status: 'READY',
+      available: true,
+      url: await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: 15 * 60 }),
+      source: metadata.source || 'ROOM_COMPOSITE',
+      participants: Array.isArray(metadata.participants) ? metadata.participants : [],
+      tracks: Array.isArray(metadata.tracks) ? metadata.tracks : [],
+      durationSeconds: Number(metadata.durationSeconds) || 0,
+    };
+  }
+
+  const resolveRecording = overrides.recordingResolver || defaultRecordingResolver;
+
+  async function requireTranscript(req, _res, next) {
+    try {
+      const transcript = await transcriptions.getTranscript(req.params.id);
+      if (!transcript) throw new AppError(404, 'Transcripción no encontrada', 'NOT_FOUND');
+      const meeting = await meetingByReference(transcript.meetingId);
+      if (!meeting) throw new AppError(404, 'Reunión asociada no encontrada', 'NOT_FOUND');
+      if (!canViewTranscript(req.auth, meeting)) throw new AppError(403, 'No tienes permiso para acceder a esta transcripción', 'FORBIDDEN');
+      req.transcript = transcript;
+      req.transcriptMeeting = meeting;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  }
 
   app.post('/api/auth/login', loginLimiter, asyncHandler(async (req, res) => {
     const username = validateUsername(req.body?.username);
@@ -339,7 +425,10 @@ function createApp(overrides = {}) {
         trainerName: meeting.trainerName,
         status: meeting.status,
         scheduledAt: meeting.scheduledAt,
+        allowRecording: meeting.allowRecording,
         recordingConsentRequired: meeting.recordingConsentRequired,
+        allowTranscription: meeting.allowTranscription,
+        transcriptionConsentRequired: meeting.transcriptionConsentRequired,
         allowChat: meeting.allowChat,
         allowFiles: meeting.allowFiles,
         allowReactions: meeting.allowReactions,
@@ -388,6 +477,7 @@ function createApp(overrides = {}) {
       displayName: req.roomSession.displayName,
       role: req.roomSession.role,
       recordingConfigured,
+      transcriptionConfigured: transcriptionProvider.isConfigured(),
       meeting: { id: meeting.id, title: meeting.title, status: meeting.status },
     });
   }));
@@ -543,46 +633,83 @@ function createApp(overrides = {}) {
     res.json(message);
   }));
 
+  app.get('/api/recording/status', requireRoomSession, roomMeeting, asyncHandler(async (req, res) => {
+    if (!recordingConfigured || !req.meeting.allowRecording) return res.json({ state: 'DISABLED', active: false, egressId: null, configured: false });
+    try {
+      const active = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
+      const state = active.length ? recordingStateFromEgress(active[0]) : { state: 'IDLE', active: false, egressId: null };
+      res.json({ ...state, configured: true });
+    } catch {
+      res.json({ state: 'FAILED', active: false, egressId: null, configured: true, message: 'No fue posible consultar Egress.' });
+    }
+  }));
+
   app.post('/api/recording/start', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), roomMeeting, asyncHandler(async (req, res) => {
-    if (!recordingConfigured) throw new AppError(400, 'La grabación no está configurada', 'RECORDING_NOT_CONFIGURED');
-    if (!req.meeting.allowRecording || req.meeting.status !== 'LIVE') throw new AppError(409, 'La grabación no está permitida en esta reunión', 'RECORDING_DISABLED');
-    await assertCallerPresent(req);
-    const existing = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
-    if (existing.length > 0) return res.json({ egressId: existing[0].egressId, alreadyRunning: true });
-    const filepath = `recordings/${req.roomSession.room}/${Date.now()}`;
-    const info = await egressClient.startRoomCompositeEgress(
-      req.roomSession.room,
-      {
-        file: {
-          fileType: EncodedFileType.MP4,
-          filepath,
-          output: {
-            case: 's3',
-            value: {
-              accessKey: process.env.RECORDING_S3_ACCESS_KEY,
-              secret: process.env.RECORDING_S3_SECRET_KEY,
-              bucket: process.env.RECORDING_S3_BUCKET,
-              region: process.env.RECORDING_S3_REGION || 'us-east-1',
-              endpoint: process.env.RECORDING_S3_ENDPOINT || undefined,
+    try {
+      if (!recordingConfigured) throw new AppError(400, 'La grabación no está configurada', 'RECORDING_NOT_CONFIGURED');
+      if (!req.meeting.allowRecording || req.meeting.status !== 'LIVE') throw new AppError(409, 'La grabación no está permitida en esta reunión', 'RECORDING_DISABLED');
+      const participants = await assertCallerPresent(req);
+      const existing = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
+      if (existing.length > 0) return res.json({ ...recordingStateFromEgress(existing[0]), alreadyRunning: true });
+      const filepath = `recordings/${req.roomSession.room}/${Date.now()}`;
+      const info = await egressClient.startRoomCompositeEgress(
+        req.roomSession.room,
+        {
+          file: {
+            fileType: EncodedFileType.MP4,
+            filepath,
+            output: {
+              case: 's3',
+              value: {
+                accessKey: process.env.RECORDING_S3_ACCESS_KEY,
+                secret: process.env.RECORDING_S3_SECRET_KEY,
+                bucket: process.env.RECORDING_S3_BUCKET,
+                region: process.env.RECORDING_S3_REGION || 'us-east-1',
+                endpoint: process.env.RECORDING_S3_ENDPOINT || undefined,
+              },
             },
           },
         },
-      },
-      { layout: 'speaker' }
-    );
-    await relayRoomData(req, { kind: 'recording-status', active: true, sentAt: new Date().toISOString() });
-    await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_STARTED', target: info.egressId, room: req.roomSession.room, ...auditContext(req) });
-    res.json({ egressId: info.egressId, alreadyRunning: false });
+        { layout: 'speaker' }
+      );
+      const metadata = {
+        source: 'ROOM_COMPOSITE', meetingId: req.meeting.id, room: req.meeting.room, egressId: info.egressId,
+        createdAt: new Date().toISOString(),
+        participants: participants.map((participant) => ({ identity: participant.identity, name: participant.name || participant.identity })),
+        tracks: participants.flatMap((participant) => (participant.tracks || []).map((track) => ({
+          trackSid: track.sid, participantIdentity: participant.identity, participantName: participant.name || participant.identity,
+          source: track.source, type: track.type,
+        }))),
+      };
+      if (s3 && bucket) {
+        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: `${filepath}.metadata.json`, Body: JSON.stringify(metadata), ContentType: 'application/json' })).catch(() => null);
+      }
+      const state = recordingStateFromEgress(info);
+      await relayRoomData(req, { kind: 'recording-status', ...state, sentAt: new Date().toISOString() });
+      await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_STARTED', target: info.egressId, room: req.roomSession.room, metadata: { state: state.state }, ...auditContext(req) });
+      res.json({ ...state, alreadyRunning: false });
+    } catch (error) {
+      await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_FAILED', target: req.meeting.id, room: req.roomSession.room, metadata: { operation: 'start', code: error.code || 'EGRESS_ERROR' }, ...auditContext(req) });
+      throw error;
+    }
   }));
 
   app.post('/api/recording/stop', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), roomMeeting, asyncHandler(async (req, res) => {
-    const egressId = sanitizeText(req.body?.egressId, { field: 'egressId', min: 5, max: 120, required: true });
-    const active = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
-    if (!active.some((egress) => egress.egressId === egressId)) throw new AppError(404, 'Grabación activa no encontrada en esta sala', 'NOT_FOUND');
-    await egressClient.stopEgress(egressId);
-    await relayRoomData(req, { kind: 'recording-status', active: false, sentAt: new Date().toISOString() });
-    await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_STOPPED', target: egressId, room: req.roomSession.room, ...auditContext(req) });
-    res.json({ stopped: true });
+    try {
+      await assertCallerPresent(req);
+      const egressId = sanitizeText(req.body?.egressId, { field: 'egressId', min: 5, max: 120, required: true });
+      const active = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
+      if (!active.some((egress) => egress.egressId === egressId)) throw new AppError(404, 'Grabación activa no encontrada en esta sala', 'NOT_FOUND');
+      const info = await egressClient.stopEgress(egressId);
+      const state = recordingStateFromEgress(info);
+      const responseState = state.active ? state : { state: state.state === 'FAILED' ? 'FAILED' : 'PROCESSING', active: false, egressId: null };
+      await relayRoomData(req, { kind: 'recording-status', ...responseState, sentAt: new Date().toISOString() });
+      await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_STOPPED', target: egressId, room: req.roomSession.room, ...auditContext(req) });
+      res.json({ stopped: true, ...responseState });
+    } catch (error) {
+      await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_FAILED', target: req.body?.egressId || req.meeting.id, room: req.roomSession.room, metadata: { operation: 'stop', code: error.code || 'EGRESS_ERROR' }, ...auditContext(req) });
+      throw error;
+    }
   }));
 
   app.post('/api/room/end', requireRoomSession, requireRoomCsrf, requireRoomRoles('ADMIN', 'ORGANIZER'), roomMeeting, asyncHandler(async (req, res) => {
@@ -612,19 +739,28 @@ function createApp(overrides = {}) {
     const items = await Promise.all((listing.Contents || [])
       .filter((object) => object.Key.endsWith('.mp4'))
       .filter((object) => !allowedRooms || allowedRooms.has(object.Key.split('/')[1]))
-      .map(async (object) => {
-        const room = object.Key.split('/')[1];
-        const meeting = await meetings.getMeeting(room);
-        return {
-          key: object.Key,
-          room,
-          title: meeting?.title || room,
-          trainerName: meeting?.trainerName || null,
-          size: object.Size,
-          lastModified: object.LastModified,
-          status: 'READY',
-          url: await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: object.Key }), { expiresIn: 60 * 60 }),
-        };
+       .map(async (object) => {
+         const room = object.Key.split('/')[1];
+         const meeting = await meetings.getMeeting(room);
+         const resolved = meeting ? await defaultRecordingResolver(object.Key, meeting) : null;
+         const transcript = meeting ? (await transcriptions.listTranscripts({ meetingId: meeting.id })).find((item) => item.recordingId === object.Key) : null;
+         return {
+           id: object.Key,
+           key: object.Key,
+           room,
+           meetingId: meeting?.id || null,
+           title: meeting?.title || room,
+           trainerName: meeting?.trainerName || 'Capacitador por definir',
+           size: object.Size,
+           lastModified: object.LastModified,
+           status: 'READY',
+           source: resolved?.source || 'ROOM_COMPOSITE',
+           participants: resolved?.participants || [],
+           tracks: resolved?.tracks || [],
+           url: resolved?.url,
+           transcript: transcript ? transcriptions.publicTranscript(transcript) : null,
+           transcriptionAllowed: Boolean(meeting?.allowTranscription && meeting?.status === 'COMPLETED'),
+         };
       }));
     items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
     res.json({ items });
@@ -642,6 +778,83 @@ function createApp(overrides = {}) {
     res.json({ deleted: true });
   }));
 
+  app.post('/api/meetings/:meetingId/transcriptions', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), transcriptionLimiter, asyncHandler(async (req, res) => {
+    const meeting = await meetingByReference(req.params.meetingId);
+    if (!meeting) throw new AppError(404, 'Reunión no encontrada', 'NOT_FOUND');
+    if (!canManageMeeting(req.auth, meeting)) throw new AppError(403, 'No tienes permiso para transcribir esta reunión', 'FORBIDDEN');
+    const recording = await resolveRecording(req.body?.recordingId, meeting);
+    if (!recording) throw new AppError(409, 'La reunión no tiene una grabación disponible', 'RECORDING_NOT_FOUND');
+    if (recording.status !== 'READY') throw new AppError(409, 'La grabación todavía no está lista', 'RECORDING_NOT_READY');
+    if (recording.durationSeconds && recording.durationSeconds > config.transcriptionMaxDurationMinutes * 60) {
+      throw new AppError(413, 'La grabación supera la duración máxima permitida para transcripción', 'TRANSCRIPTION_TOO_LONG');
+    }
+    const transcript = await transcriptions.createTranscript({
+      meeting, recording, requestedBy: req.auth.u, language: req.body?.language, provider: transcriptionProvider,
+    });
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_CREATED', target: transcript.id, room: meeting.room, metadata: { recordingId: recording.id, provider: transcript.provider }, ...auditContext(req) });
+    res.status(201).json({ transcript: transcriptions.publicTranscript(transcript) });
+  }));
+
+  app.get('/api/meetings/:meetingId/transcriptions', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER', 'PANELIST'), asyncHandler(async (req, res) => {
+    const meeting = await meetingByReference(req.params.meetingId);
+    if (!meeting) throw new AppError(404, 'Reunión no encontrada', 'NOT_FOUND');
+    if (!canViewTranscript(req.auth, meeting)) throw new AppError(403, 'No tienes permiso para ver estas transcripciones', 'FORBIDDEN');
+    const items = (await transcriptions.listTranscripts({ meetingId: meeting.id })).map(transcriptions.publicTranscript);
+    res.json({ items, configured: transcriptionProvider.isConfigured(), allowed: meeting.allowTranscription });
+  }));
+
+  app.get('/api/transcriptions/:id', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER', 'PANELIST'), requireTranscript, asyncHandler(async (req, res) => {
+    let transcript = req.transcript;
+    let recording = await resolveRecording(transcript.recordingId, req.transcriptMeeting).catch(() => null);
+    if (!transcriptions.TERMINAL_STATUSES.has(transcript.status) && transcriptionProvider.isConfigured()) {
+      transcript = await transcriptions.refreshTranscript(transcript, transcriptionProvider, recording || {});
+      if (transcript.status === 'FAILED') await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_FAILED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { code: transcript.errorCode }, ...auditContext(req) });
+      if (transcriptions.COMPLETE_STATUSES.has(transcript.status)) await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_COMPLETED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { segments: transcript.segments.length }, ...auditContext(req) });
+    }
+    res.json({ transcript: transcriptions.publicTranscript(transcript), meeting: req.transcriptMeeting, recording: recording ? { id: recording.id, url: recording.url, source: recording.source } : null, configured: transcriptionProvider.isConfigured() });
+  }));
+
+  app.patch('/api/transcriptions/:id', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireTranscript, asyncHandler(async (req, res) => {
+    if (!canManageMeeting(req.auth, req.transcriptMeeting)) throw new AppError(403, 'No tienes permiso para editar esta transcripción', 'FORBIDDEN');
+    const transcript = await transcriptions.editTranscript(req.transcript, {
+      segments: req.body?.segments, language: req.body?.language, revision: req.body?.revision, editedBy: req.auth.u,
+    });
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_EDITED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { revision: transcript.revision }, ...auditContext(req) });
+    res.json({ transcript: transcriptions.publicTranscript(transcript) });
+  }));
+
+  app.delete('/api/transcriptions/:id', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireTranscript, asyncHandler(async (req, res) => {
+    if (!canManageMeeting(req.auth, req.transcriptMeeting)) throw new AppError(403, 'No tienes permiso para eliminar esta transcripción', 'FORBIDDEN');
+    if (!transcriptions.TERMINAL_STATUSES.has(req.transcript.status)) throw new AppError(409, 'Cancela el trabajo antes de eliminar la transcripción', 'TRANSCRIPTION_ACTIVE');
+    await transcriptions.deleteTranscript(req.transcript);
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_DELETED', target: req.transcript.id, room: req.transcriptMeeting.room, ...auditContext(req) });
+    res.json({ deleted: true });
+  }));
+
+  app.post('/api/transcriptions/:id/retry', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), transcriptionLimiter, requireTranscript, asyncHandler(async (req, res) => {
+    if (!canManageMeeting(req.auth, req.transcriptMeeting)) throw new AppError(403, 'No tienes permiso para regenerar esta transcripción', 'FORBIDDEN');
+    const recording = await resolveRecording(req.transcript.recordingId, req.transcriptMeeting);
+    if (!recording || recording.status !== 'READY') throw new AppError(409, 'La grabación ya no está disponible', 'RECORDING_NOT_READY');
+    const transcript = await transcriptions.retryTranscript(req.transcript, { meeting: req.transcriptMeeting, recording, requestedBy: req.auth.u, provider: transcriptionProvider });
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_RETRIED', target: transcript.id, room: req.transcriptMeeting.room, ...auditContext(req) });
+    res.json({ transcript: transcriptions.publicTranscript(transcript) });
+  }));
+
+  app.post('/api/transcriptions/:id/cancel', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireTranscript, asyncHandler(async (req, res) => {
+    if (!canManageMeeting(req.auth, req.transcriptMeeting)) throw new AppError(403, 'No tienes permiso para cancelar esta transcripción', 'FORBIDDEN');
+    const transcript = await transcriptions.cancelTranscript(req.transcript, transcriptionProvider);
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_CANCELLED', target: transcript.id, room: req.transcriptMeeting.room, ...auditContext(req) });
+    res.json({ transcript: transcriptions.publicTranscript(transcript) });
+  }));
+
+  app.get('/api/transcriptions/:id/export', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER', 'PANELIST'), requireTranscript, asyncHandler(async (req, res) => {
+    const exported = transcriptions.exportTranscript(req.transcript, req.query.format);
+    const filename = `${slugify(req.transcriptMeeting.title || 'transcripcion') || 'transcripcion'}-${req.transcript.id.slice(0, 8)}.${exported.extension}`;
+    res.setHeader('Content-Type', exported.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(exported.body);
+  }));
+
   app.get('/api/audit', auth.requireAuth, auth.requireRoles('ADMIN'), asyncHandler(async (req, res) => {
     const limit = Number.parseInt(req.query.limit || '200', 10);
     res.json({ items: await audit.listEvents({ limit, action: req.query.action, actor: req.query.actor, room: req.query.room }) });
@@ -649,25 +862,36 @@ function createApp(overrides = {}) {
 
   app.get('/api/dashboard/summary', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
     const allMeetings = (await meetings.listMeetings({ includeDeleted: false })).filter((meeting) => meetingVisibleTo(req.auth, meeting));
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateKey();
     const users = req.auth.role === 'ADMIN' ? await auth.listUsers() : [];
     const recentErrors = req.auth.role === 'ADMIN'
       ? (await audit.listEvents({ limit: 100 })).filter((item) => item.action === 'AUTH_LOGIN_FAILED').length
       : null;
     res.json({
-      meetingsToday: allMeetings.filter((meeting) => String(meeting.scheduledAt || '').startsWith(today)).length,
+      meetingsToday: allMeetings.filter((meeting) => localDateKey(meeting.scheduledAt) === today).length,
       activeMeetings: allMeetings.filter((meeting) => meeting.status === 'LIVE').length,
-      nextMeeting: allMeetings.filter((meeting) => meeting.scheduledAt && new Date(meeting.scheduledAt) >= new Date()).sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt))[0] || null,
+      nextMeeting: allMeetings.filter((meeting) => meeting.scheduledAt && new Date(meeting.scheduledAt) >= new Date() && !['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)).sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt))[0] || null,
       activeCredentials: users.filter((user) => user.active).length,
       recentErrors,
       storage: storageConfigured ? 'configured' : 'local',
       livekit: LIVEKIT_WS_URL.startsWith('ws://localhost') ? 'local' : 'configured',
       recordingConfigured,
+      transcriptionConfigured: transcriptionProvider.isConfigured(),
+      transcriptionProvider: config.transcriptionProvider,
+      environment: config.nodeEnv,
+      version: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12),
+      security: { secureCookies: config.cookieSecure, openDevRooms: config.allowOpenDevRooms },
+      missingConfiguration: [
+        LIVEKIT_API_KEY === 'devkey' ? 'LIVEKIT_API_KEY' : null,
+        !storageConfigured ? 'S3/R2' : null,
+        !recordingConfigured ? 'RECORDING_S3_*' : null,
+        !transcriptionProvider.isConfigured() ? 'TRANSCRIPTION_*' : null,
+      ].filter(Boolean),
     });
   }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, storage: storageConfigured ? 's3' : 'local', livekitConfigured: LIVEKIT_API_KEY !== 'devkey', recordingConfigured });
+    res.json({ ok: true, storage: storageConfigured ? 's3' : 'local', livekitConfigured: LIVEKIT_API_KEY !== 'devkey', recordingConfigured, transcriptionConfigured: transcriptionProvider.isConfigured() });
   });
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint no encontrado', code: 'NOT_FOUND' }));
@@ -679,16 +903,16 @@ function createApp(overrides = {}) {
     if (error.type === 'entity.too.large') return res.status(413).json({ error: 'La solicitud supera el tamaño permitido', code: 'PAYLOAD_TOO_LARGE' });
     if (error instanceof SyntaxError && error.status === 400 && 'body' in error) return res.status(400).json({ error: 'JSON no válido', code: 'INVALID_JSON' });
     const status = error instanceof AppError ? error.status : 500;
-    if (status >= 500) console.error('request error', error);
+    if (status >= 500 && !(error instanceof AppError)) console.error('request error', error.message);
     return res.status(status).json({
-      error: status >= 500 ? 'Ocurrió un error interno' : error.message,
+      error: error instanceof AppError ? error.message : status >= 500 ? 'Ocurrió un error interno' : error.message,
       code: error.code || 'INTERNAL_ERROR',
     });
   });
 
   app.locals.services = services;
-  app.locals.rateLimiters = { loginLimiter, meetingLimiter, chatLimiter };
+  app.locals.rateLimiters = { loginLimiter, meetingLimiter, transcriptionLimiter, chatLimiter };
   return app;
 }
 
-module.exports = { canManageMeeting, createApp, recordingConfigured };
+module.exports = { canManageMeeting, createApp, localDateKey, recordingConfigured, recordingStateFromEgress };

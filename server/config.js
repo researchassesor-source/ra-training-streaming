@@ -27,6 +27,14 @@ const config = {
   loginRateLimitMax: intFromEnv('LOGIN_RATE_LIMIT_MAX', 8, { min: 1, max: 1_000 }),
   chatRateLimitMax: intFromEnv('CHAT_RATE_LIMIT_MAX', 20, { min: 1, max: 1_000 }),
   meetingRateLimitMax: intFromEnv('MEETING_RATE_LIMIT_MAX', 20, { min: 1, max: 1_000 }),
+  transcriptionEnabled: boolFromEnv('TRANSCRIPTION_ENABLED', false),
+  transcriptionProvider: String(process.env.TRANSCRIPTION_PROVIDER || 'mock').trim().toLowerCase(),
+  transcriptionLanguage: String(process.env.TRANSCRIPTION_LANGUAGE || 'es').trim(),
+  transcriptionMaxDurationMinutes: intFromEnv('TRANSCRIPTION_MAX_DURATION_MINUTES', 240, { min: 1, max: 1_440 }),
+  transcriptionRetentionDays: intFromEnv('TRANSCRIPTION_RETENTION_DAYS', 90, { min: 1, max: 3_650 }),
+  transcriptionRateLimitMax: intFromEnv('TRANSCRIPTION_RATE_LIMIT_MAX', 10, { min: 1, max: 1_000 }),
+  transcriptionApiUrl: String(process.env.TRANSCRIPTION_API_URL || '').trim(),
+  transcriptionApiKeyConfigured: Boolean(process.env.TRANSCRIPTION_API_KEY),
   maxJsonPayload: process.env.MAX_JSON_PAYLOAD || '256kb',
   maxChatMessageLength: intFromEnv('MAX_CHAT_MESSAGE_LENGTH', 2_000, { min: 50, max: 10_000 }),
   maxChatFileSize: intFromEnv('MAX_CHAT_FILE_SIZE', 10 * 1024 * 1024, { min: 1_024, max: 50 * 1024 * 1024 }),
@@ -44,6 +52,12 @@ function assertRuntimeConfig() {
   }
   if (config.isProduction && !config.cookieSecure) {
     throw new Error('COOKIE_SECURE no puede desactivarse en Producción.');
+  }
+  if (config.isProduction && config.transcriptionEnabled && config.transcriptionProvider === 'mock') {
+    throw new Error('El proveedor mock de transcripción no puede habilitarse en Producción.');
+  }
+  if (config.transcriptionEnabled && !['http', 'mock'].includes(config.transcriptionProvider)) {
+    throw new Error('TRANSCRIPTION_PROVIDER debe ser http o mock.');
   }
 }
 
