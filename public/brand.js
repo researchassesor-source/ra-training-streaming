@@ -6,6 +6,7 @@ function renderBrand(container, { tagline = true } = {}) {
   if (!container) return;
   container.classList.add('brand');
   container.innerHTML = `
+    <img class="brand-app-icon" src="assets/streaming-app-logo-192.png" width="44" height="44" alt="Icono de R.A. Training Streaming" />
     <div class="brand-logo"><img src="assets/logo.png" alt="Research Assessor & Training" /></div>
     <div class="brand-text">
       <span class="brand-name">${APP_NAME_HTML}</span>
