@@ -600,7 +600,7 @@ test('health diagnostics expose identity and availability without credentials', 
   const health = await request('/health');
   assert.equal(health.response.status, 200);
   assert.equal(health.data.environment, 'test');
-  assert.equal(health.data.status, 'operational');
+  assert.equal(health.data.status, 'healthy');
   assert.equal(typeof health.data.services.livekit.available, 'boolean');
   assert.ok(health.response.headers.get('x-request-id'));
   assert.doesNotMatch(JSON.stringify(health.data), /devkey|secret|apiKey|ws:\/\//i);

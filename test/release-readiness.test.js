@@ -55,9 +55,9 @@ test('Preview configuration fails closed until every isolated real integration i
     appPublicUrl: 'https://ra-training-preview.example', cookieSecure: true,
     sessionSecret: 's'.repeat(40), invitationHashSecret: 'i'.repeat(40),
     livekitWsUrl: 'wss://preview-livekit.example', livekitApiKey: 'preview-key', livekitApiSecret: 'preview-secret',
-    storageConfigured: true, transcriptionEnabled: true, transcriptionProvider: 'http',
-    transcriptionApiUrl: 'https://preview-transcription.example', transcriptionApiKeyConfigured: true,
-    transcriptionAllowedHosts: new Set(['preview-transcription.example']),
+    storageConfigured: true, transcriptionEnabled: true, transcriptionProvider: 'deepgram',
+    transcriptionApiUrl: 'https://api.deepgram.com/v1/listen', transcriptionApiKeyConfigured: true,
+    transcriptionAllowedHosts: new Set(['api.deepgram.com']), transcriptionDeepgramModel: 'nova-3',
   };
   assert.deepEqual(validateRuntimeConfig(validPreview), []);
   const errors = validateRuntimeConfig({ ...validPreview, previewIsolationAcknowledged: false, storageConfigured: false });
@@ -66,11 +66,11 @@ test('Preview configuration fails closed until every isolated real integration i
   assert.ok(validateRuntimeConfig({ ...validPreview, transcriptionAllowedHosts: new Set() }).some((message) => message.includes('TRANSCRIPTION_ALLOWED_HOSTS')));
   assert.ok(validateRuntimeConfig({
     ...validPreview,
-    transcriptionApiUrl: 'http://preview-transcription.example',
+    transcriptionApiUrl: 'http://api.deepgram.com/v1/listen',
   }).some((message) => message.includes('HTTPS')));
   assert.ok(validateRuntimeConfig({
     ...validPreview,
-    transcriptionApiUrl: 'https://user:password@preview-transcription.example',
+    transcriptionApiUrl: 'https://user:password@api.deepgram.com/v1/listen',
   }).some((message) => message.includes('credenciales')));
   assert.ok(validateRuntimeConfig({
     ...validPreview,
@@ -105,7 +105,11 @@ test('HTTP transcription health distinguishes configured from remotely available
     enabled: true, apiUrl: 'https://transcription.example', apiKey: 'test-key',
     fetchImpl: async () => { calls += 1; return { ok: true, json: async () => ({ status: 'ok' }) }; },
   });
-  assert.deepEqual(await provider.healthStatus(), { configured: true, available: true, mode: 'http', checkedAt: provider.healthCache.checkedAt });
+  const healthy = await provider.healthStatus();
+  assert.equal(healthy.configured, true);
+  assert.equal(healthy.available, true);
+  assert.equal(healthy.status, 'healthy');
+  assert.equal(healthy.mode, 'http');
   await provider.healthStatus();
   assert.equal(calls, 1);
 
@@ -125,7 +129,9 @@ test('Preview Blueprint is isolated, manual and cannot silently fall back to moc
   assert.match(blueprint, /autoDeploy: false/);
   assert.match(blueprint, /healthCheckPath: \/health/);
   assert.match(blueprint, /key: APP_ENV\s+value: preview/);
-  assert.match(blueprint, /key: TRANSCRIPTION_PROVIDER\s+value: http/);
+  assert.match(blueprint, /key: TRANSCRIPTION_PROVIDER\s+value: deepgram/);
+  assert.match(blueprint, /key: TRANSCRIPTION_API_URL\s+value: https:\/\/api\.deepgram\.com\/v1\/listen/);
+  assert.match(blueprint, /key: TRANSCRIPTION_ALLOWED_HOSTS\s+value: api\.deepgram\.com/);
   assert.doesNotMatch(blueprint, /value: mock/);
 });
 
@@ -159,8 +165,8 @@ test('Preview responses enforce noindex, HSTS and Secure room cookies', () => {
       COOKIE_SECURE: 'true', SESSION_SECRET: 's'.repeat(40), INVITATION_HASH_SECRET: 'i'.repeat(40),
       LIVEKIT_WS_URL: 'wss://livekit-preview.example', LIVEKIT_API_KEY: 'preview-key', LIVEKIT_API_SECRET: 'preview-secret',
       RECORDING_S3_ACCESS_KEY: 'preview-access', RECORDING_S3_SECRET_KEY: 'preview-storage-secret', RECORDING_S3_BUCKET: 'preview-bucket',
-      TRANSCRIPTION_ENABLED: 'true', TRANSCRIPTION_PROVIDER: 'http', TRANSCRIPTION_API_URL: 'https://transcription-preview.example', TRANSCRIPTION_API_KEY: 'preview-provider-key',
-      TRANSCRIPTION_ALLOWED_HOSTS: 'transcription-preview.example',
+      TRANSCRIPTION_ENABLED: 'true', TRANSCRIPTION_PROVIDER: 'deepgram', TRANSCRIPTION_API_URL: 'https://api.deepgram.com/v1/listen', TRANSCRIPTION_API_KEY: 'preview-provider-key',
+      TRANSCRIPTION_ALLOWED_HOSTS: 'api.deepgram.com',
     },
     encoding: 'utf8',
   });
