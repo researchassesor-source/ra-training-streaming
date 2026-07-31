@@ -28,7 +28,7 @@ services:
       - key: TRANSCRIPTION_ENABLED
         value: true
       - key: TRANSCRIPTION_PROVIDER
-        value: http
+        value: deepgram
       - key: SESSION_SECRET
         generateValue: true
       - key: INVITATION_HASH_SECRET
@@ -60,8 +60,26 @@ services:
       - key: RECORDING_S3_ENDPOINT
         sync: false
       - key: TRANSCRIPTION_API_URL
-        sync: false
+        value: https://api.deepgram.com/v1/listen
       - key: TRANSCRIPTION_API_KEY
         sync: false
       - key: TRANSCRIPTION_ALLOWED_HOSTS
-        sync: false
+        value: api.deepgram.com
+      - key: TRANSCRIPTION_DEEPGRAM_MODEL
+        value: nova-3
+      - key: TRANSCRIPTION_DEEPGRAM_DIARIZE
+        value: true
+      - key: TRANSCRIPTION_DEEPGRAM_SMART_FORMAT
+        value: true
+      - key: TRANSCRIPTION_DEEPGRAM_UTTERANCES
+        value: true
+      - key: TRANSCRIPTION_DEEPGRAM_PARAGRAPHS
+        value: true
+      - key: TRANSCRIPTION_REQUEST_TIMEOUT_MS
+        value: 600000
+      - key: TRANSCRIPTION_MAX_AUDIO_BYTES
+        value: 2147483648
+      - key: TRANSCRIPTION_PRESIGNED_URL_TTL_SECONDS
+        value: 600
+      - key: TRANSCRIPTION_RETRY_MAX
+        value: 2

@@ -84,6 +84,15 @@ const config = {
   transcriptionApiUrl: String(process.env.TRANSCRIPTION_API_URL || '').trim(),
   transcriptionApiKeyConfigured: Boolean(process.env.TRANSCRIPTION_API_KEY),
   transcriptionAllowedHosts: new Set(String(process.env.TRANSCRIPTION_ALLOWED_HOSTS || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean)),
+  transcriptionDeepgramModel: String(process.env.TRANSCRIPTION_DEEPGRAM_MODEL || 'nova-3').trim(),
+  transcriptionDeepgramDiarize: boolFromEnv('TRANSCRIPTION_DEEPGRAM_DIARIZE', true),
+  transcriptionDeepgramSmartFormat: boolFromEnv('TRANSCRIPTION_DEEPGRAM_SMART_FORMAT', true),
+  transcriptionDeepgramUtterances: boolFromEnv('TRANSCRIPTION_DEEPGRAM_UTTERANCES', true),
+  transcriptionDeepgramParagraphs: boolFromEnv('TRANSCRIPTION_DEEPGRAM_PARAGRAPHS', true),
+  transcriptionRequestTimeoutMs: intFromEnv('TRANSCRIPTION_REQUEST_TIMEOUT_MS', 600_000, { min: 10_000, max: 3_600_000 }),
+  transcriptionMaxAudioBytes: intFromEnv('TRANSCRIPTION_MAX_AUDIO_BYTES', 2_147_483_648, { min: 1_048_576, max: 5_368_709_120 }),
+  transcriptionPresignedUrlTtlSeconds: intFromEnv('TRANSCRIPTION_PRESIGNED_URL_TTL_SECONDS', 600, { min: 300, max: 900 }),
+  transcriptionRetryMax: intFromEnv('TRANSCRIPTION_RETRY_MAX', 2, { min: 0, max: 5 }),
   maxJsonPayload: process.env.MAX_JSON_PAYLOAD || '256kb',
   maxChatMessageLength: intFromEnv('MAX_CHAT_MESSAGE_LENGTH', 2_000, { min: 50, max: 10_000 }),
   maxChatFileSize: intFromEnv('MAX_CHAT_FILE_SIZE', 10 * 1024 * 1024, { min: 1_024, max: 50 * 1024 * 1024 }),
@@ -117,17 +126,20 @@ function validateRuntimeConfig(candidate = config) {
   if (candidate.appEnv === 'preview') {
     if (!candidate.previewIsolationAcknowledged) errors.push('PREVIEW_ISOLATION_ACK debe confirmar que todas las integraciones usan recursos no productivos.');
     if (!candidate.storageConfigured) errors.push('Preview requiere almacenamiento S3/R2 aislado.');
-    if (!candidate.transcriptionEnabled || candidate.transcriptionProvider !== 'http' || !candidate.transcriptionApiUrl || !candidate.transcriptionApiKeyConfigured) errors.push('Preview requiere un proveedor HTTP real de transcripción.');
+    if (!candidate.transcriptionEnabled || candidate.transcriptionProvider !== 'deepgram' || !candidate.transcriptionApiUrl || !candidate.transcriptionApiKeyConfigured) errors.push('Preview requiere el proveedor Deepgram real de transcripción.');
   }
-  if (candidate.isProductionLike && candidate.transcriptionEnabled && candidate.transcriptionProvider === 'http') {
-    if (!candidate.transcriptionApiKeyConfigured) errors.push('TRANSCRIPTION_API_KEY debe configurarse cuando la transcripción HTTP está habilitada.');
+  if (candidate.isProductionLike && candidate.transcriptionEnabled && ['http', 'deepgram'].includes(candidate.transcriptionProvider)) {
+    if (!candidate.transcriptionApiKeyConfigured) errors.push('TRANSCRIPTION_API_KEY debe configurarse cuando la transcripción está habilitada.');
     try {
       const providerUrl = new URL(candidate.transcriptionApiUrl);
       const hostname = providerUrl.hostname.toLowerCase();
-      if (providerUrl.protocol !== 'https:' || providerUrl.username || providerUrl.password) {
+      if (providerUrl.protocol !== 'https:' || providerUrl.username || providerUrl.password || providerUrl.search || providerUrl.hash) {
         errors.push('TRANSCRIPTION_API_URL debe usar HTTPS y no incluir credenciales.');
       }
       if (!candidate.transcriptionAllowedHosts?.has(hostname)) errors.push('TRANSCRIPTION_ALLOWED_HOSTS debe autorizar explícitamente el host del proveedor.');
+      if (candidate.transcriptionProvider === 'deepgram' && (hostname !== 'api.deepgram.com' || providerUrl.pathname.replace(/\/+$/, '') !== '/v1/listen')) {
+        errors.push('Deepgram debe usar exactamente https://api.deepgram.com/v1/listen.');
+      }
     } catch {
       errors.push('TRANSCRIPTION_API_URL debe ser una URL HTTPS válida.');
     }
@@ -135,7 +147,8 @@ function validateRuntimeConfig(candidate = config) {
   if (candidate.isProduction && candidate.sessionSecret === 'dev-insecure-secret-change-me') errors.push('SESSION_SECRET debe configurarse en Producción.');
   if (candidate.isProduction && !candidate.cookieSecure) errors.push('COOKIE_SECURE no puede desactivarse en Producción.');
   if (candidate.isProduction && candidate.transcriptionEnabled && candidate.transcriptionProvider === 'mock') errors.push('El proveedor mock de transcripción no puede habilitarse en Producción.');
-  if (candidate.transcriptionEnabled && !['http', 'mock'].includes(candidate.transcriptionProvider)) errors.push('TRANSCRIPTION_PROVIDER debe ser http o mock.');
+  if (candidate.transcriptionEnabled && !['deepgram', 'http', 'mock'].includes(candidate.transcriptionProvider)) errors.push('TRANSCRIPTION_PROVIDER debe ser deepgram, http o mock.');
+  if (candidate.transcriptionEnabled && candidate.transcriptionProvider === 'deepgram' && !/^[a-z0-9][a-z0-9._-]{1,79}$/i.test(candidate.transcriptionDeepgramModel || '')) errors.push('TRANSCRIPTION_DEEPGRAM_MODEL no es válido.');
   return errors;
 }
 

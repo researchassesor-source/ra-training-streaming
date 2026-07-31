@@ -14,6 +14,8 @@ const ALLOWED_ACTIONS = new Set([
   'RECORDING_DELETED', 'RECORDING_FAILED', 'TRANSCRIPTION_CREATED', 'TRANSCRIPTION_COMPLETED',
   'TRANSCRIPTION_FAILED', 'TRANSCRIPTION_EDITED', 'TRANSCRIPTION_RETRIED',
   'TRANSCRIPTION_CANCELLED', 'TRANSCRIPTION_DELETED', 'ROOM_OPEN_ATTEMPT',
+  'TRANSCRIPTION_REQUESTED', 'TRANSCRIPTION_VALIDATION_FAILED', 'TRANSCRIPTION_STARTED',
+  'TRANSCRIPTION_PROVIDER_SUBMITTED', 'TRANSCRIPTION_SPEAKER_RENAMED', 'TRANSCRIPTION_EXPORTED',
   'ROOM_CONNECTION_FAILED', 'ROOM_RETRY', 'ROOM_CONNECTED', 'ROOM_ENDED',
   'PARTICIPANT_JOINED', 'PARTICIPANT_LEFT', 'PARTICIPANT_RECONNECTED',
   'PARTICIPANT_BLOCKED', 'MICROPHONE_MUTED', 'SCREEN_SHARE_STARTED',
@@ -27,9 +29,9 @@ const ALLOWED_ACTIONS = new Set([
 function safeMetadata(metadata) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
   const clean = {};
-  const blocked = /password|secret|token|code|authorization|cookie/i;
+  const blocked = /password|secret|token|authorization|cookie/i;
   for (const [key, value] of Object.entries(metadata).slice(0, 30)) {
-    if (blocked.test(key)) continue;
+    if (blocked.test(key) || /^code$/i.test(key)) continue;
     if (['string', 'number', 'boolean'].includes(typeof value) || value === null) {
       clean[key] = typeof value === 'string' ? value.slice(0, 500) : value;
     }

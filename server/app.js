@@ -229,7 +229,9 @@ function createApp(overrides = {}) {
       room: meeting.room,
       status: 'READY',
       available: true,
-      url: await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: 15 * 60 }),
+      url: await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: config.transcriptionPresignedUrlTtlSeconds }),
+      size: Number(object.Size) || 0,
+      contentType: 'video/mp4',
       source: metadata.source || 'ROOM_COMPOSITE',
       participants: Array.isArray(metadata.participants) ? metadata.participants : [],
       tracks: Array.isArray(metadata.tracks) ? metadata.tracks : [],
@@ -238,6 +240,15 @@ function createApp(overrides = {}) {
   }
 
   const resolveRecording = overrides.recordingResolver || defaultRecordingResolver;
+
+  async function resolveTranscriptionRecording(recordingId, meeting) {
+    try {
+      return await resolveRecording(recordingId, meeting);
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(503, 'No fue posible acceder al almacenamiento de grabaciones', 'TRANSCRIPTION_STORAGE_UNAVAILABLE');
+    }
+  }
 
   async function requireTranscript(req, _res, next) {
     try {
@@ -1077,11 +1088,11 @@ function createApp(overrides = {}) {
            tracks: resolved?.tracks || [],
            url: resolved?.url,
            transcript: transcript ? transcriptions.publicTranscript(transcript) : null,
-           transcriptionAllowed: Boolean(meeting?.allowTranscription && meeting?.status === 'COMPLETED'),
+           transcriptionAllowed: Boolean(meeting?.allowTranscription && meeting?.status === 'COMPLETED' && transcriptionProvider.isConfigured()),
          };
       }));
     items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
-    res.json({ items });
+    res.json({ items, transcriptionConfigured: transcriptionProvider.isConfigured() });
   }));
 
   app.delete('/api/recordings', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN'), asyncHandler(async (req, res) => {
@@ -1098,19 +1109,29 @@ function createApp(overrides = {}) {
 
   app.post('/api/meetings/:meetingId/transcriptions', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), transcriptionLimiter, asyncHandler(async (req, res) => {
     const meeting = await meetingByReference(req.params.meetingId);
-    if (!meeting) throw new AppError(404, 'Reunión no encontrada', 'NOT_FOUND');
-    if (!canManageMeeting(req.auth, meeting)) throw new AppError(403, 'No tienes permiso para transcribir esta reunión', 'FORBIDDEN');
-    const recording = await resolveRecording(req.body?.recordingId, meeting);
-    if (!recording) throw new AppError(409, 'La reunión no tiene una grabación disponible', 'RECORDING_NOT_FOUND');
-    if (recording.status !== 'READY') throw new AppError(409, 'La grabación todavía no está lista', 'RECORDING_NOT_READY');
-    if (recording.durationSeconds && recording.durationSeconds > config.transcriptionMaxDurationMinutes * 60) {
-      throw new AppError(413, 'La grabación supera la duración máxima permitida para transcripción', 'TRANSCRIPTION_TOO_LONG');
+    const requestedRecordingId = typeof req.body?.recordingId === 'string' ? req.body.recordingId.slice(0, 512) : null;
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_REQUESTED', target: meeting?.id || req.params.meetingId, room: meeting?.room || null, metadata: { recordingId: requestedRecordingId, language: req.body?.language || config.transcriptionLanguage, provider: config.transcriptionProvider }, ...auditContext(req) });
+    try {
+      if (!meeting) throw new AppError(404, 'Reunión no encontrada', 'NOT_FOUND');
+      if (!canManageMeeting(req.auth, meeting)) throw new AppError(403, 'No tienes permiso para transcribir esta reunión', 'FORBIDDEN');
+      const recording = await resolveTranscriptionRecording(req.body?.recordingId, meeting);
+      if (!recording) throw new AppError(404, 'La reunión no tiene una grabación disponible', 'TRANSCRIPTION_RECORDING_NOT_FOUND');
+      if (recording.status !== 'READY' || recording.available === false) throw new AppError(409, 'La grabación todavía no está lista', 'TRANSCRIPTION_RECORDING_NOT_READY');
+      if (recording.durationSeconds && recording.durationSeconds > config.transcriptionMaxDurationMinutes * 60) {
+        throw new AppError(413, 'La grabación supera la duración máxima permitida para transcripción', 'TRANSCRIPTION_RECORDING_TOO_LONG');
+      }
+      if (recording.size && recording.size > config.transcriptionMaxAudioBytes) {
+        throw new AppError(413, 'La grabación supera el tamaño máximo permitido para transcripción', 'TRANSCRIPTION_RECORDING_TOO_LARGE');
+      }
+      const transcript = await transcriptions.createTranscript({
+        meeting, recording, requestedBy: req.auth.u, language: req.body?.language, provider: transcriptionProvider,
+      });
+      await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_CREATED', target: transcript.id, room: meeting.room, metadata: { recordingId: transcript.recordingId, provider: transcript.provider, language: transcript.language, status: transcript.status }, ...auditContext(req) });
+      res.status(201).json({ transcript: transcriptions.publicTranscript(transcript) });
+    } catch (error) {
+      await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_VALIDATION_FAILED', target: meeting?.id || req.params.meetingId, room: meeting?.room || null, metadata: { recordingId: requestedRecordingId, errorCode: error.code || 'TRANSCRIPTION_REQUEST_FAILED' }, ...auditContext(req) });
+      throw error;
     }
-    const transcript = await transcriptions.createTranscript({
-      meeting, recording, requestedBy: req.auth.u, language: req.body?.language, provider: transcriptionProvider,
-    });
-    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_CREATED', target: transcript.id, room: meeting.room, metadata: { recordingId: recording.id, provider: transcript.provider }, ...auditContext(req) });
-    res.status(201).json({ transcript: transcriptions.publicTranscript(transcript) });
   }));
 
   app.get('/api/meetings/:meetingId/transcriptions', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER', 'PANELIST'), asyncHandler(async (req, res) => {
@@ -1123,13 +1144,16 @@ function createApp(overrides = {}) {
 
   app.get('/api/transcriptions/:id', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER', 'PANELIST'), requireTranscript, asyncHandler(async (req, res) => {
     let transcript = req.transcript;
-    let recording = await resolveRecording(transcript.recordingId, req.transcriptMeeting).catch(() => null);
+    const recording = await resolveRecording(transcript.recordingId, req.transcriptMeeting).catch(() => null);
     if (!transcriptions.TERMINAL_STATUSES.has(transcript.status) && transcriptionProvider.isConfigured()) {
+      const previous = transcript;
       transcript = await transcriptions.refreshTranscript(transcript, transcriptionProvider, recording || {});
-      if (transcript.status === 'FAILED') await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_FAILED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { code: transcript.errorCode }, ...auditContext(req) });
-      if (transcriptions.COMPLETE_STATUSES.has(transcript.status)) await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_COMPLETED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { segments: transcript.segments.length }, ...auditContext(req) });
+      if (!previous.startedAt && transcript.startedAt) await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_STARTED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { recordingId: transcript.recordingId, provider: transcript.provider, language: transcript.language }, ...auditContext(req) });
+      if (!previous.providerSubmittedAt && transcript.providerSubmittedAt) await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_PROVIDER_SUBMITTED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { recordingId: transcript.recordingId, provider: transcript.provider }, ...auditContext(req) });
+      if (transcript.status === 'FAILED') await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_FAILED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { errorCode: transcript.errorCode, providerRequestId: transcript.providerRequestId }, ...auditContext(req) });
+      if (transcriptions.COMPLETE_STATUSES.has(transcript.status)) await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_COMPLETED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { segments: transcript.segments.length, durationSeconds: transcript.durationSeconds, providerRequestId: transcript.providerRequestId }, ...auditContext(req) });
     }
-    res.json({ transcript: transcriptions.publicTranscript(transcript), meeting: req.transcriptMeeting, recording: recording ? { id: recording.id, url: recording.url, source: recording.source } : null, configured: transcriptionProvider.isConfigured() });
+    res.json({ transcript: transcriptions.publicTranscript(transcript), meeting: req.transcriptMeeting, recording: recording ? { id: recording.id, source: recording.source, status: recording.status } : null, configured: transcriptionProvider.isConfigured() });
   }));
 
   app.patch('/api/transcriptions/:id', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireTranscript, asyncHandler(async (req, res) => {
@@ -1138,6 +1162,18 @@ function createApp(overrides = {}) {
       segments: req.body?.segments, language: req.body?.language, revision: req.body?.revision, editedBy: req.auth.u,
     });
     await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_EDITED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { revision: transcript.revision }, ...auditContext(req) });
+    res.json({ transcript: transcriptions.publicTranscript(transcript) });
+  }));
+
+  app.patch('/api/transcriptions/:id/speakers/:speakerId', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireTranscript, asyncHandler(async (req, res) => {
+    if (!canManageMeeting(req.auth, req.transcriptMeeting)) throw new AppError(403, 'No tienes permiso para renombrar hablantes de esta transcripción', 'FORBIDDEN');
+    const transcript = await transcriptions.renameSpeaker(req.transcript, {
+      speakerId: req.params.speakerId,
+      participantName: req.body?.participantName,
+      revision: req.body?.revision,
+      editedBy: req.auth.u,
+    });
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_SPEAKER_RENAMED', target: transcript.id, room: req.transcriptMeeting.room, metadata: { speakerId: req.params.speakerId, revision: transcript.revision }, ...auditContext(req) });
     res.json({ transcript: transcriptions.publicTranscript(transcript) });
   }));
 
@@ -1151,8 +1187,10 @@ function createApp(overrides = {}) {
 
   app.post('/api/transcriptions/:id/retry', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), transcriptionLimiter, requireTranscript, asyncHandler(async (req, res) => {
     if (!canManageMeeting(req.auth, req.transcriptMeeting)) throw new AppError(403, 'No tienes permiso para regenerar esta transcripción', 'FORBIDDEN');
-    const recording = await resolveRecording(req.transcript.recordingId, req.transcriptMeeting);
-    if (!recording || recording.status !== 'READY') throw new AppError(409, 'La grabación ya no está disponible', 'RECORDING_NOT_READY');
+    const recording = await resolveTranscriptionRecording(req.transcript.recordingId, req.transcriptMeeting);
+    if (!recording || recording.status !== 'READY') throw new AppError(409, 'La grabación ya no está disponible', 'TRANSCRIPTION_RECORDING_NOT_READY');
+    if (recording.durationSeconds && recording.durationSeconds > config.transcriptionMaxDurationMinutes * 60) throw new AppError(413, 'La grabación supera la duración máxima permitida', 'TRANSCRIPTION_RECORDING_TOO_LONG');
+    if (recording.size && recording.size > config.transcriptionMaxAudioBytes) throw new AppError(413, 'La grabación supera el tamaño máximo permitido', 'TRANSCRIPTION_RECORDING_TOO_LARGE');
     const transcript = await transcriptions.retryTranscript(req.transcript, { meeting: req.transcriptMeeting, recording, requestedBy: req.auth.u, provider: transcriptionProvider });
     await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_RETRIED', target: transcript.id, room: req.transcriptMeeting.room, ...auditContext(req) });
     res.json({ transcript: transcriptions.publicTranscript(transcript) });
@@ -1160,14 +1198,17 @@ function createApp(overrides = {}) {
 
   app.post('/api/transcriptions/:id/cancel', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireTranscript, asyncHandler(async (req, res) => {
     if (!canManageMeeting(req.auth, req.transcriptMeeting)) throw new AppError(403, 'No tienes permiso para cancelar esta transcripción', 'FORBIDDEN');
-    const transcript = await transcriptions.cancelTranscript(req.transcript, transcriptionProvider);
-    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_CANCELLED', target: transcript.id, room: req.transcriptMeeting.room, ...auditContext(req) });
+    const recording = await resolveRecording(req.transcript.recordingId, req.transcriptMeeting).catch(() => null);
+    const transcript = await transcriptions.cancelTranscript(req.transcript, transcriptionProvider, recording || {});
+    const action = transcriptions.COMPLETE_STATUSES.has(transcript.status) ? 'TRANSCRIPTION_COMPLETED' : transcript.status === 'FAILED' ? 'TRANSCRIPTION_FAILED' : 'TRANSCRIPTION_CANCELLED';
+    await safeAudit({ actor: req.auth.u, action, target: transcript.id, room: req.transcriptMeeting.room, metadata: { errorCode: transcript.errorCode, providerRequestId: transcript.providerRequestId }, ...auditContext(req) });
     res.json({ transcript: transcriptions.publicTranscript(transcript) });
   }));
 
   app.get('/api/transcriptions/:id/export', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER', 'PANELIST'), requireTranscript, asyncHandler(async (req, res) => {
     const exported = transcriptions.exportTranscript(req.transcript, req.query.format);
     const filename = `${slugify(req.transcriptMeeting.title || 'transcripcion') || 'transcripcion'}-${req.transcript.id.slice(0, 8)}.${exported.extension}`;
+    await safeAudit({ actor: req.auth.u, action: 'TRANSCRIPTION_EXPORTED', target: req.transcript.id, room: req.transcriptMeeting.room, metadata: { format: exported.extension }, ...auditContext(req) });
     res.setHeader('Content-Type', exported.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(exported.body);
@@ -1221,15 +1262,17 @@ function createApp(overrides = {}) {
       livekit: { configured: livekit.configured === true, available: livekit.available === true },
       storage: { configured: storage.configured === true, available: storage.available === true, mode: storage.mode },
       recording: { available: recordingConfigured && livekit.available === true && storage.available === true },
-      transcription: { configured: transcription.configured === true, available: transcription.available === true },
+      transcription: { configured: transcription.configured === true, available: transcription.available === true, status: transcription.status || (transcription.available ? 'healthy' : transcription.configured ? 'degraded' : 'disabled') },
     };
-    const requiredAvailable = !config.isProductionLike || (servicesStatus.livekit.available && servicesStatus.storage.available && servicesStatus.recording.available && servicesStatus.transcription.available);
+    const requiredConfigured = !config.isProductionLike || (servicesStatus.livekit.configured && servicesStatus.storage.configured && recordingConfigured && (!config.transcriptionEnabled || servicesStatus.transcription.configured));
+    const requiredAvailable = !config.isProductionLike || (servicesStatus.livekit.available && servicesStatus.storage.available && servicesStatus.recording.available && (!config.transcriptionEnabled || servicesStatus.transcription.available));
+    const healthStatus = !requiredConfigured ? 'unhealthy' : requiredAvailable ? 'healthy' : 'degraded';
     res.json({
       app: config.appName,
       environment: config.appEnv,
       displayEnvironment: config.appDisplayEnv,
       version: config.appVersion,
-      status: requiredAvailable ? 'operational' : 'degraded',
+      status: healthStatus,
       checkedAt: new Date().toISOString(),
       services: servicesStatus,
     });
