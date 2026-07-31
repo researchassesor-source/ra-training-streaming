@@ -8,7 +8,7 @@ Plataforma web para webinars, clases y sesiones en vivo de R.A. Training. Combin
 - **LiveKit:** señalización WebRTC, audio, video, pantalla, permisos de participantes y Egress.
 - **Cloudflare R2 / S3 compatible:** usuarios, reuniones, invitaciones, auditoría, archivos de chat y grabaciones.
 - **Persistencia local:** JSON atómico bajo `.local-data/` cuando S3 no está configurado.
-- **Transcripción desacoplada:** interfaz `TranscriptionProvider`, proveedor mock seguro para pruebas y adaptador HTTP configurable.
+- **Transcripción desacoplada:** interfaz `TranscriptionProvider`, adaptador dedicado Deepgram para audio pregrabado privado, compatibilidad HTTP heredada y mock seguro para pruebas.
 - **Frontend vanilla:** HTML, CSS y JavaScript sin framework; vistas específicas para administración, escritorio, tablet y móvil.
 
 Los tokens de invitación nuevos se guardan como HMAC-SHA-256 con un secreto independiente. Los hashes SHA-256 históricos siguen siendo legibles para no romper invitaciones antiguas. Al abrir `/i/<token>`, el servidor valida expiración, revocación y usos, crea una cookie HttpOnly de sala y redirige a una URL sin token. El navegador nunca decide su rol, sala ni identidad LiveKit.
@@ -71,15 +71,19 @@ Abre `http://localhost:3000`. No reutilices credenciales productivas en `.env` l
 | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_WS_URL` | Conexión LiveKit. |
 | `RECORDING_S3_*` | Credenciales, bucket, región y endpoint de R2/S3/Egress. |
 | `TRANSCRIPTION_ENABLED` | Habilita explícitamente la integración; `false` por defecto. |
-| `TRANSCRIPTION_PROVIDER` | `mock` en pruebas o `http` para un adaptador externo. |
+| `TRANSCRIPTION_PROVIDER` | `deepgram` para la integración oficial, `http` para el contrato genérico heredado o `mock` en pruebas. |
 | `TRANSCRIPTION_LANGUAGE` | Idioma esperado predeterminado. |
 | `TRANSCRIPTION_MAX_DURATION_MINUTES` | Duración máxima aceptada por trabajo. |
 | `TRANSCRIPTION_RETENTION_DAYS` | Retención predeterminada del texto. |
 | `TRANSCRIPTION_API_URL`, `TRANSCRIPTION_API_KEY` | Endpoint y secreto del proveedor HTTP; nunca llegan al cliente. |
 | `TRANSCRIPTION_ALLOWED_HOSTS` | Hostnames autorizados del proveedor HTTP, separados por coma; obligatorio fuera de desarrollo/pruebas. |
+| `TRANSCRIPTION_DEEPGRAM_*` | Modelo `nova-3` y opciones de diarización, smart format, utterances y paragraphs. |
+| `TRANSCRIPTION_REQUEST_TIMEOUT_MS`, `TRANSCRIPTION_RETRY_MAX` | Timeout total y reintentos acotados para 429/5xx. |
+| `TRANSCRIPTION_MAX_AUDIO_BYTES` | Límite previo de tamaño de la grabación. |
+| `TRANSCRIPTION_PRESIGNED_URL_TTL_SECONDS` | Vigencia de 300–900 segundos para la URL R2 enviada al proveedor. |
 | `LOCAL_DATA_DIR` | Sobrescribe la carpeta local; útil para pruebas aisladas. |
 
-Los valores seguros de ejemplo están en [.env.example](.env.example). No configures todavía estas variables en Render sin completar el checklist de release.
+Los valores seguros de ejemplo están en [.env.example](.env.example). En Render, configura los secretos exclusivamente en el servicio Preview aislado y completa el checklist antes del despliegue manual.
 
 ## Desarrollo local
 
@@ -135,6 +139,9 @@ git diff --check
 - Cámara, micrófono, pantalla, reconexión real y Egress deben validarse en un Preview aislado con LiveKit de prueba.
 - La grabación actual usa `RoomComposite`: el audio resultante está mezclado. La identificación exacta por participante requiere Participant/Track Egress o diarización del proveedor y siempre admite corrección manual.
 - El proveedor `mock` no inventa texto: solo completa trabajos con fixtures explícitos y está prohibido en Producción.
+- Los trabajos Deepgram activos se controlan en memoria. Tras reiniciar el proceso, una consulta los marca fallidos y permite reintentar desde la grabación persistida; una topología multinodo requiere una cola duradera.
+- La diarización de Room Composite identifica voces, no identidades LiveKit confiables. Los nombres desconocidos se presentan como “Hablante N” y pueden corregirse de forma auditable.
+- La purga automática al llegar `retentionUntil` todavía requiere una tarea operativa programada.
 - La integración de Google Calendar queda fuera de esta entrega; el modelo y filtros ya permiten añadir un adaptador.
 
 Antes de publicar, sigue [Checklist de release](docs/RELEASE_CHECKLIST.md).

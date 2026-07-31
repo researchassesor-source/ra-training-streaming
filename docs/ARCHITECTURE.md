@@ -100,11 +100,15 @@ Al iniciar Egress se guarda, si R2 está disponible, un objeto `.metadata.json` 
 
 ## Transcripciones
 
-- `transcription-provider.js` define la interfaz de proveedor y las implementaciones HTTP y mock.
-- `transcriptions.js` gestiona estados, persistencia, revisión optimista, identidad de participantes, retención y exportaciones.
+- `transcription-provider.js` define la interfaz común y conserva las implementaciones HTTP heredada y mock.
+- `transcription-providers/deepgram.js` implementa el contrato oficial de audio pregrabado, autenticación `Token`, normalización de diarización y cancelación real.
+- `transcription-network.js` centraliza URL allowlist, bloqueo de redes privadas y validación DNS en entornos publicados.
+- `transcriptions.js` gestiona esquema v2, compatibilidad no destructiva, estados, persistencia, revisión optimista, hablantes, palabras, retención y exportaciones validadas.
 - `app.js` aplica autenticación, roles, propiedad de la reunión, CSRF y rate limit antes de delegar al proveedor.
 - `transcription.html` y `transcription.js` ofrecen consulta, búsqueda, edición, regeneración, cancelación, eliminación y exportación.
 
-Estados expuestos por la experiencia: `NOT_AVAILABLE`, `READY`, `QUEUED`, `PROCESSING_AUDIO`, `IDENTIFYING_PARTICIPANTS`, `GENERATING_TRANSCRIPT`, `COMPLETED`, `COMPLETED_WITH_WARNINGS`, `FAILED` y `CANCELLED`; desde `QUEUED` se persiste el trabajo real. Las respuestas públicas nunca incluyen `providerJobId` ni claves del proveedor. ADMIN y el ORGANIZER autorizado administran; el PANELIST asignado como `trainerId` solo puede consultar y exportar cuando la reunión lo permite; VIEWER no tiene acceso.
+Estados actuales: `PENDING`, `VALIDATING`, `FETCHING_RECORDING`, `SUBMITTING`, `PROCESSING`, `COMPLETED`, `FAILED` y `CANCELLED`; se conservan los estados heredados para datos antiguos. Los porcentajes describen etapas, no reconocimiento parcial. Las respuestas públicas nunca incluyen `providerJobId`, URL firmada ni claves. ADMIN y el ORGANIZER autorizado administran; el PANELIST asignado como `trainerId` solo puede consultar y exportar cuando la reunión lo permite; VIEWER no tiene acceso.
 
-El proveedor HTTP recibe una URL firmada de corta duración creada por el servidor. El modo `mock` solo produce contenido si la prueba inyecta un fixture explícito y está prohibido en Producción. La guía operativa completa está en [TRANSCRIPTION.md](TRANSCRIPTION.md).
+Deepgram recibe por JSON una URL R2 presignada de 5–15 minutos. El bucket permanece privado; esa URL no se persiste ni se expone por la API de transcripción. La respuesta se reduce a un modelo neutral con segmentos, palabras, speaker y metadata allowlist. La creación se serializa por reunión+grabación y el proveedor usa timeout, tamaño máximo, redirecciones bloqueadas y reintentos de 429/5xx. El modo `mock` solo produce contenido si la prueba inyecta un fixture explícito y está prohibido en Producción. La guía operativa completa está en [TRANSCRIPTION.md](TRANSCRIPTION.md).
+
+Los controladores de jobs Deepgram viven en memoria; la transcripción final sí se persiste. Un reinicio convierte un job activo sin controlador en fallo reintentable. El escalado multinodo necesita una cola duradera antes de Producción.

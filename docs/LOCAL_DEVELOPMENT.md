@@ -95,19 +95,22 @@ Detén Node con `Ctrl+C` y LiveKit con `npm run livekit:down`. Si necesitas borr
 
 ## Transcripción local
 
-La transcripción está desactivada de forma predeterminada. Para pruebas automatizadas se inyecta un proveedor mock y un fixture explícito; el mock no inventa conversaciones. Para una integración local real usa `TRANSCRIPTION_PROVIDER=http`, una URL HTTPS (o localhost en desarrollo) y una clave de prueba:
+La transcripción está desactivada de forma predeterminada. Para pruebas automatizadas se inyecta un proveedor mock o un `fetch` simulado y un fixture explícito; no se llama a Deepgram ni se inventan conversaciones. Para una prueba manual real usa una clave exclusiva de desarrollo y el adaptador dedicado:
 
 ```dotenv
 TRANSCRIPTION_ENABLED=true
-TRANSCRIPTION_PROVIDER=http
+TRANSCRIPTION_PROVIDER=deepgram
 TRANSCRIPTION_LANGUAGE=es
 TRANSCRIPTION_MAX_DURATION_MINUTES=240
 TRANSCRIPTION_RETENTION_DAYS=90
-TRANSCRIPTION_API_URL=https://proveedor-de-prueba.example/v1/transcriptions
+TRANSCRIPTION_API_URL=https://api.deepgram.com/v1/listen
 TRANSCRIPTION_API_KEY=valor-local-no-versionado
+TRANSCRIPTION_ALLOWED_HOSTS=api.deepgram.com
+TRANSCRIPTION_DEEPGRAM_MODEL=nova-3
+TRANSCRIPTION_PRESIGNED_URL_TTL_SECONDS=600
 ```
 
-No copies credenciales reales a capturas, logs, issues o fixtures. Consulta [TRANSCRIPTION.md](TRANSCRIPTION.md) para el contrato del proveedor, permisos, privacidad y limitaciones.
+La grabación debe seguir resolviéndose desde R2 con HTTPS; no uses una URL local, hagas público el bucket ni pegues la firma en el navegador. No copies credenciales reales a capturas, logs, issues o fixtures. Para apagar el consumo fija `TRANSCRIPTION_ENABLED=false`. Consulta [TRANSCRIPTION.md](TRANSCRIPTION.md) para el contrato, permisos, privacidad, errores y limitaciones.
 
 ## Comprobación visual local
 

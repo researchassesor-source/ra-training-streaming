@@ -23,6 +23,8 @@ Ejecutar solo cuando el alcance de la entrega lo autorice expresamente. Esta lis
 5. Mantener `NODE_ENV=production`, `COOKIE_SECURE=true`, `ALLOW_OPEN_DEV_ROOMS=false` y despliegue automático desactivado.
 6. Comprobar `/health`, `X-Robots-Tag`, `/robots.txt` y crear únicamente datos ficticios.
 7. Ejecutar la matriz manual y registrar qué casos requieren hardware, dos navegadores o servicios externos.
+8. Confirmar `TRANSCRIPTION_PROVIDER=deepgram`, endpoint/host oficiales, modelo `nova-3`, idioma `es`, URL firmada de 600 segundos y clave exclusiva presente sin mostrarla.
+9. Antes de declarar Deepgram disponible, completar un job real autorizado; `degraded/not-probed` antes de esa prueba es deliberado y no debe maquillarse.
 
 ## Matriz manual
 
@@ -48,8 +50,11 @@ Ejecutar solo cuando el alcance de la entrega lo autorice expresamente. Esta lis
 - [ ] El indicador de grabación permanece apagado ante error, estado desconocido, reconexión y Egress finalizado.
 - [ ] Reunión histórica incompleta carga con valores seguros sin reescribir el objeto almacenado.
 - [ ] Calendario conserva la fecha local (incluido un caso del 30 de julio) y distingue el mes adyacente.
-- [ ] Transcripción: crear, procesar, completar, fallar, reintentar, cancelar, editar con conflicto, eliminar y exportar TXT/JSON/VTT/SRT.
+- [ ] Transcripción real: Egress Preview → objeto R2 privado → URL temporal → Deepgram; crear, procesar, completar, fallar, reintentar, cancelar, editar con conflicto, renombrar hablante, eliminar y exportar TXT/JSON/VTT/SRT.
+- [ ] Audio autorizado de 30–90 s con dos voces: registrar duración, bytes, tiempo de proceso, segmentos, speakers y confianza sin copiar texto sensible ni URL firmada.
+- [ ] Probar 401/403 con clave controlada no productiva, 429/5xx si puede simularse sin gasto, formato inválido, timeout, reinicio durante trabajo y caída temporal de R2.
 - [ ] PANELIST respeta el permiso de consulta; VIEWER recibe 403; ninguna respuesta o log expone claves ni `providerJobId`.
+- [ ] El detalle de transcripción no expone URL R2; bucket permanece privado y la URL enviada al proveedor caduca en 5–15 minutos.
 - [ ] Probar búsqueda, filtro de participante, timestamps, confianza, nombres desconocidos y cambios sin guardar.
 - [ ] Document PiP abre con dock compacto de hasta 650×56, expande/contrae, controla mic/cámara/pantalla/paneles/salida, cierra sin desconectar y reabre compacto; fallback interno completo y mensaje honesto.
 - [ ] Popovers del dock: Chat y Participantes alternan con su mismo botón, son mutuamente excluyentes, cierran con Escape/clic exterior y conservan borrador e historial sin duplicar listeners.
@@ -85,3 +90,4 @@ Actuar estrictamente según la autorización vigente. Nunca hacer push directo a
 4. Revocar invitaciones creadas durante validación.
 5. Conservar auditoría y grabaciones; no eliminar objetos R2 salvo proceso administrativo aprobado.
 6. Documentar el commit, síntoma y prueba que motivaron el rollback.
+7. Para cortar consumo de Deepgram, fijar `TRANSCRIPTION_ENABLED=false`; si una clave pudo exponerse, rotarla y revocar la anterior desde Deepgram.

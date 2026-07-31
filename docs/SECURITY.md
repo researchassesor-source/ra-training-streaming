@@ -25,6 +25,10 @@
 - Cada acceso a sala emite una cookie HttpOnly firmada con nombre único y un selector opaco por pestaña. `X-Room-Session-ID` solo selecciona la cookie; no reemplaza firma, expiración, rol, sala ni CSRF.
 - Los errores de sesión y CSRF distinguen ausencia, expiración e incompatibilidad de token sin incluir cookies, firmas ni valores CSRF en respuestas o logs.
 - Conceder palabra persiste una autorización de publicación limitada a esa identidad y sala para que sobreviva a una reconexión; quitar palabra, expulsar o bloquear la revoca.
+- Deepgram usa exclusivamente `https://api.deepgram.com/v1/listen`, hostname/path exactos y `Authorization: Token`; configuración con credenciales en URL, query o fragmento se rechaza.
+- La resolución DNS del endpoint se valida en Preview/Producción contra loopback, privadas y link-local; `redirect: error` evita saltos a otro destino.
+- La URL R2 para Deepgram caduca entre 300 y 900 segundos, no se persiste ni se devuelve en la API de transcripción.
+- Las respuestas Deepgram requieren JSON, tienen límite de 25 MiB y timeout que cubre conexión y body; la cancelación aborta solicitudes y backoff.
 
 ## Políticas de roles
 
@@ -40,7 +44,9 @@ Express emite `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `P
 - S3 no ofrece las mismas garantías transaccionales que una base de datos. Para concurrencia elevada, migrar usuarios, reuniones, invitaciones y auditoría a PostgreSQL.
 - El consumo de invitación y el cambio de bloqueo se serializan por sala dentro de una instancia; una topología con varias instancias requiere operación atómica compartida.
 - Los links firmados de grabación tienen una hora de vigencia; quien reciba el link puede usarlo durante ese periodo.
+- La URL firmada interna usada para transcribir tiene una vigencia independiente de 5–15 minutos; el navegador no la recibe desde el detalle de transcripción.
 - La metadata LiveKit contiene rol, hora de entrada e identificador interno de invitación para moderación. No contiene el token ni otros secretos.
+- Los controladores de trabajos Deepgram activos son memoria local del proceso. Un reinicio fuerza un fallo reintentable; despliegues multinodo requieren cola compartida.
 
 ## Auditoría de reunión
 
@@ -52,7 +58,7 @@ Se registran entrada, salida explícita, reconexión, pantalla iniciada/detenida
 2. Revocar invitaciones activas de la reunión.
 3. Cancelar/archivar la reunión para revocar la sala.
 4. Rotar `SESSION_SECRET` para invalidar globalmente sesiones, incluyendo bootstrap.
-5. Rotar credenciales LiveKit/R2 desde sus proveedores si hubo exposición; no registrarlas en Git.
+5. Rotar credenciales LiveKit/R2/Deepgram desde sus proveedores si hubo exposición; actualizar primero el gestor seguro, validar y revocar la clave anterior. No registrarlas en Git.
 6. Revisar auditoría e logs de Render sin copiar secretos a tickets.
 
 ## Reporte
@@ -63,10 +69,10 @@ No abras un issue público con credenciales, tokens o datos de participantes. En
 
 - El indicador de grabación depende del estado Egress confirmado por servidor; fallos, estados desconocidos y desconexiones no se muestran como grabación activa.
 - La metadata de grabación admite identidades y pistas, pero excluye secretos y se filtra antes de persistirla.
-- Las claves del proveedor de transcripción permanecen exclusivamente en servidor. Ninguna respuesta pública incluye la clave ni el identificador privado del trabajo.
+- Las claves del proveedor de transcripción permanecen exclusivamente en servidor. Ninguna respuesta pública incluye la clave, el identificador privado del trabajo ni la URL presignada usada por Deepgram.
 - Crear, regenerar, cancelar, editar y eliminar exige CSRF, rol y propiedad de reunión. La consulta de PANELIST es optativa por reunión; VIEWER queda denegado.
 - El texto se sanitiza al guardar y al renderizar. La edición usa revisión optimista para evitar sobreescrituras silenciosas.
 - Las URL de audio enviadas al proveedor son firmadas y temporales. La transcripción hereda la sensibilidad de la grabación y no debe copiarse a canales no autorizados.
 - `retentionUntil` registra la fecha objetivo de retención. La eliminación automática del objeto y del trabajo remoto requiere una tarea operativa programada; hasta implementarla, el borrado manual autorizado y auditable es obligatorio.
 
-La diarización depende de la fuente. Una grabación compuesta puede mezclar voces; si la metadata no permite identificar una pista, la interfaz muestra “Participante sin identificar N” en vez de atribuirla por conjetura. Para mayor precisión, conviene grabar pistas o participantes por separado y correlacionar sus identidades LiveKit.
+La diarización depende de la fuente. Una grabación compuesta puede mezclar voces; si la metadata no permite identificar una pista, la interfaz muestra “Hablante N” en vez de atribuirla por conjetura. Para mayor precisión, conviene grabar pistas o participantes por separado y correlacionar sus identidades LiveKit.
