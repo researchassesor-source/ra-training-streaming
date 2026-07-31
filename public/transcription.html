@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="dashboard-body transcript-body">
-  <header class="dashboard-topbar"><div id="brand"></div><a class="button secondary" href="/dashboard.html">Volver al panel</a></header>
+  <header class="dashboard-topbar"><div id="brand"></div><a id="backToDashboard" class="button secondary" href="/dashboard.html">Volver al panel</a></header>
   <main class="transcript-shell">
     <div id="transcriptNotice" class="notice" hidden role="status" aria-live="polite"></div>
     <section class="transcript-header dashboard-card" aria-labelledby="transcriptTitle">
@@ -20,9 +20,10 @@
         <div><p class="eyebrow">Transcripción de reunión</p><h1 id="transcriptTitle">Cargando…</h1><p id="transcriptMeta" class="muted"></p></div>
         <img src="assets/icon-192.png" alt="Icono de R.A. Training Streaming" />
       </div>
-      <div class="transcript-status-row"><span id="transcriptStatus" class="status-pill">En cola</span><span id="transcriptLanguage"></span><span id="transcriptParticipants"></span><span id="unsavedBadge" class="warning-pill" hidden>Cambios sin guardar</span></div>
+      <div class="transcript-status-row"><span id="transcriptStatus" class="status-pill">Pendiente</span><span id="transcriptLanguage"></span><span id="transcriptProvider"></span><span id="transcriptParticipants"></span><span id="transcriptRetention"></span><span id="unsavedBadge" class="warning-pill" hidden>Cambios sin guardar</span></div>
       <div id="transcriptProgressTrack" class="progress-track" role="progressbar" aria-label="Progreso de transcripción" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="transcriptProgress"></span></div><p id="transcriptProgressLabel" class="muted small"></p>
-      <p class="privacy-notice">La transcripción automática puede contener errores. Revisa nombres, cifras y términos importantes antes de compartirla.</p>
+      <p class="muted small stage-progress-note">El porcentaje representa etapas del flujo; no es un porcentaje real del reconocimiento de voz.</p>
+      <p class="privacy-notice">La transcripción automática puede contener errores. La separación de hablantes es aproximada en una grabación compuesta; revisa nombres, cifras y términos importantes antes de compartirla.</p>
     </section>
 
     <section class="transcript-toolbar dashboard-card" aria-label="Herramientas de transcripción">
@@ -40,15 +41,17 @@
       <div class="export-actions" aria-label="Descargar transcripción">
         <span>Descargar:</span><a data-export="txt">TXT</a><a data-export="json">JSON</a><a data-export="vtt">VTT</a><a data-export="srt">SRT</a>
       </div>
+      <div class="speaker-manager" aria-labelledby="speakerManagerTitle"><strong id="speakerManagerTitle">Nombres de hablantes</strong><div id="speakerManagerList"></div></div>
     </section>
 
     <section class="transcript-content dashboard-card" aria-labelledby="segmentsTitle">
-      <div class="card-heading"><h2 id="segmentsTitle">Intervenciones</h2><a id="openRecording" class="button secondary compact" target="_blank" rel="noopener noreferrer" hidden>Abrir grabación</a></div>
+      <div class="card-heading"><h2 id="segmentsTitle">Intervenciones</h2></div>
       <div id="transcriptSegments" class="transcript-segments" aria-live="polite"></div>
     </section>
   </main>
 
   <dialog id="transcriptConfirmDialog" class="app-dialog confirmation-dialog"><form method="dialog"><h2 data-confirm-title>Confirmar acción</h2><p data-confirm-message></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button data-confirm-accept class="danger" value="confirm">Confirmar</button></div></form></dialog>
+  <dialog id="speakerRenameDialog" class="app-dialog small-dialog"><form id="speakerRenameForm"><h2>Renombrar hablante</h2><p id="speakerRenameCurrent" class="muted"></p><input id="speakerRenameId" type="hidden" /><label for="speakerRenameName">Nombre visible<input id="speakerRenameName" maxlength="100" autocomplete="off" required /></label><p id="speakerRenameError" class="form-error" role="alert"></p><div class="dialog-actions"><button id="speakerRenameCancel" class="secondary" type="button">Cancelar</button><button class="primary" type="submit">Guardar nombre</button></div></form></dialog>
   <script src="brand.js"></script>
   <script src="app-core.js"></script>
   <script src="transcription.js"></script>

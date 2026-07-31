@@ -19,7 +19,13 @@ const STATUS_LABELS = {
 const TYPE_LABELS = { WEBINAR: 'Webinar', SESSION: 'Sesión', CLASS: 'Clase' };
 const ROLE_LABELS = { ADMIN: 'Administrador', ORGANIZER: 'Organizador', PANELIST: 'Panelista', VIEWER: 'Asistente' };
 const ENVIRONMENT_LABELS = { development: 'Desarrollo', preview: 'Vista previa', production: 'Producción', test: 'Pruebas' };
-const PROVIDER_LABELS = { mock: 'Simulación local', http: 'Proveedor HTTP' };
+const PROVIDER_LABELS = { mock: 'Simulación local', http: 'Proveedor HTTP', deepgram: 'Deepgram' };
+const TRANSCRIPT_STATUS_LABELS = {
+  PENDING: 'Preparando transcripción', VALIDATING: 'Preparando transcripción', FETCHING_RECORDING: 'Preparando transcripción',
+  SUBMITTING: 'Transcripción en proceso', PROCESSING: 'Transcripción en proceso', QUEUED: 'Preparando transcripción',
+  PROCESSING_AUDIO: 'Transcripción en proceso', IDENTIFYING_PARTICIPANTS: 'Transcripción en proceso', GENERATING_TRANSCRIPT: 'Transcripción en proceso',
+  COMPLETED: 'Transcripción completada', COMPLETED_WITH_WARNINGS: 'Completada con advertencias', FAILED: 'No se pudo transcribir', CANCELLED: 'Transcripción cancelada',
+};
 const AUDIT_LABELS = {
   AUTH_LOGIN: 'Inicio de sesión', AUTH_LOGIN_FAILED: 'Inicio de sesión fallido', AUTH_LOGOUT: 'Cierre de sesión',
   USER_CREATED: 'Usuario creado', USER_UPDATED: 'Usuario actualizado', USER_DEACTIVATED: 'Usuario desactivado',
@@ -33,6 +39,9 @@ const AUDIT_LABELS = {
   TRANSCRIPTION_COMPLETED: 'Transcripción completada', TRANSCRIPTION_FAILED: 'Transcripción fallida',
   TRANSCRIPTION_EDITED: 'Transcripción editada', TRANSCRIPTION_RETRIED: 'Transcripción regenerada',
   TRANSCRIPTION_CANCELLED: 'Transcripción cancelada', TRANSCRIPTION_DELETED: 'Transcripción eliminada',
+  TRANSCRIPTION_REQUESTED: 'Transcripción solicitada', TRANSCRIPTION_VALIDATION_FAILED: 'Solicitud de transcripción rechazada',
+  TRANSCRIPTION_STARTED: 'Procesamiento de transcripción iniciado', TRANSCRIPTION_PROVIDER_SUBMITTED: 'Audio enviado al proveedor',
+  TRANSCRIPTION_SPEAKER_RENAMED: 'Hablante renombrado', TRANSCRIPTION_EXPORTED: 'Transcripción exportada',
   ROOM_OPEN_ATTEMPT: 'Intento de abrir reunión', ROOM_CONNECTION_FAILED: 'Error de conexión a la reunión',
   ROOM_RETRY: 'Reintento de conexión', ROOM_CONNECTED: 'Reunión iniciada', ROOM_ENDED: 'Reunión finalizada',
   PARTICIPANT_CONSENT_RECORDED: 'Consentimiento de participante registrado',
@@ -194,7 +203,7 @@ function renderMeetings() {
       }
       const recording = state.recordings.find((item) => item.meetingId === meeting.id && item.status === 'READY');
       if (recording?.transcript) {
-        const transcriptLink = document.createElement('a'); transcriptLink.className = 'button secondary compact'; transcriptLink.href = `/transcription.html?id=${encodeURIComponent(recording.transcript.id)}`; transcriptLink.textContent = 'Ver transcripción'; actions.appendChild(transcriptLink);
+        const transcriptLink = document.createElement('a'); transcriptLink.className = 'button secondary compact'; transcriptLink.href = `/transcription.html?id=${encodeURIComponent(recording.transcript.id)}`; transcriptLink.textContent = ['FAILED', 'CANCELLED'].includes(recording.transcript.status) ? 'Reintentar transcripción' : ['COMPLETED', 'COMPLETED_WITH_WARNINGS'].includes(recording.transcript.status) ? 'Ver transcripción' : 'Ver proceso de transcripción'; actions.appendChild(transcriptLink);
       } else if (meeting.status === 'COMPLETED' && meeting.allowTranscription && recording) {
         actions.append(meetingAction('Transcribir reunión', () => startTranscription(meeting, recording), meeting, 'secondary compact'));
       }
@@ -600,6 +609,7 @@ async function loadRecordings() {
     for (const item of data.items) {
       const row = document.createElement('article'); row.className = 'recording-card';
       const info = document.createElement('div'); info.append(textElement('h2', item.title || 'Reunión sin título'), textElement('p', `${item.trainerName || 'Capacitador por definir'} · ${formatDate(item.lastModified)}`, 'muted'), textElement('p', `${(Number(item.size || 0) / 1024 / 1024).toFixed(1)} MB · Lista`, 'small'));
+      if (item.transcript) info.appendChild(textElement('p', TRANSCRIPT_STATUS_LABELS[item.transcript.status] || 'Estado de transcripción no disponible', 'small transcript-recording-state'));
       const actions = document.createElement('div'); actions.className = 'meeting-actions';
       if (item.url) {
         const open = document.createElement('a'); open.href = item.url; open.target = '_blank'; open.rel = 'noopener noreferrer'; open.className = 'button secondary compact'; open.textContent = 'Abrir';
@@ -609,6 +619,7 @@ async function loadRecordings() {
       const meeting = state.meetings.find((entry) => entry.id === item.meetingId);
       if (item.transcript) {
         const transcript = document.createElement('a'); transcript.href = `/transcription.html?id=${encodeURIComponent(item.transcript.id)}`; transcript.className = 'button primary compact'; transcript.textContent = 'Ver transcripción'; actions.appendChild(transcript);
+        transcript.textContent = ['FAILED', 'CANCELLED'].includes(item.transcript.status) ? 'Revisar y reintentar' : ['COMPLETED', 'COMPLETED_WITH_WARNINGS'].includes(item.transcript.status) ? 'Ver transcripción' : 'Ver proceso';
       } else if (item.transcriptionAllowed && meeting) actions.append(meetingAction('Transcribir', () => startTranscription(meeting, item), item, 'primary compact'));
       if (state.user.role === 'ADMIN') actions.appendChild(meetingAction('Eliminar', async () => {
         if (!await askConfirmation({ title: 'Eliminar grabación', message: `La grabación de “${item.title}” se eliminará permanentemente.`, confirmLabel: 'Eliminar', danger: true })) return;
