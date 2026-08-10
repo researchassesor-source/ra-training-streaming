@@ -12,7 +12,7 @@ function classifyTrackSource(publication) {
 }
 
 function selectActiveSpeaker(participants = [], speakingIdentities = []) {
-  const visible = (participants || []).filter((participant) => participant?.identity && participant.visible !== false);
+  const visible = (participants || []).filter((participant) => participant?.identity && participant.visible !== false && participant.eligible !== false);
   const speaking = new Set(speakingIdentities || []);
   return visible.find((participant) => speaking.has(participant.identity) && participant.local !== true)?.identity
     || visible.find((participant) => speaking.has(participant.identity))?.identity
@@ -21,7 +21,16 @@ function selectActiveSpeaker(participants = [], speakingIdentities = []) {
     || null;
 }
 
-function createStage(containerElement, placeholderText, onSpotlightChange) {
+function clampVolume(value, fallback = 1) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : fallback;
+}
+
+function effectiveRemoteVolume(meetingVolume, participantVolume) {
+  return clampVolume(clampVolume(meetingVolume) * clampVolume(participantVolume));
+}
+
+function createStage(containerElement, placeholderText, onSpotlightChange, options = {}) {
   const tiles = new Map();
   const participantStates = new Map();
   const screenAudioStates = new Map();
@@ -29,6 +38,9 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
   let activeSpeakerIdentity = null;
   let speakingIdentities = [];
   let speakerSwitchTimer = null;
+  let speakerMode = 'auto';
+  let pinnedSpeakerIdentity = null;
+  let lastSpeakerSignature = '';
   const placeholder = document.createElement('div');
   placeholder.className = 'stage-placeholder';
   placeholder.textContent = placeholderText;
@@ -63,7 +75,9 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
   }
 
   function renderSpeakerMini() {
-    const identity = activeSpeakerIdentity || selectActiveSpeaker(participantCandidates(), speakingIdentities);
+    const identity = speakerMode === 'pinned' && participantStates.has(pinnedSpeakerIdentity)
+      ? pinnedSpeakerIdentity
+      : activeSpeakerIdentity || selectActiveSpeaker(participantCandidates(), speakingIdentities);
     const state = identity ? participantStates.get(identity) || {} : {};
     const camera = identity ? tiles.get(`${identity}|camera`) : null;
     const track = camera?.track || null;
@@ -82,7 +96,12 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
     speakerName.textContent = state.label || 'Participante';
     speakerMic.textContent = state.speaking ? 'Hablando' : state.microphone ? 'Mic activo' : 'Mic apagado';
     speakerMini.classList.toggle('is-speaking', state.speaking === true);
-    speakerMini.hidden = !identity;
+    speakerMini.hidden = !identity || speakerMode === 'hidden';
+    const signature = `${identity || ''}|${state.label || ''}|${state.role || ''}|${Boolean(track)}|${state.speaking === true}|${speakerMode}`;
+    if (signature !== lastSpeakerSignature) {
+      lastSpeakerSignature = signature;
+      options.onActiveSpeakerChange?.(identity ? { identity, name: state.label || 'Participante', role: state.role || '', track, speaking: state.speaking === true, mode: speakerMode } : null);
+    }
     if (identity) containerElement.appendChild(speakerMini);
   }
 
@@ -224,7 +243,9 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
     const active = new Set(speakingIdentities);
     for (const [identity, state] of participantStates) participantStates.set(identity, { ...state, speaking: active.has(identity) });
     for (const entry of tiles.values()) applyParticipantState(entry);
-    const nextIdentity = selectActiveSpeaker(participantCandidates(), speakingIdentities);
+    const nextIdentity = speakerMode === 'pinned' && participantStates.has(pinnedSpeakerIdentity)
+      ? pinnedSpeakerIdentity
+      : selectActiveSpeaker(participantCandidates(), speakingIdentities);
     if (nextIdentity === activeSpeakerIdentity) {
       if (spotlightActive) renderSpeakerMini();
       return;
@@ -234,6 +255,15 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
       activeSpeakerIdentity = nextIdentity;
       layout();
     }, speakingIdentities.length ? 450 : 900);
+  }
+
+  function setSpeakerMode(nextMode, identity = null) {
+    speakerMode = ['auto', 'pinned', 'hidden'].includes(nextMode) ? nextMode : 'auto';
+    pinnedSpeakerIdentity = speakerMode === 'pinned' && participantStates.has(identity) ? identity : null;
+    if (speakerMode === 'pinned') activeSpeakerIdentity = pinnedSpeakerIdentity;
+    else if (speakerMode === 'auto') activeSpeakerIdentity = selectActiveSpeaker(participantCandidates(), speakingIdentities);
+    layout();
+    return { mode: speakerMode, identity: pinnedSpeakerIdentity };
   }
 
   function setParticipantVisibility(identity, visible) {
@@ -257,7 +287,12 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
     if (screenEntry) {
       containerElement.classList.add('has-spotlight');
       containerElement.appendChild(screenEntry[1].root);
-      renderSpeakerMini();
+      if (speakerMode !== 'hidden') renderSpeakerMini();
+      else {
+        detachSpeakerTrack();
+        speakerMini.remove();
+        options.onActiveSpeakerChange?.(null);
+      }
       notify(true);
     } else {
       detachSpeakerTrack();
@@ -279,7 +314,7 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
 
   layout();
   return {
-    setTrack, setSelfSharePlaceholder, setScreenAudio, setParticipantState, setParticipantVisibility, setSpeaking, removeTrack, removeParticipant,
+    setTrack, setSelfSharePlaceholder, setScreenAudio, setParticipantState, setParticipantVisibility, setSpeaking, setSpeakerMode, removeTrack, removeParticipant,
     dispose() {
       clearTimeout(speakerSwitchTimer);
       detachSpeakerTrack();
@@ -294,6 +329,16 @@ function createStage(containerElement, placeholderText, onSpotlightChange) {
 
 function attachRemoteStageEvents(room, stage) {
   const audioElements = new Map();
+  const participantVolumes = new Map();
+  let meetingVolume = 1;
+  function applyVolume(identity, attached) {
+    if (!attached) return;
+    const individual = participantVolumes.has(identity) ? participantVolumes.get(identity) : 1;
+    const effective = effectiveRemoteVolume(meetingVolume, individual);
+    if (typeof attached.track?.setVolume === 'function') attached.track.setVolume(effective);
+    else if (attached.element) attached.element.volume = effective;
+    attached.effectiveVolume = effective;
+  }
   if (!document.documentElement.dataset.mediaResumeBound) {
     document.documentElement.dataset.mediaResumeBound = 'true';
     document.addEventListener('click', () => document.querySelectorAll('video, audio').forEach((media) => { if (media.paused) media.play?.().catch(() => {}); }));
@@ -311,7 +356,9 @@ function attachRemoteStageEvents(room, stage) {
         element.dataset.identity = participant.identity;
         element.dataset.source = source;
         document.body.appendChild(element);
-        audioElements.set(key, { element, track });
+        const attached = { element, track };
+        audioElements.set(key, attached);
+        applyVolume(participant.identity, attached);
         const speaker = document.getElementById('speakerSelect')?.value;
         if (speaker) element.setSinkId?.(speaker).catch(() => {});
         if (source === 'screen-audio') stage.setScreenAudio(participant.identity, true);
@@ -373,14 +420,35 @@ function attachRemoteStageEvents(room, stage) {
     [LivekitClient.RoomEvent.TrackUnmuted, handlers.trackUnmuted],
   ].filter(([event]) => event);
   bindings.forEach(([event, handler]) => room.on(event, handler));
-  return { dispose() {
+  return {
+    setMeetingVolume(value) {
+      meetingVolume = clampVolume(value);
+      for (const [key, attached] of audioElements) applyVolume(key.split('|')[0], attached);
+      return meetingVolume;
+    },
+    setParticipantVolume(identity, value) {
+      participantVolumes.set(identity, clampVolume(value));
+      for (const [key, attached] of audioElements) if (key.startsWith(`${identity}|`)) applyVolume(identity, attached);
+      return participantVolumes.get(identity);
+    },
+    getMeetingVolume() { return meetingVolume; },
+    getParticipantVolume(identity) { return participantVolumes.has(identity) ? participantVolumes.get(identity) : 1; },
+    dispose() {
     bindings.forEach(([event, handler]) => room.off(event, handler));
     for (const { element, track } of audioElements.values()) {
       track?.detach?.(element);
       element.remove();
     }
     audioElements.clear();
+    participantVolumes.clear();
   } };
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { classifyTrackSource, normalizeTrackSource, selectActiveSpeaker };
+if (typeof module === 'object' && module.exports) module.exports = {
+  attachRemoteStageEvents,
+  classifyTrackSource,
+  clampVolume,
+  effectiveRemoteVolume,
+  normalizeTrackSource,
+  selectActiveSpeaker,
+};

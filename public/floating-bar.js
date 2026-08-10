@@ -35,6 +35,7 @@ function attachCompanionWindow(button, model, actions = {}) {
   let mode = 'compact';
   let popover = null;
   const documentBindings = new Map();
+  const speakerAttachments = new Map();
 
   const icons = {
     microphone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm-7-3a7 7 0 0 0 14 0h-2a5 5 0 0 1-10 0H5Zm6 7v3h2v-3h-2Z"/></svg>',
@@ -220,7 +221,8 @@ function attachCompanionWindow(button, model, actions = {}) {
   function setPopover(documentRef, next) {
     popover = popover === next ? null : next;
     if (pipWindow && documentRef === pipWindow.document) {
-      try { pipWindow.resizeTo?.(popover ? 440 : mode === 'compact' ? 680 : 460, popover ? 520 : mode === 'compact' ? 86 : 460); } catch { /* Browser chrome controls minimum sizing. */ }
+      const sizes = { compact: [420, 210], full: [420, 430], minimal: [300, 72] };
+      try { pipWindow.resizeTo?.(popover ? 420 : sizes[mode][0], popover ? 520 : sizes[mode][1]); } catch { /* Browser chrome controls minimum sizing. */ }
     }
     render(documentRef, model.snapshot?.() || {});
     if (popover) documentRef.querySelector('[data-popover-close]')?.focus();
@@ -238,6 +240,7 @@ function attachCompanionWindow(button, model, actions = {}) {
           <button data-expand>${icons.expand}</button><button class="companion-close" data-close aria-label="Cerrar panel">×</button>
         </div>
       </div>
+      <section class="companion-speaker" data-speaker hidden><video autoplay muted playsinline></video><div data-speaker-avatar></div><p><strong data-speaker-name></strong><span data-speaker-role></span></p></section>
       <section class="companion-expanded" hidden>
         <div class="companion-heading"><img src="${location.origin}/assets/streaming-app-logo.png" alt="R.A. Training Streaming"><div><span class="companion-live" data-live></span><strong data-title></strong></div><button data-expand>Compactar</button><button class="companion-close" data-close aria-label="Cerrar panel">×</button></div>
         <div class="companion-status"><span data-timer></span><span data-connection></span><span data-quality></span><span data-lock></span></div>
@@ -249,6 +252,34 @@ function attachCompanionWindow(button, model, actions = {}) {
         <div class="companion-popover-content" data-popover-content></div>
       </aside>
     </main>`;
+  }
+
+  function renderActiveSpeaker(documentRef, state) {
+    const root = documentRef.getElementById('companionRoot');
+    const panel = root?.querySelector('[data-speaker]');
+    if (!panel) return;
+    const speaker = state.activeSpeaker;
+    const visible = Boolean(speaker) && state.speakerMode !== 'hidden' && mode !== 'minimal';
+    panel.hidden = !visible;
+    const video = panel.querySelector('video');
+    const previous = speakerAttachments.get(documentRef);
+    if (!visible || previous?.track !== speaker?.track) {
+      previous?.track?.detach?.(previous.video);
+      video.srcObject = null;
+      speakerAttachments.delete(documentRef);
+    }
+    if (!visible) return;
+    const initials = String(speaker.name || 'P').replace(/\s*\([^)]*\)\s*/g, ' ').trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+    panel.querySelector('[data-speaker-avatar]').textContent = initials;
+    panel.querySelector('[data-speaker-name]').textContent = speaker.name || 'Participante';
+    panel.querySelector('[data-speaker-role]').textContent = `${speaker.role || 'Participante'}${speaker.speaking ? ' · Hablando' : ''}`;
+    if (speaker.track && previous?.track !== speaker.track) {
+      speaker.track.attach(video);
+      video.muted = true;
+      video.play?.().catch(() => {});
+      panel.classList.add('has-video');
+      speakerAttachments.set(documentRef, { track: speaker.track, video });
+    } else panel.classList.toggle('has-video', Boolean(speaker.track));
   }
 
   function render(documentRef, state) {
@@ -271,11 +302,12 @@ function attachCompanionWindow(button, model, actions = {}) {
     root.querySelector('[data-connection]').textContent = RATCore.CONNECTION_STATES[state.connection] || state.connection;
     root.querySelector('[data-quality]').textContent = `Red: ${state.quality === 'poor' ? 'inestable' : state.quality === 'excellent' ? 'excelente' : state.quality === 'good' ? 'buena' : 'sin medir'}`;
     root.querySelector('[data-lock]').textContent = state.locked ? 'Sala bloqueada' : 'Sala abierta';
+    renderActiveSpeaker(documentRef, state);
     const definitions = [
       ['mic', state.microphone, state.microphone ? 'Silenciar' : 'Activar micrófono'],
       ['camera', state.camera, state.camera ? 'Apagar cámara' : 'Activar cámara'],
       ['screen', state.screen, state.screen ? 'Detener pantalla' : 'Compartir pantalla'],
-      ['hand', state.handRaised, state.role !== 'VIEWER' ? 'Ver manos' : state.handRaised ? 'Bajar mano' : 'Levantar mano'],
+      ['hand', state.handRaised, ['HOST', 'TEACHER', 'COHOST'].includes(state.meetingRole) ? 'Ver manos' : state.handRaised ? 'Bajar mano' : 'Levantar mano'],
     ];
     for (const [name, active, label] of definitions) {
       root.querySelectorAll(`[data-${name}]`).forEach((control) => {
@@ -290,7 +322,7 @@ function attachCompanionWindow(button, model, actions = {}) {
       ['chat', popover === 'chat' ? 'Cerrar Chat' : 'Abrir Chat'],
       ['participants', popover === 'participants' ? 'Cerrar Participantes' : 'Abrir Participantes'],
       ['more', 'Más opciones'], ['return', 'Volver a la reunión'],
-      ['expand', mode === 'compact' ? 'Expandir panel' : 'Volver a compacto'],
+      ['expand', mode === 'compact' ? 'Ver panel completo' : mode === 'full' ? 'Minimizar panel' : 'Volver a compacto'],
     ]) root.querySelectorAll(`[data-${selector}]`).forEach((control) => {
       control.setAttribute('aria-label', label);
       control.setAttribute('aria-expanded', String((selector === 'chat' && popover === 'chat') || (selector === 'participants' && popover === 'participants')));
@@ -300,14 +332,15 @@ function attachCompanionWindow(button, model, actions = {}) {
   }
 
   function applyMode(documentRef, nextMode) {
-    mode = nextMode === 'expanded' ? 'expanded' : 'compact';
+    mode = nextMode === 'expanded' ? 'full' : ['compact', 'full', 'minimal'].includes(nextMode) ? nextMode : 'compact';
     const root = documentRef.getElementById('companionRoot');
     if (!root) return;
     root.dataset.mode = mode;
-    root.querySelector('.companion-compact').hidden = mode !== 'compact';
-    root.querySelector('.companion-expanded').hidden = mode !== 'expanded';
+    root.querySelector('.companion-compact').hidden = mode === 'full';
+    root.querySelector('.companion-expanded').hidden = mode !== 'full';
     if (pipWindow && documentRef === pipWindow.document && !popover) {
-      try { pipWindow.resizeTo?.(mode === 'compact' ? 680 : 460, mode === 'compact' ? 86 : 460); } catch { /* The initial PiP resize can require a separate user gesture. */ }
+      const sizes = { compact: [420, 210], full: [420, 430], minimal: [300, 72] };
+      try { pipWindow.resizeTo?.(...sizes[mode]); } catch { /* The initial PiP resize can require a separate user gesture. */ }
     }
   }
 
@@ -324,7 +357,7 @@ function attachCompanionWindow(button, model, actions = {}) {
     root.querySelectorAll('[data-return]').forEach((control) => { control.onclick = () => { window.focus(); actions.return?.(); }; });
     root.querySelectorAll('[data-close]').forEach((control) => { control.onclick = close; });
     root.querySelector('[data-popover-close]').onclick = () => setPopover(documentRef, popover);
-    root.querySelectorAll('[data-expand]').forEach((control) => { control.onclick = () => { applyMode(documentRef, mode === 'compact' ? 'expanded' : 'compact'); render(documentRef, model.snapshot?.() || {}); }; });
+    root.querySelectorAll('[data-expand]').forEach((control) => { control.onclick = () => { applyMode(documentRef, mode === 'compact' ? 'full' : mode === 'full' ? 'minimal' : 'compact'); render(documentRef, model.snapshot?.() || {}); }; });
     const removeDrag = draggable ? makeDraggable(root, root.querySelector('[data-drag-handle]')) : () => {};
     const onKeydown = (event) => {
       if (event.key !== 'Escape' || !popover) return;
@@ -339,6 +372,9 @@ function attachCompanionWindow(button, model, actions = {}) {
     documentBindings.set(documentRef, () => {
       documentRef.removeEventListener('keydown', onKeydown);
       documentRef.removeEventListener('pointerdown', onPointerDown);
+      const speaker = speakerAttachments.get(documentRef);
+      speaker?.track?.detach?.(speaker.video);
+      speakerAttachments.delete(documentRef);
       removeDrag();
     });
     applyMode(documentRef, mode);
@@ -369,7 +405,8 @@ function attachCompanionWindow(button, model, actions = {}) {
     if ('documentPictureInPicture' in window && documentPictureInPicture.requestWindow) {
       closeRequested = false;
       const openedAt = Date.now();
-      pipWindow = await documentPictureInPicture.requestWindow({ width: mode === 'compact' ? 680 : 460, height: mode === 'compact' ? 86 : 460 });
+      const sizes = { compact: [420, 210], full: [420, 430], minimal: [300, 72] };
+      pipWindow = await documentPictureInPicture.requestWindow({ width: sizes[mode][0], height: sizes[mode][1] });
       pipWindow.document.head.innerHTML = `<meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="${location.origin}/style.css">`;
       pipWindow.document.body.innerHTML = markup();
       bind(pipWindow.document);
@@ -420,6 +457,7 @@ function attachCompanionWindow(button, model, actions = {}) {
       close();
       for (const cleanup of documentBindings.values()) cleanup();
       documentBindings.clear();
+      speakerAttachments.clear();
       fallback?.remove();
       fallback = null;
       if (button.onclick === toggle) button.onclick = null;
