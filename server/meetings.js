@@ -27,6 +27,9 @@ const LEGACY_DEFAULTS = Object.freeze({
   allowReactions: true,
   allowRaiseHand: true,
   allowQuestions: true,
+  allowPanelistScreenShare: true,
+  allowParticipantScreenShare: true,
+  allowStudentScreenShare: false,
   allowRecording: false,
   recordingConsentRequired: false,
   allowTranscription: false,
@@ -38,6 +41,7 @@ const LEGACY_DEFAULTS = Object.freeze({
   cancelledAt: null,
   archivedAt: null,
   livekitConfirmedAt: null,
+  rolePolicyVersion: 1,
 });
 
 function keyFor(room) {
@@ -118,10 +122,12 @@ function normalizeStoredMeeting(stored) {
     durationMinutes,
     capacity,
     scheduledAt,
-    type: TYPES.includes(String(source.type || '').toUpperCase()) ? String(source.type).toUpperCase() : LEGACY_DEFAULTS.type,
+    type: TYPES.includes(String(source.meetingType || source.type || '').toUpperCase()) ? String(source.meetingType || source.type).toUpperCase() : LEGACY_DEFAULTS.type,
     status: STATUSES.includes(String(source.status || '').toUpperCase()) ? String(source.status).toUpperCase() : LEGACY_DEFAULTS.status,
   };
-  for (const name of ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand', 'allowQuestions', 'allowRecording', 'recordingConsentRequired', 'allowTranscription', 'transcriptionConsentRequired', 'allowPanelistTranscriptAccess']) {
+  normalized.meetingType = normalized.type;
+  normalized.rolePolicyVersion = Number(source.rolePolicyVersion) >= 2 ? 2 : LEGACY_DEFAULTS.rolePolicyVersion;
+  for (const name of ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand', 'allowQuestions', 'allowPanelistScreenShare', 'allowParticipantScreenShare', 'allowStudentScreenShare', 'allowRecording', 'recordingConsentRequired', 'allowTranscription', 'transcriptionConsentRequired', 'allowPanelistTranscriptAccess']) {
     normalized[name] = typeof source[name] === 'boolean' ? source[name] : LEGACY_DEFAULTS[name];
   }
   normalized.transcriptionLanguage = typeof source.transcriptionLanguage === 'string' && /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(source.transcriptionLanguage)
@@ -164,7 +170,10 @@ function normalizeMeetingInput(input, { partial = false } = {}) {
       field: 'capacity', min: 0, max: 100_000, fallback: partial ? undefined : LEGACY_DEFAULTS.capacity,
     });
   }
-  if (!partial || input.type !== undefined) output.type = enumValue(input.type, TYPES, 'type', 'WEBINAR');
+  if (!partial || input.type !== undefined || input.meetingType !== undefined) {
+    output.type = enumValue(input.meetingType || input.type, TYPES, 'type', 'WEBINAR');
+    output.meetingType = output.type;
+  }
   if (!partial || input.status !== undefined) output.status = enumValue(input.status, STATUSES, 'status', input.scheduledAt ? 'SCHEDULED' : 'DRAFT');
   if (!partial || input.viewerAccessMode !== undefined) output.viewerAccessMode = enumValue(input.viewerAccessMode, ACCESS_MODES, 'viewerAccessMode', 'INVITATION');
   if (!partial || input.panelistAccessMode !== undefined) output.panelistAccessMode = enumValue(input.panelistAccessMode, ACCESS_MODES, 'panelistAccessMode', 'INVITATION');
@@ -175,6 +184,9 @@ function normalizeMeetingInput(input, { partial = false } = {}) {
     allowReactions: true,
     allowRaiseHand: true,
     allowQuestions: true,
+    allowPanelistScreenShare: true,
+    allowParticipantScreenShare: true,
+    allowStudentScreenShare: false,
     allowRecording: false,
     recordingConsentRequired: false,
     allowTranscription: false,
@@ -221,6 +233,7 @@ async function createMeeting(input) {
     startedAt: null,
     completedAt: null,
     livekitConfirmedAt: null,
+    rolePolicyVersion: 2,
   };
   return writeMeeting(record);
 }

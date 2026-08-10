@@ -4,6 +4,13 @@ const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
 const { config } = require('./config');
 const { AppError } = require('./http-utils');
+const {
+  invitationRolesForType,
+  legacyDefaultMeetingRole,
+  legacyRoleForMeetingRole,
+  normalizeMeetingRole,
+  normalizeMeetingType,
+} = require('./meeting-permissions');
 
 const INVITATION_ROLES = new Set(['PANELIST', 'VIEWER']);
 const consumeLocks = new Map();
@@ -82,11 +89,18 @@ function deriveStatus(record, now = Date.now()) {
 }
 
 function publicInvitation(record) {
+  const meetingType = normalizeMeetingType(record.meetingType || 'WEBINAR');
+  const meetingRole = record.meetingRole
+    ? normalizeMeetingRole(meetingType, record.meetingRole, record.role)
+    : legacyDefaultMeetingRole(meetingType, record.role);
   return {
     id: record.id,
     meetingId: record.meetingId,
     room: record.room,
     role: record.role,
+    meetingType,
+    meetingRole,
+    legacyAccess: typeof record.legacyAccess === 'boolean' ? record.legacyAccess : !record.meetingRole,
     expiresAt: record.expiresAt,
     status: record.status,
     maxUses: record.maxUses,
@@ -98,14 +112,32 @@ function publicInvitation(record) {
   };
 }
 
-async function createInvitation({ meetingId, room, role, expiresInMinutes, singleUse = false, maxUses, createdBy }) {
-  const normalizedRole = String(role || '').toUpperCase();
-  if (!INVITATION_ROLES.has(normalizedRole)) throw new AppError(400, 'El rol de invitación debe ser PANELIST o VIEWER', 'VALIDATION_ERROR');
+async function createInvitation({ meetingId, room, role, meetingType, meetingRole, expiresInMinutes, singleUse = false, maxUses, createdBy }) {
+  const hasMeetingProfile = Boolean(meetingType || meetingRole);
+  const normalizedType = normalizeMeetingType(meetingType || 'WEBINAR');
+  const requestedRole = String(meetingRole || role || '').toUpperCase();
+  let normalizedMeetingRole;
+  let normalizedRole;
+  if (hasMeetingProfile) {
+    const legacyAliases = new Set(['ADMIN', 'ORGANIZER', 'PANELIST', 'VIEWER']);
+    normalizedMeetingRole = legacyAliases.has(requestedRole)
+      ? legacyDefaultMeetingRole(normalizedType, requestedRole)
+      : requestedRole;
+    if (!invitationRolesForType(normalizedType).includes(normalizedMeetingRole)) {
+      throw new AppError(400, `El rol no es válido para una reunión ${normalizedType}`, 'VALIDATION_ERROR');
+    }
+    normalizedRole = legacyRoleForMeetingRole(normalizedType, normalizedMeetingRole, role);
+  } else {
+    normalizedRole = String(role || '').toUpperCase();
+    if (!INVITATION_ROLES.has(normalizedRole)) throw new AppError(400, 'El rol de invitación debe ser PANELIST o VIEWER', 'VALIDATION_ERROR');
+    normalizedMeetingRole = legacyDefaultMeetingRole(normalizedType, normalizedRole);
+  }
   if (typeof singleUse !== 'boolean') throw new AppError(400, 'singleUse debe ser booleano', 'VALIDATION_ERROR');
   const ttl = Number.isInteger(expiresInMinutes) ? expiresInMinutes : config.invitationTtlMinutes;
   if (ttl < 5 || ttl > 43_200) throw new AppError(400, 'La expiración debe estar entre 5 y 43200 minutos', 'VALIDATION_ERROR');
   let allowedUses = null;
-  if (singleUse) allowedUses = 1;
+  const privileged = ['HOST', 'TEACHER', 'COHOST'].includes(normalizedMeetingRole);
+  if (singleUse || privileged) allowedUses = 1;
   else if (maxUses !== undefined && maxUses !== null) {
     if (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > 100_000) throw new AppError(400, 'maxUses no válido', 'VALIDATION_ERROR');
     allowedUses = maxUses;
@@ -118,6 +150,9 @@ async function createInvitation({ meetingId, room, role, expiresInMinutes, singl
     meetingId,
     room,
     role: normalizedRole,
+    meetingType: normalizedType,
+    meetingRole: normalizedMeetingRole,
+    legacyAccess: !hasMeetingProfile,
     expiresAt: new Date(now.getTime() + ttl * 60_000).toISOString(),
     status: 'ACTIVE',
     maxUses: allowedUses,

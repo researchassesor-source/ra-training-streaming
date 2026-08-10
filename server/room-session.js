@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { config } = require('./config');
 const { decodeSignedPayload, signPayload } = require('./auth');
 const { parseCookies, safeEqual, serializeCookie } = require('./http-utils');
+const { legacyDefaultMeetingRole, normalizeMeetingRole, normalizeMeetingType } = require('./meeting-permissions');
 
 const ROOM_COOKIE = 'rat_room_session';
 const ROOM_COOKIE_PREFIX = `${ROOM_COOKIE}_`;
@@ -17,9 +18,24 @@ function sessionCookieName(sessionId) {
   return selector ? `${ROOM_COOKIE_PREFIX}${selector}` : ROOM_COOKIE;
 }
 
-function createRoomSession({ room, meetingId, role, username = null, displayName = null, invitationId = null }) {
+function normalizeRoomSessionPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const meetingType = normalizeMeetingType(payload.meetingType || 'WEBINAR');
+  const profiled = Boolean(payload.meetingRole || payload.meetingType);
+  return {
+    ...payload,
+    meetingType,
+    meetingRole: normalizeMeetingRole(meetingType, payload.meetingRole, payload.role),
+    legacyAccess: typeof payload.legacyAccess === 'boolean' ? payload.legacyAccess : !profiled,
+    consentRequired: typeof payload.consentRequired === 'boolean' ? payload.consentRequired : payload.role === 'VIEWER',
+  };
+}
+
+function createRoomSession({ room, meetingId, role, meetingType, meetingRole, legacyAccess, username = null, displayName = null, invitationId = null }) {
   const normalizedRole = String(role || '').toUpperCase();
   if (!ROOM_ROLES.has(normalizedRole)) throw new Error('Rol de sala no válido');
+  const normalizedType = normalizeMeetingType(meetingType || 'WEBINAR');
+  const profiled = Boolean(meetingType || meetingRole);
   const identity = `${normalizedRole.toLowerCase()}-${crypto.randomUUID()}`;
   const payload = {
     type: 'room',
@@ -27,9 +43,15 @@ function createRoomSession({ room, meetingId, role, username = null, displayName
     room,
     meetingId,
     role: normalizedRole,
+    meetingType: normalizedType,
+    meetingRole: profiled
+      ? normalizeMeetingRole(normalizedType, meetingRole, normalizedRole)
+      : legacyDefaultMeetingRole(normalizedType, normalizedRole),
+    legacyAccess: typeof legacyAccess === 'boolean' ? legacyAccess : !profiled,
+    consentRequired: profiled || normalizedRole === 'VIEWER',
     username,
     identity,
-    displayName: String(displayName || username || (normalizedRole === 'VIEWER' ? 'Asistente' : 'Panelista')).slice(0, 80),
+    displayName: String(displayName || username || '').slice(0, 80),
     invitationId,
     csrf: crypto.randomBytes(24).toString('base64url'),
     exp: Date.now() + config.roomSessionTtlMs,
@@ -43,7 +65,7 @@ function readRoomSession(req) {
   const token = cookies[sessionCookieName(selector)];
   const payload = decodeSignedPayload(token);
   if (!payload || payload.type !== 'room' || !ROOM_ROLES.has(payload.role) || (selector && payload.sid !== selector)) return null;
-  return payload;
+  return normalizeRoomSessionPayload(payload);
 }
 
 function roomAuthDiagnostic(req) {
@@ -74,6 +96,15 @@ function requireRoomRoles(...roles) {
   return (req, res, next) => {
     if (!req.roomSession || !allowed.has(req.roomSession.role)) {
       return res.status(403).json({ error: 'Tu rol de reunión no permite esta acción', code: 'ROOM_FORBIDDEN' });
+    }
+    return next();
+  };
+}
+
+function requireRoomCapability(capability) {
+  return (req, res, next) => {
+    if (!req.roomCapabilities?.[capability]) {
+      return res.status(403).json({ error: 'Tu función en esta reunión no permite esta acción', code: 'ROOM_FORBIDDEN' });
     }
     return next();
   };
@@ -135,8 +166,10 @@ module.exports = {
   ROOM_COOKIE_PREFIX,
   clearRoomCookie,
   createRoomSession,
+  normalizeRoomSessionPayload,
   readRoomSession,
   requireRoomCsrf,
+  requireRoomCapability,
   requireRoomRoles,
   requireRoomSession,
   roomCookie,

@@ -40,6 +40,8 @@ async function createRoom(room, { meetingId = null, status = 'ACTIVE' } = {}) {
     lockedAt: existing?.lockedAt || null,
     lockedBy: existing?.lockedBy || null,
     speakerGrants: existing?.speakerGrants && typeof existing.speakerGrants === 'object' ? existing.speakerGrants : {},
+    mediaGrants: existing?.mediaGrants && typeof existing.mediaGrants === 'object' ? existing.mediaGrants : {},
+    roleOverrides: existing?.roleOverrides && typeof existing.roleOverrides === 'object' ? existing.roleOverrides : {},
   });
 }
 
@@ -109,13 +111,78 @@ async function setSpeakerGrant(room, identity, granted, actor = '') {
     const grants = { ...(existing.speakerGrants || {}) };
     if (granted) grants[identity] = { grantedAt: new Date().toISOString(), grantedBy: String(actor || '').slice(0, 100) };
     else delete grants[identity];
-    return persist(room, { ...existing, speakerGrants: grants });
+    const mediaGrants = { ...(existing.mediaGrants || {}) };
+    const current = { ...(mediaGrants[identity] || {}) };
+    if (granted) mediaGrants[identity] = { ...current, microphone: true, updatedAt: new Date().toISOString(), updatedBy: String(actor || '').slice(0, 100) };
+    else {
+      delete current.microphone;
+      if (Object.keys(current).filter((key) => !['updatedAt', 'updatedBy'].includes(key)).length) mediaGrants[identity] = current;
+      else delete mediaGrants[identity];
+    }
+    return persist(room, { ...existing, speakerGrants: grants, mediaGrants });
   });
 }
 
 async function hasSpeakerGrant(room, identity) {
   const existing = await getRoom(room);
   return Boolean(existing?.speakerGrants?.[identity]);
+}
+
+async function participantAccess(room, identity) {
+  const existing = await getRoom(room);
+  return {
+    grants: existing?.mediaGrants?.[identity] || {},
+    meetingRole: existing?.roleOverrides?.[identity]?.meetingRole || null,
+  };
+}
+
+async function setMediaGrant(room, identity, source, granted, actor = '') {
+  if (!['microphone', 'camera', 'screen'].includes(source)) throw new Error('Fuente multimedia no válida');
+  return withAdmissionLock(room, async () => {
+    const existing = await getRoom(room);
+    if (!existing || existing.status !== 'ACTIVE' || existing.revokedAt) throw new Error('La sala no está activa');
+    const mediaGrants = { ...(existing.mediaGrants || {}) };
+    const current = { ...(mediaGrants[identity] || {}) };
+    current[source] = granted === true;
+    mediaGrants[identity] = { ...current, updatedAt: new Date().toISOString(), updatedBy: String(actor || '').slice(0, 100) };
+    const speakerGrants = { ...(existing.speakerGrants || {}) };
+    if (source === 'microphone') {
+      if (granted) speakerGrants[identity] = { grantedAt: new Date().toISOString(), grantedBy: String(actor || '').slice(0, 100) };
+      else delete speakerGrants[identity];
+    }
+    return persist(room, { ...existing, mediaGrants, speakerGrants });
+  });
+}
+
+async function setParticipantRole(room, identity, meetingRole, actor = '') {
+  return withAdmissionLock(room, async () => {
+    const existing = await getRoom(room);
+    if (!existing || existing.status !== 'ACTIVE' || existing.revokedAt) throw new Error('La sala no está activa');
+    const roleOverrides = { ...(existing.roleOverrides || {}) };
+    const speakerGrants = { ...(existing.speakerGrants || {}) };
+    const mediaGrants = { ...(existing.mediaGrants || {}) };
+    if (meetingRole) roleOverrides[identity] = { meetingRole, updatedAt: new Date().toISOString(), updatedBy: String(actor || '').slice(0, 100) };
+    else delete roleOverrides[identity];
+    // A role transition always starts from the new role's least-privilege policy.
+    // Temporary grants from the previous role must never survive a demotion.
+    delete speakerGrants[identity];
+    delete mediaGrants[identity];
+    return persist(room, { ...existing, roleOverrides, speakerGrants, mediaGrants });
+  });
+}
+
+async function clearParticipantAccess(room, identity) {
+  return withAdmissionLock(room, async () => {
+    const existing = await getRoom(room);
+    if (!existing) return existing;
+    const speakerGrants = { ...(existing.speakerGrants || {}) };
+    const mediaGrants = { ...(existing.mediaGrants || {}) };
+    const roleOverrides = { ...(existing.roleOverrides || {}) };
+    delete speakerGrants[identity];
+    delete mediaGrants[identity];
+    delete roleOverrides[identity];
+    return persist(room, { ...existing, speakerGrants, mediaGrants, roleOverrides });
+  });
 }
 
 async function revokeRoom(room) {
@@ -127,4 +194,17 @@ async function revokeRoom(room) {
   });
 }
 
-module.exports = { checkAccess, createRoom, getRoom, hasSpeakerGrant, revokeRoom, setRoomLock, setSpeakerGrant, withAdmissionLock };
+module.exports = {
+  checkAccess,
+  clearParticipantAccess,
+  createRoom,
+  getRoom,
+  hasSpeakerGrant,
+  participantAccess,
+  revokeRoom,
+  setMediaGrant,
+  setParticipantRole,
+  setRoomLock,
+  setSpeakerGrant,
+  withAdmissionLock,
+};

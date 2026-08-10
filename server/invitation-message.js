@@ -1,4 +1,11 @@
 const { config, publicUrl } = require('./config');
+const {
+  ROLE_LABELS,
+  legacyDefaultMeetingRole,
+  normalizeMeetingRole,
+  normalizeMeetingType,
+  roleDescription,
+} = require('./meeting-permissions');
 
 function cleanShareText(value, fallback) {
   const normalized = String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[\s\r\n]+/g, ' ').trim();
@@ -19,8 +26,9 @@ function durationLabel(minutes) {
 function meetingSchedule(meeting, { timeZone, timeZoneLabel } = {}) {
   const zone = timeZone || config.appTimeZone;
   const zoneLabel = timeZoneLabel || config.appTimeZoneLabel;
-  const date = new Date(meeting?.scheduledAt);
-  if (Number.isNaN(date.getTime())) return { date: 'Por confirmar', time: 'Por confirmar', timeZone: zoneLabel };
+  const scheduledAt = meeting?.scheduledAt;
+  const date = scheduledAt ? new Date(scheduledAt) : null;
+  if (!date || Number.isNaN(date.getTime())) return { date: 'Por confirmar', time: 'Por confirmar', timeZone: zoneLabel };
   return {
     date: capitalize(new Intl.DateTimeFormat('es-EC', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: zone }).format(date)),
     time: new Intl.DateTimeFormat('es-EC', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: zone }).format(date),
@@ -29,36 +37,27 @@ function meetingSchedule(meeting, { timeZone, timeZoneLabel } = {}) {
 }
 
 function buildInvitationMessage({ meeting, role, url, timeZone, timeZoneLabel } = {}) {
-  const panelist = String(role || '').toUpperCase() === 'PANELIST';
+  const meetingType = normalizeMeetingType(meeting?.meetingType || meeting?.type);
+  const requestedRole = String(role || '').toUpperCase();
+  const meetingRole = ['ADMIN', 'ORGANIZER', 'PANELIST', 'VIEWER'].includes(requestedRole)
+    ? legacyDefaultMeetingRole(meetingType, requestedRole)
+    : normalizeMeetingRole(meetingType, requestedRole);
+  const roleLabel = ROLE_LABELS[meetingRole] || 'Participante';
   const title = cleanShareText(meeting?.title, 'Capacitación R.A. Training');
   const trainer = cleanShareText(meeting?.trainerName, 'Equipo R.A. Training');
   const schedule = meetingSchedule(meeting, { timeZone, timeZoneLabel });
-  if (panelist) {
-    return [
-      'Hola 👋',
-      '',
-      'Has sido invitado como panelista a:',
-      '',
-      `*${title}*`,
-      '',
-      `📅 Fecha: ${schedule.date}`,
-      `🕒 Hora: ${schedule.time} (${schedule.timeZone})`,
-      `👤 Capacitador: ${trainer}`,
-      '',
-      'Enlace privado para panelistas:',
-      url,
-      '',
-      'Este enlace permite participar con audio, cámara y pantalla. No lo compartas públicamente.',
-      '',
-      config.appName,
-    ].join('\n');
-  }
-  return [
+  const typeLabels = { WEBINAR: 'Webinar', SESSION: 'Sesión', CLASS: 'Clase' };
+  const privileged = ['HOST', 'TEACHER', 'COHOST', 'PANELIST'].includes(meetingRole);
+  const lines = [
     'Hola 👋',
     '',
-    'Te invitamos a participar en la capacitación:',
+    meetingRole === 'PANELIST' ? 'Has sido invitado como panelista a:' : `Te invitamos a participar en ${title}.`,
     '',
     `*${title}*`,
+    '',
+    `Tipo de reunión: ${typeLabels[meetingType]}.`,
+    `Tu acceso: ${roleLabel}.`,
+    roleDescription(meetingType, meetingRole),
     '',
     `📅 Fecha: ${schedule.date}`,
     `🕒 Hora: ${schedule.time} (${schedule.timeZone})`,
@@ -69,9 +68,10 @@ function buildInvitationMessage({ meeting, role, url, timeZone, timeZoneLabel } 
     url,
     '',
     'Te recomendamos conectarte unos minutos antes y comprobar tu audio.',
-    '',
-    config.appName,
-  ].join('\n');
+  ];
+  if (privileged) lines.push('', 'Este enlace es personal y habilita permisos mayores. No lo compartas públicamente.');
+  lines.push('', config.appName);
+  return lines.join('\n');
 }
 
 function invitationSharePayload({ token, meeting, role } = {}) {

@@ -285,7 +285,7 @@ async function createTranscript({ meeting, recording, requestedBy, language, pro
       providerMetadata: {},
       requestedBy: sanitizeText(requestedBy, { field: 'requestedBy', max: 80 }),
       requestedAt: now,
-      retentionUntil: new Date(Date.now() + retentionDays * 86_400_000).toISOString(),
+      retentionUntil: new Date(new Date(now).getTime() + retentionDays * 86_400_000).toISOString(),
       startedAt: null,
       providerSubmittedAt: null,
       completedAt: null,
