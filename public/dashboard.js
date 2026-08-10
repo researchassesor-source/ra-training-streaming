@@ -55,7 +55,7 @@ function formatDate(value, fallback = 'Fecha por definir') {
 
 function emptyState(title, detail = '') {
   const empty = document.createElement('div'); empty.className = 'empty-state branded-empty';
-  const image = document.createElement('img'); image.src = 'assets/icon-192.png'; image.alt = 'Icono de R.A. Training Streaming';
+  const image = document.createElement('img'); image.src = 'assets/streaming-app-logo.png'; image.alt = 'Logo oficial de R.A. Training Streaming';
   empty.append(image, textElement('strong', title));
   if (detail) empty.appendChild(textElement('span', detail, 'muted'));
   return empty;
@@ -210,11 +210,10 @@ function renderMeetings() {
       const menu = document.createElement('details'); menu.className = 'action-menu';
       const summary = document.createElement('summary'); summary.textContent = 'Más acciones'; menu.appendChild(summary);
       const menuItems = document.createElement('div'); menuItems.className = 'action-menu-items';
-      menuItems.append(
-        meetingAction('Preparar invitación para panelista', (item) => openInvitationDialog(item, 'PANELIST'), meeting),
-        meetingAction('Preparar invitación para asistente', (item) => openInvitationDialog(item, 'VIEWER'), meeting),
-        meetingAction('Duplicar', duplicateMeeting, meeting)
-      );
+      for (const role of RATCore.MEETING_ROLES[meeting.type] || []) {
+        menuItems.append(meetingAction(`Preparar acceso de ${RATCore.roleLabel(role).toLowerCase()}`, (item) => openInvitationDialog(item, role), meeting));
+      }
+      menuItems.append(meetingAction('Duplicar', duplicateMeeting, meeting));
       if (!['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)) menuItems.append(meetingAction('Cancelar', (item) => meetingTransition(item, 'cancel'), meeting));
       if (meeting.status !== 'ARCHIVED') menuItems.append(meetingAction('Archivar', (item) => meetingTransition(item, 'archive'), meeting));
       if (state.user.role === 'ADMIN') menuItems.append(meetingAction('Eliminar', softDeleteMeeting, meeting, 'danger compact'));
@@ -265,9 +264,11 @@ function openMeetingDialog(meeting = null) {
     meetingAllowRaiseHand: 'allowRaiseHand', meetingAllowRecording: 'allowRecording', meetingConsent: 'recordingConsentRequired',
     meetingAllowTranscription: 'allowTranscription', meetingTranscriptionConsent: 'transcriptionConsentRequired',
     meetingPanelistTranscript: 'allowPanelistTranscriptAccess',
+    meetingPanelistScreen: 'allowPanelistScreenShare', meetingParticipantScreen: 'allowParticipantScreenShare',
+    meetingStudentScreen: 'allowStudentScreenShare',
   };
   for (const [id, field] of Object.entries(booleanFields)) {
-    const defaultEnabled = ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand'].includes(field);
+    const defaultEnabled = ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand', 'allowPanelistScreenShare', 'allowParticipantScreenShare'].includes(field);
     document.getElementById(id).checked = edit ? Boolean(meeting[field]) : defaultEnabled;
   }
   document.getElementById('meetingTranscriptionLanguage').value = edit ? meeting.transcriptionLanguage || 'es' : 'es';
@@ -303,6 +304,9 @@ async function saveMeeting(event) {
     allowTranscription: document.getElementById('meetingAllowTranscription').checked,
     transcriptionConsentRequired: document.getElementById('meetingTranscriptionConsent').checked,
     allowPanelistTranscriptAccess: document.getElementById('meetingPanelistTranscript').checked,
+    allowPanelistScreenShare: document.getElementById('meetingPanelistScreen').checked,
+    allowParticipantScreenShare: document.getElementById('meetingParticipantScreen').checked,
+    allowStudentScreenShare: document.getElementById('meetingStudentScreen').checked,
     transcriptionLanguage: document.getElementById('meetingTranscriptionLanguage').value,
     transcriptionRetentionDays: Number(document.getElementById('meetingTranscriptionRetention').value),
   };
@@ -348,9 +352,9 @@ async function duplicateMeeting(meeting) {
 }
 
 async function createInvitation(meeting, role) {
-  const singleUse = role === 'PANELIST';
+  const singleUse = ['HOST', 'TEACHER', 'COHOST'].includes(role);
   const data = await api(`/api/meetings/${encodeURIComponent(meeting.room)}/invitations`, {
-    method: 'POST', body: { role, singleUse, expiresInMinutes: role === 'PANELIST' ? 720 : 1_440 },
+    method: 'POST', body: { meetingRole: role, singleUse, expiresInMinutes: singleUse ? 720 : 1_440 },
   });
   return data;
 }
@@ -369,7 +373,7 @@ async function openInvitationDialog(meeting, role) {
     const payload = await createInvitation(meeting, role);
     state.invitation = { ...payload, title: meeting.title, role };
     document.getElementById('invitationDialogTitle').textContent = meeting.title;
-    document.getElementById('invitationRole').textContent = role === 'PANELIST' ? 'Acceso de panelista · audio, cámara y pantalla' : 'Acceso de asistente';
+    document.getElementById('invitationRole').textContent = `${RATCore.roleLabel(role)} · ${RATCore.roleDescription(meeting.type, role)}`;
     document.getElementById('invitationMessage').value = payload.message;
     document.getElementById('invitationUrl').value = payload.url;
     document.getElementById('shareInvitation').hidden = typeof navigator.share !== 'function';
@@ -390,6 +394,11 @@ async function shareCurrentInvitation() {
   try {
     await navigator.share({ title: state.invitation.title, text: state.invitation.message });
   } catch (error) { if (error.name !== 'AbortError') notice('No fue posible abrir el menú para compartir.', 'error'); }
+}
+
+function openCurrentInvitation() {
+  if (!state.invitation?.url) return;
+  window.open(state.invitation.url, '_blank', 'noopener,noreferrer');
 }
 
 async function launchMeeting(meeting) {
@@ -715,6 +724,7 @@ document.getElementById('refreshSettings').addEventListener('click', async () =>
 document.getElementById('copyInvitationLink').addEventListener('click', () => copyCurrentInvitation('url'));
 document.getElementById('copyInvitationMessage').addEventListener('click', () => copyCurrentInvitation('message'));
 document.getElementById('shareInvitation').addEventListener('click', shareCurrentInvitation);
+document.getElementById('openInvitationLink').addEventListener('click', openCurrentInvitation);
 document.getElementById('shareInvitationWhatsApp').addEventListener('click', () => {
   if (state.invitation?.whatsappUrl) window.open(state.invitation.whatsappUrl, '_blank', 'noopener,noreferrer');
 });

@@ -15,7 +15,7 @@
   <header class="room-topbar">
     <div id="brand"></div>
     <div class="room-title-block"><strong id="meetingTitle">Reunión</strong><span id="trainerName"></span></div>
-    <div class="room-statuses"><span id="meetingTimer" title="Tiempo transcurrido">00:00</span><span id="recordingBadge" class="recording-badge" hidden>Grabando</span><span id="roomLockBadge" hidden>Sala bloqueada</span><span id="qualityBadge" class="quality-badge">Red sin medir</span><span id="participantCount">1 participante</span><span id="connectionStatus" class="connection-status" aria-live="polite">Validando invitación…</span></div>
+    <div class="room-statuses"><span id="meetingRoleBadge"></span><span id="meetingTimer" title="Tiempo transcurrido">Programada</span><span id="recordingBadge" class="recording-badge" hidden>Grabando</span><span id="roomLockBadge" hidden>Sala bloqueada</span><span id="qualityBadge" class="quality-badge">Red sin medir</span><span id="participantCount">1 participante</span><span id="connectionStatus" class="connection-status" aria-live="polite">Validando invitación…</span></div>
   </header>
   <main class="room-layout">
     <section class="room-stage" aria-label="Escenario de video">
@@ -59,10 +59,10 @@
     </aside>
   </main>
   <nav id="roomControls" class="room-controls" aria-label="Controles de reunión">
-    <button id="btnMic" type="button" aria-label="Micrófono" title="Micrófono" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z M5 11v1a7 7 0 0 0 14 0v-1 M12 19v3 M8 22h8" /></svg><span>Micrófono</span></button>
-    <button id="btnCam" type="button" aria-label="Cámara" title="Cámara" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z M17 10l5-3v10l-5-3" /></svg><span>Cámara</span></button>
-    <button id="btnScreen" type="button" aria-label="Compartir pantalla" title="Compartir pantalla" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v13H3z M8 21h8 M12 17v4" /></svg><span>Pantalla</span></button>
-    <button id="btnChat" type="button" aria-label="Chat" title="Chat" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /></svg><span>Chat</span></button>
+    <button id="btnMic" type="button" data-media-state="off" aria-label="Activar micrófono" title="Activar micrófono" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z M5 11v1a7 7 0 0 0 14 0v-1 M12 19v3 M8 22h8" /></svg><span>Activar micrófono</span></button>
+    <button id="btnCam" type="button" data-media-state="off" aria-label="Encender cámara" title="Encender cámara" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z M17 10l5-3v10l-5-3" /></svg><span>Encender cámara</span></button>
+    <button id="btnScreen" type="button" data-media-state="off" aria-label="Compartir pantalla" title="Compartir pantalla" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v13H3z M8 21h8 M12 17v4" /></svg><span>Pantalla</span></button>
+    <button id="btnChat" type="button" aria-label="Chat" title="Chat" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" /></svg><span>Chat</span><span id="chatControlUnread" class="control-count" aria-label="Mensajes nuevos" hidden></span></button>
     <button id="btnHand" type="button" aria-label="Mano" title="Levantar la mano" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V5a2 2 0 0 1 4 0v5 M11 10V3a2 2 0 0 1 4 0v7 M15 10V5a2 2 0 0 1 4 0v9c0 5-3 8-8 8-4 0-6-2-8-6l-1-3a2 2 0 0 1 4-1l1 2" /></svg><span>Mano</span></button>
     <button id="btnParticipants" type="button" aria-label="Participantes" title="Participantes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75" /></svg><span>Personas</span></button>
     <button id="btnMore" type="button" aria-label="Más opciones" title="Más opciones" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg><span>Más</span></button>
@@ -77,15 +77,21 @@
       <button id="btnFloat" type="button" aria-pressed="false">Panel siempre encima</button>
       <label class="check-row"><input id="autoFloatOnShare" type="checkbox" /> Abrir panel flotante al compartir</label>
       <button id="btnToggleSelfView" type="button" aria-pressed="true">Ocultar mi miniatura</button>
+      <label>Volumen de la reunión <output id="meetingVolumeValue" for="meetingVolume">100%</output><input id="meetingVolume" type="range" min="0" max="100" step="5" value="100" /></label>
+      <button id="btnTestSpeaker" type="button">Probar altavoz</button>
+      <label id="speakerModeLabel">Miniatura del hablante<select id="speakerMode"><option value="auto">Automática</option><option value="pinned">Fijada</option><option value="hidden">Oculta</option></select></label>
+      <label id="pinnedSpeakerLabel" hidden>Persona fijada<select id="pinnedSpeaker"></select></label>
       <button id="btnLock" class="organizer-control" type="button" aria-pressed="false">Bloquear sala</button>
       <button id="btnInviteViewer" class="organizer-control" type="button">Copiar invitación de asistente</button>
       <button id="btnInvitePanelist" class="organizer-control" type="button">Copiar invitación de panelista</button>
+      <div id="invitationRoleActions" class="organizer-control role-invitation-actions"></div>
       <button id="btnRecord" class="organizer-control" type="button">Iniciar grabación</button>
       <button id="btnEnd" class="organizer-control danger" type="button">Finalizar para todos</button>
       <button id="btnNotifications" type="button">Activar notificaciones</button>
       <button id="btnSoundToggle" type="button" aria-pressed="true">Sonido activo</button>
       <button id="btnShortcuts" type="button">Atajos de teclado</button>
     </div>
+    <p id="screenCompatibilityHelp" class="compatibility-help" hidden>Compartir pantalla no está disponible en este navegador. Abre la reunión desde un computador o navegador compatible.</p>
     <div id="reactionPicker" class="reaction-picker" aria-label="Reacciones"><button type="button" data-reaction="👏">👏</button><button type="button" data-reaction="👍">👍</button><button type="button" data-reaction="❤️">❤️</button><button type="button" data-reaction="😂">😂</button><button type="button" data-reaction="🎉">🎉</button><button type="button" data-reaction="✅">✅</button></div>
     <div id="shortcutHelp" class="shortcut-help" hidden><strong>Atajos</strong><span><kbd>Ctrl/⌘ Shift M</kbd> micrófono</span><span><kbd>Ctrl/⌘ Shift V</kbd> cámara</span><span><kbd>Ctrl/⌘ Shift S</kbd> pantalla</span><span><kbd>Ctrl/⌘ Shift C</kbd> chat</span><span><kbd>Ctrl/⌘ Shift P</kbd> participantes</span><span><kbd>Ctrl/⌘ Shift H</kbd> mano</span><span><kbd>Esc</kbd> cerrar paneles</span></div>
     <p id="recordingHelp" class="muted small" aria-live="polite"></p>
@@ -106,22 +112,25 @@
   <dialog id="preflightDialog" class="app-dialog preflight-dialog">
     <form id="preflightForm" method="dialog">
       <header class="preflight-header">
-        <img class="preflight-app-logo" src="assets/icon-192.png" alt="Icono de R.A. Training Streaming" />
+        <img class="preflight-app-logo" src="assets/streaming-app-logo.png" alt="Logo oficial de R.A. Training Streaming" />
         <div><p class="eyebrow">Sala de preparación</p><h1 id="preflightTitle">Antes de entrar</h1><p id="preflightMeeting" class="muted"></p></div>
       </header>
       <div class="preflight-scroll">
         <p id="livekitStatus" class="service-notice" aria-live="polite">Comprobando el servicio de videoconferencia…</p>
+        <div class="preflight-context" aria-label="Datos de acceso"><p>Ingresas como: <strong id="preflightRole"></strong></p><p>Tipo de reunión: <strong id="preflightType"></strong></p></div>
         <div class="preflight-grid">
-          <div class="preview-wrap"><video id="previewVideo" autoplay muted playsinline></video><div id="previewPlaceholder">La vista previa aparecerá aquí.</div></div>
+          <div class="preview-wrap"><video id="previewVideo" autoplay muted playsinline></video><div id="previewPlaceholder"><strong id="previewState">Cámara apagada</strong><span>Enciéndela solo si deseas comprobarla antes de entrar.</span></div></div>
           <div class="preflight-fields">
             <label>Nombre visible<input id="displayNameInput" maxlength="80" autocomplete="name" required /></label>
-            <button id="previewButton" class="secondary" type="button">Activar vista previa y probar micrófono</button>
+            <label class="check-row consent-option"><input id="privacyConsent" type="checkbox" required /> Leí el aviso de privacidad y acepto participar.</label>
+            <label class="check-row consent-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label><label class="check-row consent-option" id="transcriptionConsentLabel"><input id="transcriptionConsent" type="checkbox" /> Entiendo que la grabación puede transcribirse.</label>
+            <p id="processingNotice" class="privacy-notice"></p>
+            <p id="consentHelp" class="field-help" aria-live="polite">Acepta los avisos requeridos para ingresar.</p>
+            <div class="preflight-test-actions"><button id="previewButton" class="secondary" type="button">Encender cámara y probar micrófono</button><button id="preflightSpeakerTest" class="secondary" type="button">Probar altavoz</button></div>
             <label>Cámara<select id="preflightCamera"></select></label><label>Micrófono<select id="preflightMicrophone"></select></label><label>Altavoz<select id="preflightSpeaker"></select></label>
             <div class="meter" aria-label="Nivel de micrófono"><span id="microphoneMeter"></span></div><p id="networkStatus" class="muted"></p>
             <label class="check-row presenter-option"><input id="joinCamera" type="checkbox" /> Entrar con cámara</label><label class="check-row presenter-option"><input id="joinMicrophone" type="checkbox" /> Entrar con micrófono</label>
-            <label class="check-row viewer-option"><input id="privacyConsent" type="checkbox" required /> Leí el aviso de privacidad y acepto participar.</label>
-            <label class="check-row viewer-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label><label class="check-row viewer-option" id="transcriptionConsentLabel"><input id="transcriptionConsent" type="checkbox" /> Entiendo que la grabación puede transcribirse.</label>
-            <p id="processingNotice" class="privacy-notice"></p>
+            <details id="preflightDiagnostics" hidden><summary>Diagnóstico técnico</summary><p id="preflightDiagnosticText" class="muted small"></p></details>
           </div>
         </div>
       </div>

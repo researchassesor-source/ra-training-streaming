@@ -104,7 +104,7 @@ async function requestNotificationPermission() {
 
 function systemNotification(title, body) {
   if (document.visibilityState === 'visible' || !('Notification' in window) || Notification.permission !== 'granted') return;
-  const notification = new Notification(title, { body, icon: '/assets/icon-192.png', tag: `rat-${title}` });
+  const notification = new Notification(title, { body, icon: '/assets/streaming-app-logo-192.png', tag: `rat-${title}` });
   notification.onclick = () => { window.focus(); notification.close(); };
 }
 

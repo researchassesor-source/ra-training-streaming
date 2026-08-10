@@ -23,7 +23,7 @@ const ui = {
   recordingConfigured: false,
   egressId: null,
   handRaised: false,
-  activeTab: 'chat',
+  activeTab: null,
   effectsLoaded: false,
   backgroundObjectUrl: null,
   connectionAttempts: 0,
@@ -34,11 +34,20 @@ const ui = {
   selfView: true,
   reactionTimer: null,
   pendingMicrophoneRequestId: null,
+  meetingVolume: 1,
+  participantVolumes: new Map(),
+  speakerMode: 'auto',
+  pinnedSpeakerIdentity: null,
+  livekitAvailable: false,
 };
 const handQueue = new RATCore.HandQueue();
 const floatingModel = RATCore.createFloatingModel();
 const notifier = createMeetingNotifier(document.getElementById('toastRegion'));
-const unreadChat = RATCore.createUnreadCounter((count) => { updateCounter('chatUnread', count); floatingModel.update({ unreadMessages: count }); });
+const unreadChat = RATCore.createUnreadCounter((count) => {
+  updateCounter('chatUnread', count);
+  updateCounter('chatControlUnread', count);
+  floatingModel.update({ unreadMessages: count });
+});
 const unreadQuestions = RATCore.createUnreadCounter((count) => { updateCounter('questionUnread', count); floatingModel.update({ unreadQuestions: count }); });
 const statusMachine = new RATCore.ConnectionStateMachine(renderConnectionState);
 let recordingMachine = new RATCore.RecordingStateMachine(renderRecordingState, false);
@@ -110,11 +119,17 @@ function participantName(participant) {
 }
 
 function participantRole(participant) {
-  try { return RATCore.roleLabel(JSON.parse(participant?.metadata || '{}').role); } catch { return RATCore.roleLabel('VIEWER'); }
+  try {
+    const metadata = JSON.parse(participant?.metadata || '{}');
+    return RATCore.roleLabel(metadata.meetingRole || metadata.role);
+  } catch { return RATCore.roleLabel('VIEWER'); }
 }
 
 function participantRoleCode(participant) {
-  try { return String(JSON.parse(participant?.metadata || '{}').role || 'VIEWER').toUpperCase(); } catch { return 'VIEWER'; }
+  try {
+    const metadata = JSON.parse(participant?.metadata || '{}');
+    return String(metadata.meetingRole || metadata.role || 'VIEWER').toUpperCase();
+  } catch { return 'VIEWER'; }
 }
 
 function participantJoinedAt(participant) {
@@ -139,22 +154,48 @@ function participantMediaState(participant) {
   };
 }
 
+function participantCanPublishSource(participant, sourceName) {
+  const permission = participant?.permissions || participant?.permission || {};
+  if (permission.canPublish !== true) return false;
+  const sources = Array.isArray(permission.canPublishSources) ? permission.canPublishSources : [];
+  if (!sources.length) return true;
+  const requested = normalizedPermissionSource(sourceName);
+  return sources.some((source) => normalizedPermissionSource(source).includes(requested));
+}
+
 function isOrganizer() {
-  return ['ADMIN', 'ORGANIZER'].includes(ui.session?.role);
+  return ui.session?.capabilities?.canManageParticipants === true;
 }
 
-function hasPublishPermission() {
-  if (ui.room?.localParticipant?.permissions) return ui.room.localParticipant.permissions.canPublish === true;
-  return ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(ui.session?.role);
+function normalizedPermissionSource(source) {
+  const numeric = { 1: 'CAMERA', 2: 'MICROPHONE', 3: 'SCREENSHARE', 4: 'SCREENSHAREAUDIO' }[Number(source)];
+  if (numeric) return numeric;
+  return String(source || '').toUpperCase().replace(/[^A-Z]/g, '');
 }
 
-function setButtonState(button, active, activeLabel, inactiveLabel) {
+function hasPublishPermission(sourceName) {
+  const permission = ui.room?.localParticipant?.permissions;
+  const requested = normalizedPermissionSource(sourceName);
+  if (permission) {
+    if (permission.canPublish !== true) return false;
+    const sources = Array.isArray(permission.canPublishSources) ? permission.canPublishSources : [];
+    if (sources.length && requested) return sources.some((source) => normalizedPermissionSource(source).includes(requested));
+  }
+  const allowed = ui.session?.publishSources || [];
+  return requested ? allowed.some((source) => normalizedPermissionSource(source).includes(requested)) : allowed.length > 0;
+}
+
+function setButtonState(button, active, activeLabel, inactiveLabel, { locked = false, lockedLabel = '' } = {}) {
+  const labelText = locked ? lockedLabel || `${inactiveLabel} bloqueado por el anfitrión` : active ? activeLabel : inactiveLabel;
   button.setAttribute('aria-pressed', String(active));
   button.classList.toggle('active', active);
+  button.classList.toggle('locked', locked);
+  button.dataset.mediaState = locked ? 'locked' : active ? 'active' : 'off';
   const label = button.querySelector('span:last-child');
-  if (label) label.textContent = active ? activeLabel : inactiveLabel;
-  else button.textContent = active ? activeLabel : inactiveLabel;
-  button.setAttribute('aria-label', active ? activeLabel : inactiveLabel);
+  if (label) label.textContent = labelText;
+  else button.textContent = labelText;
+  button.setAttribute('aria-label', labelText);
+  button.title = labelText;
 }
 
 async function enumerateDevices() {
@@ -211,16 +252,25 @@ async function startPreview() {
   const error = document.getElementById('preflightError'); error.textContent = '';
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('Este navegador no permite probar cámara y micrófono.');
   stopPreview();
+  const cameraAllowed = (ui.session.publishSources || []).includes('CAMERA');
+  const microphoneAllowed = (ui.session.publishSources || []).includes('MICROPHONE');
+  if (!cameraAllowed && !microphoneAllowed) throw new Error('Tu función no requiere permisos de cámara o micrófono para ingresar.');
   statusMachine.set('requesting_permissions');
   const videoId = document.getElementById('preflightCamera').value;
   const audioId = document.getElementById('preflightMicrophone').value;
   try {
     ui.previewStream = await navigator.mediaDevices.getUserMedia({
-      video: videoId ? { deviceId: { exact: videoId } } : true,
-      audio: audioId ? { deviceId: { exact: audioId } } : true,
+      video: cameraAllowed ? (videoId ? { deviceId: { exact: videoId } } : true) : false,
+      audio: microphoneAllowed ? (audioId ? { deviceId: { exact: audioId } } : true) : false,
     });
     document.getElementById('previewVideo').srcObject = ui.previewStream;
-    document.getElementById('previewPlaceholder').hidden = true;
+    const hasVideo = ui.previewStream.getVideoTracks().length > 0;
+    document.getElementById('previewPlaceholder').hidden = hasVideo;
+    if (!hasVideo) {
+      document.getElementById('previewState').textContent = 'Micrófono listo · cámara no habilitada';
+      document.querySelector('#previewPlaceholder span').textContent = 'Habla para comprobar el nivel del micrófono.';
+    }
+    document.getElementById('previewButton').textContent = 'Reiniciar prueba multimedia';
     startMeter(ui.previewStream);
     await enumerateDevices();
     statusMachine.set('waiting_for_room');
@@ -231,6 +281,10 @@ async function startPreview() {
       NotReadableError: 'La cámara o el micrófono están ocupados por otra aplicación.',
     };
     statusMachine.set('waiting_for_room');
+    const previewState = document.getElementById('previewState');
+    if (previewState) previewState.textContent = mediaError.name === 'NotAllowedError'
+      ? 'No permitiste el acceso a la cámara'
+      : mediaError.name === 'NotFoundError' ? 'Cámara no disponible' : 'No se pudo iniciar la vista previa';
     throw new Error(messages[mediaError.name] || 'No fue posible abrir la cámara o el micrófono.');
   }
 }
@@ -242,42 +296,63 @@ async function refreshLiveKitStatus() {
   status.className = 'service-notice checking';
   try {
     const livekit = await requestLiveKitStatus();
-    status.textContent = livekit.available
-      ? `LiveKit ${livekit.mode} — disponible.`
-      : `LiveKit ${livekit.mode} — no disponible. Verifica la integración antes de entrar.`;
+    ui.livekitAvailable = livekit.available === true;
+    status.textContent = livekit.available ? 'Conexión lista. Todo preparado para ingresar.' : 'La conexión de la reunión no está disponible en este momento.';
     status.className = `service-notice ${livekit.available ? 'available' : 'unavailable'}`;
-    button.disabled = !livekit.available;
+    const diagnostic = document.getElementById('preflightDiagnosticText');
+    if (diagnostic) diagnostic.textContent = `Servicio de videoconferencia: ${livekit.mode || 'remoto'} · ${livekit.state || (livekit.available ? 'disponible' : 'no disponible')}`;
+    button.disabled = !livekit.available || !requiredConsentsAccepted();
     return livekit;
   } catch (error) {
     status.textContent = 'No fue posible comprobar el servicio de videoconferencia.';
     status.className = 'service-notice unavailable';
+    ui.livekitAvailable = false;
     button.disabled = true;
     throw error;
   }
 }
 
+function requiredConsentsAccepted() {
+  if (!document.getElementById('privacyConsent')?.checked) return false;
+  if (ui.session?.meeting.recordingConsentRequired && !document.getElementById('recordingConsent')?.checked) return false;
+  if (ui.session?.meeting.transcriptionConsentRequired && !document.getElementById('transcriptionConsent')?.checked) return false;
+  return true;
+}
+
+function updatePreflightReadiness() {
+  const accepted = requiredConsentsAccepted();
+  const button = document.getElementById('enterRoomButton');
+  if (button.dataset.busy !== 'true') button.disabled = !ui.livekitAvailable || !accepted;
+  document.getElementById('consentHelp').hidden = accepted;
+}
+
 async function setupPreflight() {
-  const viewer = ui.session.role === 'VIEWER';
-  document.querySelectorAll('.viewer-option').forEach((element) => { element.hidden = !viewer; });
-  document.querySelectorAll('.presenter-option').forEach((element) => { element.hidden = viewer; });
+  const cameraAllowed = (ui.session.publishSources || []).includes('CAMERA');
+  const microphoneAllowed = (ui.session.publishSources || []).includes('MICROPHONE');
+  const previewButton = document.getElementById('previewButton');
+  previewButton.hidden = !cameraAllowed && !microphoneAllowed;
+  previewButton.textContent = cameraAllowed && microphoneAllowed
+    ? 'Encender cámara y probar micrófono'
+    : cameraAllowed ? 'Probar cámara' : 'Probar micrófono';
+  document.querySelectorAll('.presenter-option').forEach((element) => { element.hidden = !cameraAllowed && !microphoneAllowed; });
+  document.getElementById('joinCamera').parentElement.hidden = !cameraAllowed;
+  document.getElementById('joinMicrophone').parentElement.hidden = !microphoneAllowed;
   const privacyConsent = document.getElementById('privacyConsent');
-  privacyConsent.disabled = !viewer;
-  privacyConsent.required = false;
-  document.getElementById('recordingConsent').disabled = !viewer;
-  document.getElementById('transcriptionConsent').disabled = !viewer;
-  document.getElementById('previewButton').hidden = viewer;
-  document.getElementById('preflightCamera').parentElement.hidden = viewer;
-  document.getElementById('preflightMicrophone').parentElement.hidden = viewer;
-  document.getElementById('preflightSpeaker').parentElement.hidden = viewer;
-  document.querySelector('.meter').hidden = viewer;
-  document.getElementById('displayNameInput').value = ui.session.displayName || '';
+  privacyConsent.disabled = false;
+  privacyConsent.required = true;
+  document.getElementById('recordingConsent').disabled = false;
+  document.getElementById('transcriptionConsent').disabled = false;
+  document.getElementById('displayNameInput').value = ui.session.displayName && ui.session.displayName !== RATCore.roleLabel(ui.session.meetingRole) ? ui.session.displayName : '';
   const savedConsents = ui.session.consents || {};
   privacyConsent.checked = savedConsents.privacy === true;
   document.getElementById('recordingConsent').checked = savedConsents.recording === true;
   document.getElementById('transcriptionConsent').checked = savedConsents.transcription === true;
   document.getElementById('preflightMeeting').textContent = `${ui.session.meeting.title} · ${ui.session.meeting.trainerName}`;
-  document.getElementById('recordingConsentLabel').hidden = !viewer || !ui.session.meeting.recordingConsentRequired;
-  document.getElementById('transcriptionConsentLabel').hidden = !viewer || !ui.session.meeting.transcriptionConsentRequired;
+  document.getElementById('preflightRole').textContent = RATCore.roleLabel(ui.session.meetingRole);
+  document.getElementById('preflightType').textContent = ({ WEBINAR: 'Webinar', SESSION: 'Sesión', CLASS: 'Clase' })[ui.session.meeting.type] || 'Webinar';
+  document.getElementById('recordingConsentLabel').hidden = !ui.session.meeting.allowRecording || !ui.session.meeting.recordingConsentRequired;
+  document.getElementById('transcriptionConsentLabel').hidden = !ui.session.meeting.allowTranscription || !ui.session.meeting.transcriptionConsentRequired;
+  document.getElementById('preflightDiagnostics').hidden = !ui.session.capabilities?.canViewDiagnostics;
   const processingNotice = document.getElementById('processingNotice');
   const recording = ui.session.meeting.allowRecording;
   const transcription = ui.session.meeting.allowTranscription;
@@ -286,9 +361,12 @@ async function setupPreflight() {
     ? 'Esta reunión puede grabarse y transcribirse. La transcripción automática puede contener errores.'
     : recording ? 'Esta reunión puede grabarse.' : 'Esta reunión puede transcribirse. La transcripción automática puede contener errores.';
   const connection = navigator.connection;
+  const networkLabels = { '4g': 'Excelente', '3g': 'Buena', '2g': 'Aceptable', 'slow-2g': 'Inestable' };
   document.getElementById('networkStatus').textContent = connection
-    ? `Red estimada: ${connection.effectiveType || 'desconocida'}${connection.downlink ? ` · ${connection.downlink} Mbps` : ''}`
-    : 'El navegador no informa una estimación previa de red.';
+    ? `Conexión estimada: ${networkLabels[connection.effectiveType] || 'Buena'}`
+    : 'La calidad se medirá al ingresar.';
+  for (const input of [privacyConsent, document.getElementById('recordingConsent'), document.getElementById('transcriptionConsent')]) input.addEventListener('change', updatePreflightReadiness);
+  updatePreflightReadiness();
   document.getElementById('preflightDialog').showModal();
   await refreshLiveKitStatus().catch(() => null);
 }
@@ -297,11 +375,12 @@ async function submitPreflight(event) {
   event.preventDefault();
   const error = document.getElementById('preflightError'); error.textContent = '';
   const button = document.getElementById('enterRoomButton');
+  const cameraAllowed = (ui.session.publishSources || []).includes('CAMERA');
+  const microphoneAllowed = (ui.session.publishSources || []).includes('MICROPHONE');
   if (button.dataset.busy === 'true') return;
-  const viewer = ui.session.role === 'VIEWER';
-  if (viewer && !document.getElementById('privacyConsent').checked) return void (error.textContent = 'Debes aceptar el aviso de privacidad para entrar.');
-  if (viewer && ui.session.meeting.recordingConsentRequired && !document.getElementById('recordingConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de grabación para entrar.');
-  if (viewer && ui.session.meeting.transcriptionConsentRequired && !document.getElementById('transcriptionConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de transcripción para entrar.');
+  if (!document.getElementById('privacyConsent').checked) return void (error.textContent = 'Debes aceptar el aviso de privacidad para entrar.');
+  if (ui.session.meeting.recordingConsentRequired && !document.getElementById('recordingConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de grabación para entrar.');
+  if (ui.session.meeting.transcriptionConsentRequired && !document.getElementById('transcriptionConsent').checked) return void (error.textContent = 'Debes confirmar el aviso de transcripción para entrar.');
   let connectionAttempted = false;
   let shouldRetry = false;
   button.dataset.busy = 'true';
@@ -316,17 +395,15 @@ async function submitPreflight(event) {
       const updated = await updateRoomProfile(displayName, ui.session.csrfToken);
       ui.session.displayName = updated.displayName; ui.session.csrfToken = updated.csrfToken;
     }
-    if (viewer) {
-      const accepted = await recordRoomConsent({
-        privacy: document.getElementById('privacyConsent').checked,
-        recording: document.getElementById('recordingConsent').checked,
-        transcription: document.getElementById('transcriptionConsent').checked,
-      }, ui.session.csrfToken);
-      ui.session.consents = accepted.consents;
-      ui.session.csrfToken = accepted.csrfToken;
-    }
-    const joinCamera = !viewer && document.getElementById('joinCamera').checked;
-    const joinMicrophone = !viewer && document.getElementById('joinMicrophone').checked;
+    const accepted = await recordRoomConsent({
+      privacy: document.getElementById('privacyConsent').checked,
+      recording: document.getElementById('recordingConsent').checked,
+      transcription: document.getElementById('transcriptionConsent').checked,
+    }, ui.session.csrfToken);
+    ui.session.consents = accepted.consents;
+    ui.session.csrfToken = accepted.csrfToken;
+    const joinCamera = cameraAllowed && document.getElementById('joinCamera').checked;
+    const joinMicrophone = microphoneAllowed && document.getElementById('joinMicrophone').checked;
     stopPreview();
     connectionAttempted = true;
     if (ui.connectionAttempts > 0) await reportRoomConnection('retry', ui.session.csrfToken);
@@ -341,7 +418,7 @@ async function submitPreflight(event) {
     error.focus();
   } finally {
     button.dataset.busy = 'false';
-    button.disabled = document.getElementById('livekitStatus').classList.contains('unavailable');
+    button.disabled = document.getElementById('livekitStatus').classList.contains('unavailable') || !requiredConsentsAccepted();
     button.setAttribute('aria-busy', 'false');
     button.textContent = shouldRetry ? 'Reintentar conexión' : 'Entrar a la reunión';
   }
@@ -356,6 +433,10 @@ function setupTabs() {
     if (visible) openTab('chat');
   });
   document.getElementById('closeSidePanel').addEventListener('click', closeSidePanel);
+  const mobile = window.matchMedia?.('(max-width: 700px)').matches === true;
+  const saved = sessionStorage.getItem('rat:room-side-panel');
+  if (mobile || saved === 'closed') closeSidePanel();
+  else openTab('chat', { focus: false });
 }
 
 function closeSidePanel() {
@@ -363,20 +444,22 @@ function closeSidePanel() {
   document.querySelector('.room-layout').classList.add('panel-closed');
   document.getElementById('btnChat').setAttribute('aria-pressed', 'false');
   floatingModel.update({ panel: null });
+  sessionStorage.setItem('rat:room-side-panel', 'closed');
   window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
 }
 
-function openTab(name) {
+function openTab(name, { focus = true } = {}) {
   ui.activeTab = name;
   document.getElementById('sidePanel').classList.remove('closed');
   document.querySelector('.room-layout').classList.remove('panel-closed');
   document.getElementById('btnChat').setAttribute('aria-pressed', String(name === 'chat'));
   floatingModel.update({ panel: name });
+  sessionStorage.setItem('rat:room-side-panel', name);
   document.querySelectorAll('[data-room-tab]').forEach((button) => { const active = button.dataset.roomTab === name; button.setAttribute('aria-selected', String(active)); button.classList.toggle('active', active); });
   document.querySelectorAll('[data-room-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.roomPanel === name));
   if (name === 'chat') unreadChat.clear();
   if (name === 'participants') renderHandQueue();
-  if (name === 'chat' || name === 'questions') window.setTimeout(() => document.getElementById('chatInput')?.focus(), 0);
+  if (focus && (name === 'chat' || name === 'questions')) window.setTimeout(() => document.getElementById('chatInput')?.focus(), 0);
   window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
 }
 
@@ -389,10 +472,11 @@ function renderParticipants(participants = []) {
     const media = participantMediaState(participant);
     const permission = participant.permissions || participant.permission || {};
     const pendingHand = handQueue.list().find((item) => item.identity === participant.identity && item.status === 'PENDING');
+    const temporarySpeaker = participantRoleCode(participant) === 'ATTENDEE' && participantCanPublishSource(participant, 'MICROPHONE');
     const compactActions = [];
     if (isOrganizer() && !participant.isLocal) {
-      if (pendingHand && !permission.canPublish) compactActions.push('grantWord');
-      else if (permission.canPublish) compactActions.push('revokeWord');
+      if (pendingHand && !temporarySpeaker) compactActions.push('grantWord');
+      else if (temporarySpeaker) compactActions.push('revokeWord');
       if (!media.microphone) compactActions.push('requestMicrophone');
       compactActions.push('more');
     }
@@ -400,6 +484,7 @@ function renderParticipants(participants = []) {
       identity: participant.identity,
       name: participantName(participant),
       roleLabel: participantRole(participant),
+      meetingRole: participantRoleCode(participant),
       microphone: media.microphone,
       camera: media.camera,
       screen: media.screen,
@@ -407,6 +492,7 @@ function renderParticipants(participants = []) {
       canPublish: permission.canPublish === true,
       isLocal: participant.isLocal === true,
       actions: compactActions,
+      volume: ui.participantVolumes.get(participant.identity) ?? 1,
     });
     const qualityLabels = { EXCELLENT: 'excelente', GOOD: 'buena', POOR: 'inestable', LOST: 'sin conexión' };
     const qualityValue = String(participant.connectionQuality || '').toUpperCase();
@@ -414,8 +500,8 @@ function renderParticipants(participants = []) {
     if (participant.isLocal) {
       ui.microphone = media.microphone;
       ui.camera = media.camera;
-      setButtonState(document.getElementById('btnMic'), ui.microphone, 'Silenciar', 'Micrófono');
-      setButtonState(document.getElementById('btnCam'), ui.camera, 'Apagar', 'Cámara');
+      setButtonState(document.getElementById('btnMic'), ui.microphone, 'Silenciar micrófono', 'Activar micrófono', { locked: !hasPublishPermission('MICROPHONE'), lockedLabel: 'Micrófono bloqueado por el anfitrión' });
+      setButtonState(document.getElementById('btnCam'), ui.camera, 'Apagar cámara', 'Encender cámara', { locked: !hasPublishPermission('CAMERA'), lockedLabel: 'Cámara bloqueada por el anfitrión' });
       floatingModel.update({ microphone: ui.microphone, camera: ui.camera });
       if (media.camera && media.cameraPublication?.track) ui.stage?.setTrack(participant.identity, `${participantName(participant)} (tú)`, 'camera', media.cameraPublication.track, { muted: true, local: true });
       else ui.stage?.removeTrack(participant.identity, 'camera');
@@ -423,6 +509,9 @@ function renderParticipants(participants = []) {
     if (participant.identity) {
       ui.stage?.setParticipantState(participant.identity, `${participantName(participant)}${participant.isLocal ? ' (tú)' : ''}`, {
         microphone: media.microphone,
+        role: participantRole(participant),
+        roleCode: participantRoleCode(participant),
+        eligible: participantRoleCode(participant) !== 'ATTENDEE',
         local: participant.isLocal,
         keepVisible: true,
       });
@@ -434,23 +523,51 @@ function renderParticipants(participants = []) {
       Object.assign(document.createElement('strong'), { textContent: participantName(participant) }),
       Object.assign(document.createElement('span'), { textContent: `${participantRole(participant)} · Mic ${media.microphone ? 'activo' : 'apagado'} · Cámara ${media.camera ? 'activa' : 'apagada'} · Pantalla ${media.screen ? 'activa' : 'apagada'}${hand}${joined}${quality}` })
     );
+    if (!participant.isLocal) {
+      ui.stageEvents?.setParticipantVolume(participant.identity, ui.participantVolumes.get(participant.identity) ?? 1);
+      const volumeLabel = document.createElement('label');
+      volumeLabel.className = 'participant-volume';
+      const value = document.createElement('output');
+      const initial = Math.round((ui.participantVolumes.get(participant.identity) ?? 1) * 100);
+      value.textContent = `${initial}%`;
+      const slider = document.createElement('input');
+      slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '5'; slider.value = String(initial);
+      slider.setAttribute('aria-label', `Volumen de ${participantName(participant)}`);
+      slider.addEventListener('input', () => {
+        const next = Number(slider.value) / 100;
+        ui.participantVolumes.set(participant.identity, next);
+        ui.stageEvents?.setParticipantVolume(participant.identity, next);
+        value.textContent = `${slider.value}%`;
+      });
+      volumeLabel.append(document.createTextNode('Volumen'), slider, value);
+      info.appendChild(volumeLabel);
+    }
     row.appendChild(info);
     if (isOrganizer() && !participant.isLocal) {
       const actions = document.createElement('div'); actions.className = 'participant-actions';
-      if (pendingHand && !permission.canPublish) {
+      if (pendingHand && !temporarySpeaker) {
         actions.append(
           actionButton('Dar palabra', () => promoteParticipant(pendingHand), 'primary compact'),
           actionButton('Rechazar', () => rejectHand(pendingHand)),
         );
-      } else if (permission.canPublish) actions.appendChild(actionButton('Quitar palabra', () => demoteParticipant(participant.identity)));
+      } else if (temporarySpeaker) actions.appendChild(actionButton('Quitar palabra', () => demoteParticipant(participant.identity)));
       if (media.microphone) actions.appendChild(actionButton('Silenciar', () => muteParticipant(participant.identity)));
       else actions.appendChild(actionButton('Solicitar activar micrófono', () => requestParticipantMedia(participant.identity, 'request-microphone')));
       const more = document.createElement('details'); more.className = 'participant-more';
       const summary = document.createElement('summary'); summary.textContent = 'Más acciones';
       const menu = document.createElement('div'); menu.className = 'participant-more-menu';
       if (media.camera) menu.appendChild(actionButton('Solicitar apagar cámara', () => requestParticipantMedia(participant.identity, 'request-camera-off')));
-      if (permission.canPublish) menu.appendChild(actionButton('Revocar palabra', () => demoteParticipant(participant.identity)));
-      else if (participantRoleCode(participant) === 'VIEWER') menu.appendChild(actionButton('Promover temporalmente', () => promoteParticipant({ identity: participant.identity })));
+      if (temporarySpeaker) menu.appendChild(actionButton('Revocar palabra', () => demoteParticipant(participant.identity)));
+      else if (participantRoleCode(participant) === 'ATTENDEE') menu.appendChild(actionButton('Conceder palabra temporal', () => promoteParticipant({ identity: participant.identity })));
+      if (ui.session.meeting.type === 'CLASS' && participantRoleCode(participant) === 'STUDENT') {
+        const screenGranted = participantCanPublishSource(participant, 'SCREENSHARE');
+        menu.appendChild(actionButton(screenGranted ? 'Retirar pantalla' : 'Autorizar pantalla', () => changeParticipantPermission(participant.identity, 'screen', !screenGranted)));
+      }
+      for (const role of RATCore.MEETING_ROLES[ui.session.meeting.type] || []) {
+        if (role === participantRoleCode(participant) || ['HOST', 'TEACHER'].includes(role)) continue;
+        if (role === 'COHOST' && !['HOST', 'TEACHER'].includes(ui.session.meetingRole)) continue;
+        menu.appendChild(actionButton(`Cambiar a ${RATCore.roleLabel(role)}`, () => changeParticipantRole(participant.identity, role)));
+      }
       menu.append(
         actionButton('Expulsar', () => removeParticipant(participant.identity), 'danger compact'),
         actionButton('Bloquear acceso', () => blockParticipant(participant.identity), 'danger compact'),
@@ -460,6 +577,7 @@ function renderParticipants(participants = []) {
     container.appendChild(row);
   }
   floatingModel.update({ participantItems });
+  updatePinnedSpeakers(participants);
   if (participants.length <= 1 && isOrganizer()) {
     const empty = document.createElement('div');
     empty.className = 'empty-state compact participants-empty';
@@ -473,6 +591,21 @@ function renderParticipants(participants = []) {
   }
 }
 
+function updatePinnedSpeakers(participants = []) {
+  const select = document.getElementById('pinnedSpeaker');
+  if (!select) return;
+  const previous = ui.pinnedSpeakerIdentity || select.value;
+  const eligible = participants.filter((participant) => participantRoleCode(participant) !== 'ATTENDEE');
+  const signature = eligible.map((participant) => participant.identity).join('|');
+  if (select.dataset.signature !== signature) {
+    select.dataset.signature = signature;
+    select.replaceChildren();
+    for (const participant of eligible) select.appendChild(new Option(`${participantName(participant)} · ${participantRole(participant)}`, participant.identity));
+  }
+  if (eligible.some((participant) => participant.identity === previous)) select.value = previous;
+  ui.pinnedSpeakerIdentity = select.value || null;
+}
+
 function actionButton(label, action, className = 'secondary compact') {
   const button = document.createElement('button'); button.type = 'button'; button.className = className; button.textContent = label; button.onclick = action; return button;
 }
@@ -482,7 +615,7 @@ function renderHandQueue() {
   updateCounter('handCount', items.filter((item) => item.status === 'PENDING').length);
   floatingModel.update({ raisedHands: items.filter((item) => item.status === 'PENDING').length });
   const container = document.getElementById('handQueue'); container.replaceChildren();
-  if (!isOrganizer() && ui.session.role !== 'PANELIST') return;
+  if (!isOrganizer() && !ui.session.capabilities?.canModerateChat) return;
   for (const item of items) {
     const row = document.createElement('article'); row.className = 'hand-card';
     const handStatus = { PENDING: 'Pendiente', GRANTED: 'Con palabra', REJECTED: 'Rechazada' }[item.status] || 'Pendiente';
@@ -535,10 +668,10 @@ async function requestParticipantMedia(targetIdentity, action) {
 async function waitForPublishPermission(timeoutMs = 4_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (hasPublishPermission()) return true;
+    if (hasPublishPermission('MICROPHONE')) return true;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return hasPublishPermission();
+  return hasPublishPermission('MICROPHONE');
 }
 
 async function respondToMediaRequest(requestId, status) {
@@ -586,6 +719,23 @@ async function demoteParticipant(targetIdentity) {
   } catch (error) { showMessage(error.message, true); }
 }
 
+async function changeParticipantRole(targetIdentity, meetingRole) {
+  if (!await askConfirmation({ title: 'Cambiar función', message: `La persona pasará a ${RATCore.roleLabel(meetingRole)} y sus permisos multimedia se actualizarán inmediatamente.`, confirmLabel: 'Cambiar función' })) return;
+  try {
+    await roomRequest('/api/participants/role', { method: 'POST', body: { targetIdentity, meetingRole } }, ui.session.csrfToken);
+    showMessage(`Función actualizada a ${RATCore.roleLabel(meetingRole)}.`);
+    ui.roomUi?.updateCount();
+  } catch (error) { showMessage(error.message, true); }
+}
+
+async function changeParticipantPermission(targetIdentity, source, granted) {
+  try {
+    await roomRequest('/api/participants/permissions', { method: 'POST', body: { targetIdentity, source, granted } }, ui.session.csrfToken);
+    showMessage(granted ? 'Permiso multimedia concedido.' : 'Permiso multimedia retirado.');
+    ui.roomUi?.updateCount();
+  } catch (error) { showMessage(error.message, true); }
+}
+
 async function toggleHand() {
   if (!ui.room) return;
   ui.handRaised = !ui.handRaised;
@@ -627,7 +777,7 @@ function renderRoomLock(locked) {
 function handleData(payload, participant) {
   try {
     const message = JSON.parse(new TextDecoder().decode(payload));
-    if (message.kind === 'hand-raise' && ['ADMIN', 'ORGANIZER', 'PANELIST'].includes(ui.session.role)) {
+    if (message.kind === 'hand-raise' && (ui.session.capabilities?.canManageParticipants || ui.session.capabilities?.canModerateChat)) {
       handQueue.raise(message.identity || participant?.identity, message.displayName || participantName(participant), message.raisedAt);
       renderHandQueue(); ui.roomUi?.updateCount(); playAlert('hand'); systemNotification('Mano levantada', `${message.displayName || participantName(participant)} solicitó la palabra.`);
       notifier.notify('hand-raised', { title: 'Mano levantada', message: `${message.displayName || participantName(participant)} solicitó la palabra.`, system: false });
@@ -636,6 +786,23 @@ function handleData(payload, participant) {
     if (message.kind === 'hand-approved' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); renderMediaPermissions(); showMessage('El organizador te dio la palabra.'); }
     if (message.kind === 'hand-rejected' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); showMessage('La solicitud fue cerrada por el organizador.'); }
     if (message.kind === 'word-revoked' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; if (ui.screen) finishScreenShare(true); renderMediaPermissions(); showMessage('El organizador retiró el permiso para hablar.'); }
+    if (message.kind === 'permission-changed' && message.targetIdentity === ui.session.identity) {
+      ui.session.publishSources = message.publishSources || [];
+      renderMediaPermissions();
+      showMessage(message.granted ? `El anfitrión habilitó ${message.source}.` : `El anfitrión retiró el permiso de ${message.source}.`);
+    }
+    if (message.kind === 'role-changed') {
+      if (message.targetIdentity === ui.session.identity) {
+        ui.session.meetingRole = message.meetingRole;
+        ui.session.publishSources = message.publishSources || [];
+        ui.session.capabilities = RATCore.meetingRoleCapabilities(ui.session.meeting.type, message.meetingRole);
+        document.getElementById('meetingRoleBadge').textContent = RATCore.roleLabel(message.meetingRole);
+        renderMediaPermissions();
+        configureMeetingMode();
+        showMessage(`Tu función cambió a ${RATCore.roleLabel(message.meetingRole)}.`);
+      }
+      ui.roomUi?.updateCount();
+    }
     if (message.kind === 'recording-status') recordingMachine.set(message.state, {
       active: message.state === 'RECORDING' && message.active === true,
       egressId: message.egressId || null,
@@ -672,21 +839,32 @@ function handleData(payload, participant) {
 }
 
 function renderMediaPermissions() {
-  const allowed = hasPublishPermission();
-  document.getElementById('btnMic').disabled = !allowed;
-  document.getElementById('btnCam').disabled = !allowed;
-  document.getElementById('btnScreen').disabled = !allowed || !navigator.mediaDevices?.getDisplayMedia;
-  document.getElementById('btnScreenMore').disabled = !allowed || !navigator.mediaDevices?.getDisplayMedia;
-  document.getElementById('btnEffects').disabled = !allowed;
-  if (!allowed) {
-    ui.microphone = false; ui.camera = false;
-    floatingModel.update({ microphone: false, camera: false, screen: false });
-    setButtonState(document.getElementById('btnMic'), false, 'Silenciar', 'Micrófono');
-    setButtonState(document.getElementById('btnCam'), false, 'Apagar', 'Cámara');
-  }
-  if (ui.session?.role === 'VIEWER') {
+  const microphoneAllowed = hasPublishPermission('MICROPHONE');
+  const cameraAllowed = hasPublishPermission('CAMERA');
+  const screenAllowed = hasPublishPermission('SCREENSHARE');
+  const screenSupported = Boolean(navigator.mediaDevices?.getDisplayMedia);
+  const screenCompatibilityHelp = document.getElementById('screenCompatibilityHelp');
+  screenCompatibilityHelp.hidden = screenSupported || !screenAllowed;
+  document.getElementById('btnScreenMore').title = !screenSupported
+    ? 'Compartir pantalla no está disponible en este navegador. Usa un computador o navegador compatible.'
+    : screenAllowed ? 'Compartir pantalla' : 'Pantalla bloqueada por el anfitrión';
+  document.getElementById('btnMic').hidden = ui.session?.meetingRole === 'ATTENDEE' && !microphoneAllowed;
+  document.getElementById('btnMic').disabled = !microphoneAllowed;
+  document.getElementById('btnCam').disabled = !cameraAllowed;
+  document.getElementById('btnScreen').disabled = !screenAllowed || !screenSupported;
+  document.getElementById('btnScreenMore').disabled = !screenAllowed || !screenSupported;
+  document.getElementById('btnEffects').disabled = !cameraAllowed;
+  setButtonState(document.getElementById('btnMic'), ui.microphone, 'Silenciar micrófono', 'Activar micrófono', { locked: !microphoneAllowed, lockedLabel: 'Micrófono bloqueado por el anfitrión' });
+  setButtonState(document.getElementById('btnCam'), ui.camera, 'Apagar cámara', 'Encender cámara', { locked: !cameraAllowed, lockedLabel: 'Cámara bloqueada por el anfitrión' });
+  setButtonState(document.getElementById('btnScreen'), ui.screen, 'Detener pantalla', 'Compartir pantalla', { locked: !screenAllowed || !screenSupported, lockedLabel: screenSupported ? 'Pantalla bloqueada por el anfitrión' : 'Pantalla no compatible con este navegador' });
+  if (!microphoneAllowed) ui.microphone = false;
+  if (!cameraAllowed) ui.camera = false;
+  if (!screenAllowed && ui.screen) finishScreenShare(true);
+  floatingModel.update({ microphone: ui.microphone, camera: ui.camera, screen: ui.screen });
+  if (ui.session?.capabilities?.canRaiseHand) {
     const handButton = document.getElementById('btnHand');
-    if (allowed) {
+    const temporaryMicrophone = microphoneAllowed && !['PANELIST', 'PARTICIPANT', 'STUDENT', 'MODERATOR', 'HOST', 'TEACHER', 'COHOST'].includes(ui.session.meetingRole);
+    if (temporaryMicrophone) {
       handButton.onclick = async () => { try { await selfDemote(); } catch (error) { showMessage(error.message, true); } };
       setButtonState(handButton, true, 'Bajar mano', 'Mano');
       floatingModel.update({ handRaised: true });
@@ -707,7 +885,7 @@ function withMediaTimeout(operation, label, timeoutMs = 12_000) {
 }
 
 async function toggleMicrophone() {
-  if (!ui.room || !hasPublishPermission() || ui.microphoneBusy) return false;
+  if (!ui.room || !hasPublishPermission('MICROPHONE') || ui.microphoneBusy) return false;
   const micButton = document.getElementById('btnMic');
   ui.microphoneBusy = true; micButton.disabled = true; micButton.setAttribute('aria-busy', 'true');
   micButton.querySelector('span:last-child').textContent = ui.microphone ? 'Silenciando…' : 'Solicitando…';
@@ -717,16 +895,16 @@ async function toggleMicrophone() {
     const publication = ui.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone);
     ui.microphone = publicationHasLiveTrack(publication, 'audio');
     if (next && !ui.microphone) throw new Error('LiveKit no confirmó un track de micrófono publicado. Revisa el permiso del navegador.');
-    setButtonState(document.getElementById('btnMic'), ui.microphone, 'Silenciar', 'Micrófono'); floatingModel.update({ microphone: ui.microphone });
+    setButtonState(document.getElementById('btnMic'), ui.microphone, 'Silenciar micrófono', 'Activar micrófono'); floatingModel.update({ microphone: ui.microphone });
     ui.stage?.setParticipantState(ui.session.identity, `${ui.session.displayName} (tú)`, { microphone: ui.microphone, local: true, keepVisible: true });
     if (!ui.microphone) roomRequest('/api/room/media-state', { method: 'POST', body: { event: 'microphone-muted' } }, ui.session.csrfToken).catch(() => {});
     return ui.microphone === next;
-  } catch (error) { micButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; setButtonState(micButton, ui.microphone, 'Silenciar', 'Micrófono'); showMessage(`Micrófono: ${error.message}`, true); return false; }
-  finally { ui.microphoneBusy = false; document.getElementById('btnMic').disabled = !hasPublishPermission(); document.getElementById('btnMic').setAttribute('aria-busy', 'false'); }
+  } catch (error) { setButtonState(micButton, ui.microphone, 'Silenciar micrófono', 'Activar micrófono'); micButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; showMessage(`Micrófono: ${error.message}`, true); return false; }
+  finally { ui.microphoneBusy = false; document.getElementById('btnMic').disabled = !hasPublishPermission('MICROPHONE'); document.getElementById('btnMic').setAttribute('aria-busy', 'false'); }
 }
 
 async function toggleCamera() {
-  if (!ui.room || !hasPublishPermission() || ui.cameraBusy) return false;
+  if (!ui.room || !hasPublishPermission('CAMERA') || ui.cameraBusy) return false;
   const camButton = document.getElementById('btnCam');
   ui.cameraBusy = true; camButton.disabled = true; camButton.setAttribute('aria-busy', 'true');
   camButton.querySelector('span:last-child').textContent = ui.camera ? 'Apagando…' : 'Solicitando…';
@@ -739,18 +917,18 @@ async function toggleCamera() {
       await ui.room.localParticipant.setCameraEnabled(false).catch(() => {});
       throw new Error('No se pudo publicar la cámara: LiveKit no confirmó un track de video activo.');
     }
-    setButtonState(document.getElementById('btnCam'), ui.camera, 'Apagar', 'Cámara'); floatingModel.update({ camera: ui.camera });
+    setButtonState(document.getElementById('btnCam'), ui.camera, 'Apagar cámara', 'Encender cámara'); floatingModel.update({ camera: ui.camera });
     if (ui.camera && publication?.track) ui.stage.setTrack(ui.session.identity, `${ui.session.displayName} (tú)`, 'camera', publication.track, { muted: true });
     else ui.stage.removeTrack(ui.session.identity, 'camera');
     ui.stage.setParticipantState(ui.session.identity, `${ui.session.displayName} (tú)`, { microphone: ui.microphone, local: true, keepVisible: true });
     return ui.camera === next;
-  } catch (error) { camButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; setButtonState(camButton, ui.camera, 'Apagar', 'Cámara'); showMessage(`Cámara: ${error.message}`, true); return false; }
-  finally { ui.cameraBusy = false; document.getElementById('btnCam').disabled = !hasPublishPermission(); document.getElementById('btnCam').setAttribute('aria-busy', 'false'); }
+  } catch (error) { setButtonState(camButton, ui.camera, 'Apagar cámara', 'Encender cámara'); camButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; showMessage(`Cámara: ${error.message}`, true); return false; }
+  finally { ui.cameraBusy = false; document.getElementById('btnCam').disabled = !hasPublishPermission('CAMERA'); document.getElementById('btnCam').setAttribute('aria-busy', 'false'); }
 }
 
 async function toggleScreen() {
   if (!navigator.mediaDevices?.getDisplayMedia) return showMessage('Compartir pantalla no está disponible en este dispositivo o navegador.', true);
-  if (!hasPublishPermission()) return showMessage('Tu rol no permite compartir pantalla.', true);
+  if (!hasPublishPermission('SCREENSHARE')) return showMessage('Tu función no permite compartir pantalla. Solicita autorización al anfitrión.', true);
   if (ui.screenBusy) return;
   const button = document.getElementById('btnScreen');
   ui.screenBusy = true;
@@ -791,7 +969,7 @@ async function toggleScreen() {
   } catch (error) { setButtonState(button, ui.screen, 'Detener', 'Pantalla'); showMessage(`Pantalla: ${error.message}`, true); }
   finally {
     ui.screenBusy = false;
-    button.disabled = !hasPublishPermission() || !navigator.mediaDevices?.getDisplayMedia;
+    button.disabled = !hasPublishPermission('SCREENSHARE') || !navigator.mediaDevices?.getDisplayMedia;
     document.getElementById('btnScreenMore').disabled = button.disabled;
     button.setAttribute('aria-busy', 'false');
   }
@@ -868,7 +1046,7 @@ async function queryRecordingStatus() {
 }
 
 async function toggleRecording() {
-  if (!isOrganizer()) return;
+  if (!ui.session?.capabilities?.canManageRecording) return;
   const current = recordingMachine.emit();
   if (current.busy || current.state === 'DISABLED') return;
   if (!current.active) {
@@ -923,14 +1101,16 @@ async function endRoom() {
 
 function startMeetingTimer() {
   clearInterval(ui.elapsedTimer);
-  const source = ui.session.meeting.startedAt || new Date().toISOString();
-  const startedAt = Number.isFinite(new Date(source).getTime()) ? new Date(source).getTime() : Date.now();
   const update = () => {
-    const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const timing = RATCore.meetingTiming(ui.session.meeting, Date.now());
+    const elapsed = timing.elapsedSeconds;
     const hours = Math.floor(elapsed / 3600);
     const minutes = Math.floor((elapsed % 3600) / 60);
     const seconds = elapsed % 60;
-    document.getElementById('meetingTimer').textContent = `${hours ? `${String(hours).padStart(2, '0')}:` : ''}${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    const formatted = `${hours ? `${String(hours).padStart(2, '0')}:` : ''}${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    const timer = document.getElementById('meetingTimer');
+    timer.textContent = timing.state === 'live' ? `En vivo · ${formatted}` : timing.label;
+    timer.title = timing.state === 'live' && timing.remainingSeconds > 0 ? `Finaliza aproximadamente en ${Math.ceil(timing.remainingSeconds / 60)} min` : timing.overtime ? 'La duración estimada ya se cumplió' : timing.label;
     floatingModel.update({ elapsedSeconds: elapsed });
   };
   update();
@@ -967,9 +1147,10 @@ async function copyText(value) {
 
 async function createInRoomInvitation(role) {
   try {
-    const result = await roomRequest('/api/room/invitations', { method: 'POST', body: { role, expiresInMinutes: 240 } }, ui.session.csrfToken);
+    const privileged = ['HOST', 'TEACHER', 'COHOST'].includes(role);
+    const result = await roomRequest('/api/room/invitations', { method: 'POST', body: { meetingRole: role, singleUse: privileged, expiresInMinutes: 240 } }, ui.session.csrfToken);
     await copyText(result.message || result.url);
-    notifier.notify(`invitation-${role}`, { title: 'Invitación copiada', message: `El mensaje con enlace de ${role === 'PANELIST' ? 'panelista' : 'asistente'} vence en 4 horas.`, tone: 'success', system: false });
+    notifier.notify(`invitation-${role}`, { title: 'Invitación copiada', message: `El mensaje con enlace de ${RATCore.roleLabel(role).toLowerCase()} vence en 4 horas.`, tone: 'success', system: false });
   } catch (error) { showMessage(error.message, true); }
 }
 
@@ -981,17 +1162,38 @@ async function sendReaction(reaction) {
   } catch (error) { showMessage(error.message, true); }
 }
 
+function setSpeakerMode(mode, identity = null) {
+  ui.speakerMode = ['auto', 'pinned', 'hidden'].includes(mode) ? mode : 'auto';
+  if (ui.speakerMode === 'pinned') ui.pinnedSpeakerIdentity = identity || document.getElementById('pinnedSpeaker')?.value || null;
+  document.getElementById('speakerMode').value = ui.speakerMode;
+  document.getElementById('pinnedSpeakerLabel').hidden = ui.speakerMode !== 'pinned';
+  ui.stage?.setSpeakerMode(ui.speakerMode, ui.pinnedSpeakerIdentity);
+  floatingModel.update({ speakerMode: ui.speakerMode });
+}
+
+async function testSpeaker(outputId = document.getElementById('speakerSelect')?.value || '') {
+  const Context = window.AudioContext || window.webkitAudioContext;
+  if (!Context) throw new Error('La prueba de altavoz no está disponible en este navegador.');
+  const context = new Context();
+  if (outputId && typeof context.setSinkId === 'function') await context.setSinkId(outputId);
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.frequency.value = 660;
+  gain.gain.setValueAtTime(0.0001, context.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.45);
+  oscillator.connect(gain).connect(context.destination);
+  oscillator.start(); oscillator.stop(context.currentTime + 0.5);
+  await new Promise((resolve) => { oscillator.onended = resolve; });
+  await context.close();
+}
+
 function configureMeetingMode() {
   const meeting = ui.session.meeting;
   const handButton = document.getElementById('btnHand');
-  if (ui.session.role !== 'VIEWER') {
-    handButton.title = meeting.type === 'WEBINAR' ? 'Revisar solicitudes de palabra' : 'Revisar manos levantadas';
-    setButtonState(handButton, false, 'Manos', 'Manos');
-    if (meeting.type === 'WEBINAR') {
-      handButton.hidden = true;
-      handButton.title = 'La mano levantada está disponible para asistentes; revisa las solicitudes en Participantes.';
-    }
-  }
+  handButton.hidden = !ui.session.capabilities?.canRaiseHand && !ui.session.capabilities?.canManageParticipants && !ui.session.capabilities?.canModerateChat;
+  handButton.title = ui.session.capabilities?.canRaiseHand ? 'Levantar la mano' : 'Revisar manos y solicitudes';
+  if (!ui.session.capabilities?.canRaiseHand) setButtonState(handButton, false, 'Ver manos', 'Ver manos');
   const questionOption = document.querySelector('#chatKind option[value="question"]');
   if (!meeting.allowQuestions) questionOption?.remove();
   document.querySelector('[data-room-tab="questions"]').hidden = !meeting.allowQuestions;
@@ -1001,7 +1203,32 @@ function configureMeetingMode() {
     document.querySelector('#chatKind option[value="chat"]')?.remove();
     if (!meeting.allowQuestions) document.querySelector('.room-chat-composer').hidden = true;
   }
-  floatingModel.update({ role: ui.session.role, mode: meeting.type, locked: meeting.roomLocked === true });
+  floatingModel.update({ role: ui.session.role, meetingRole: ui.session.meetingRole, mode: meeting.type, locked: meeting.roomLocked === true });
+  const attendee = ui.session.meetingRole === 'ATTENDEE';
+  document.getElementById('btnCam').hidden = attendee;
+  document.getElementById('btnScreen').hidden = attendee;
+  document.getElementById('btnScreenMore').hidden = attendee;
+  document.getElementById('btnEffects').hidden = attendee;
+  document.getElementById('cameraSelect').parentElement.hidden = attendee;
+  document.getElementById('microphoneSelect').parentElement.hidden = attendee;
+  document.getElementById('btnToggleSelfView').hidden = attendee;
+  const canUsePresenterPanel = ui.session.capabilities?.canUsePresenterPanel === true;
+  document.getElementById('btnFloat').hidden = !canUsePresenterPanel;
+  document.getElementById('autoFloatOnShare').parentElement.hidden = !canUsePresenterPanel;
+  document.getElementById('speakerModeLabel').hidden = !canUsePresenterPanel;
+  document.getElementById('pinnedSpeakerLabel').hidden = !canUsePresenterPanel || ui.speakerMode !== 'pinned';
+  document.getElementById('recordingHelp').hidden = !ui.session.capabilities?.canManageRecording;
+  document.getElementById('btnLock').hidden = !ui.session.capabilities?.canManageRoom;
+  document.getElementById('btnRecord').hidden = !ui.session.capabilities?.canManageRecording;
+  document.getElementById('btnEnd').hidden = !ui.session.capabilities?.canEndMeeting;
+  document.getElementById('btnInviteViewer').hidden = true;
+  document.getElementById('btnInvitePanelist').hidden = true;
+  const invitationActions = document.getElementById('invitationRoleActions');
+  invitationActions.replaceChildren();
+  invitationActions.hidden = !ui.session.capabilities?.canManageInvitations;
+  if (!invitationActions.hidden) {
+    for (const role of RATCore.MEETING_ROLES[meeting.type] || []) invitationActions.appendChild(actionButton(`Copiar enlace de ${RATCore.roleLabel(role).toLowerCase()}`, () => createInRoomInvitation(role)));
+  }
   renderRoomLock(meeting.roomLocked === true);
 }
 
@@ -1016,7 +1243,7 @@ function setupKeyboardShortcuts() {
       return;
     }
     if (!(event.ctrlKey || event.metaKey) || !event.shiftKey) return;
-    const actions = { m: toggleMicrophone, v: toggleCamera, s: toggleScreen, c: () => openTab('chat'), p: () => openTab('participants'), h: ui.session.role === 'VIEWER' ? toggleHand : () => openTab('participants') };
+    const actions = { m: toggleMicrophone, v: toggleCamera, s: toggleScreen, c: () => openTab('chat'), p: () => openTab('participants'), h: ui.session.capabilities?.canRaiseHand ? toggleHand : () => openTab('participants') };
     if (!actions[key]) return;
     event.preventDefault();
     actions[key]();
@@ -1028,7 +1255,7 @@ function setupControls() {
   ui.controlsBound = true;
   document.getElementById('btnMic').onclick = toggleMicrophone;
   document.getElementById('btnCam').onclick = toggleCamera;
-  document.getElementById('btnHand').onclick = ui.session.role === 'VIEWER' ? toggleHand : () => openTab('participants');
+  document.getElementById('btnHand').onclick = ui.session.capabilities?.canRaiseHand ? toggleHand : () => openTab('participants');
   document.getElementById('btnScreen').onclick = toggleScreen;
   document.getElementById('btnScreenMore').onclick = toggleScreen;
   document.getElementById('stopShareNotice').onclick = () => { if (ui.screen) toggleScreen(); };
@@ -1063,7 +1290,7 @@ function setupControls() {
   document.getElementById('btnLock').onclick = toggleRoomLock;
   document.getElementById('btnInviteViewer').onclick = () => createInRoomInvitation('VIEWER');
   document.getElementById('btnInvitePanelist').onclick = () => createInRoomInvitation('PANELIST');
-  document.querySelectorAll('.organizer-control').forEach((element) => { element.hidden = !isOrganizer(); });
+  document.querySelectorAll('.organizer-control').forEach((element) => { element.hidden = !ui.session.capabilities?.canManageInvitations && !ui.session.capabilities?.canManageRoom && !ui.session.capabilities?.canManageRecording && !ui.session.capabilities?.canEndMeeting; });
   if (!navigator.mediaDevices?.getDisplayMedia) { document.getElementById('btnScreen').disabled = true; document.getElementById('btnScreen').title = 'Compartir pantalla no está disponible en este navegador.'; }
   document.getElementById('btnMore').onclick = () => { const panel = document.getElementById('morePanel'); panel.hidden = !panel.hidden; document.getElementById('btnMore').setAttribute('aria-expanded', String(!panel.hidden)); };
   document.getElementById('closeMore').onclick = () => { document.getElementById('morePanel').hidden = true; document.getElementById('btnMore').setAttribute('aria-expanded', 'false'); };
@@ -1096,12 +1323,28 @@ function setupControls() {
     selfButton.textContent = ui.selfView ? 'Ocultar mi miniatura' : 'Mostrar mi miniatura';
     selfButton.setAttribute('aria-pressed', String(ui.selfView));
   };
+  const volume = document.getElementById('meetingVolume');
+  const savedVolume = Number(localStorage.getItem('rat:meeting-volume'));
+  ui.meetingVolume = Number.isFinite(savedVolume) ? Math.max(0, Math.min(1, savedVolume)) : 1;
+  volume.value = String(Math.round(ui.meetingVolume * 100));
+  document.getElementById('meetingVolumeValue').textContent = `${volume.value}%`;
+  ui.stageEvents?.setMeetingVolume(ui.meetingVolume);
+  volume.oninput = () => {
+    ui.meetingVolume = Number(volume.value) / 100;
+    ui.stageEvents?.setMeetingVolume(ui.meetingVolume);
+    localStorage.setItem('rat:meeting-volume', String(ui.meetingVolume));
+    document.getElementById('meetingVolumeValue').textContent = `${volume.value}%`;
+  };
+  document.getElementById('btnTestSpeaker').onclick = () => testSpeaker().then(() => showMessage('Prueba de altavoz completada.')).catch((error) => showMessage(error.message, true));
+  document.getElementById('speakerMode').onchange = (event) => setSpeakerMode(event.target.value);
+  document.getElementById('pinnedSpeaker').onchange = (event) => setSpeakerMode('pinned', event.target.value);
+  setSpeakerMode('auto');
   for (const [id, kind] of [['cameraSelect', 'videoinput'], ['microphoneSelect', 'audioinput']]) document.getElementById(id).onchange = (event) => ui.room?.switchActiveDevice(kind, event.target.value).catch((error) => showMessage(error.message, true));
   document.getElementById('speakerSelect').onchange = (event) => document.querySelectorAll('audio, video').forEach((media) => media.setSinkId?.(event.target.value).catch(() => {}));
-  ui.companion = attachCompanionWindow(document.getElementById('btnFloat'), floatingModel, {
+  ui.companion = ui.session.capabilities?.canUsePresenterPanel ? attachCompanionWindow(document.getElementById('btnFloat'), floatingModel, {
     microphone: toggleMicrophone, camera: toggleCamera, screen: toggleScreen,
     questions: () => openTab('questions'),
-    hand: ui.session.role === 'VIEWER' ? toggleHand : () => openTab('participants'),
+    hand: ui.session.capabilities?.canRaiseHand ? toggleHand : () => openTab('participants'),
     more: () => { document.getElementById('morePanel').hidden = false; window.focus(); },
     leave: leaveRoom, return: () => window.focus(), unsupported: (message) => showMessage(message, true),
     fallback: (message) => notifier.notify('floating-fallback', { title: 'Controles flotantes internos', message, system: false }),
@@ -1121,18 +1364,23 @@ function setupControls() {
       return undefined;
     },
     error: (message) => showMessage(message, true),
-  });
+  }) : null;
   setupKeyboardShortcuts();
 }
 
 async function connectRoom({ joinCamera, joinMicrophone }) {
   statusMachine.set('connecting_signaling');
   const tokenData = await requestToken();
+  ui.session.meetingRole = tokenData.meetingRole || ui.session.meetingRole;
+  ui.session.capabilities = tokenData.capabilities || ui.session.capabilities;
+  ui.session.publishSources = tokenData.publishSources || ui.session.publishSources;
   ui.recordingConfigured = tokenData.recordingConfigured === true && ui.session.meeting.allowRecording === true;
   recordingMachine = new RATCore.RecordingStateMachine(renderRecordingState, ui.recordingConfigured);
   const room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true, disconnectOnPageLeave: false });
   ui.room = room;
-  ui.stage = createStage(document.getElementById('stageGrid'), 'Esperando contenido de la reunión…');
+  ui.stage = createStage(document.getElementById('stageGrid'), 'Esperando contenido de la reunión…', null, {
+    onActiveSpeakerChange(activeSpeaker) { floatingModel.update({ activeSpeaker, speakerMode: ui.speakerMode }); },
+  });
   ui.stageEvents = attachRemoteStageEvents(room, ui.stage);
   room.on(LivekitClient.RoomEvent.DataReceived, handleData);
   room.on(LivekitClient.RoomEvent.ParticipantPermissionsChanged, renderMediaPermissions);
@@ -1161,14 +1409,19 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     await room.connect(tokenData.wsUrl, tokenData.token);
     ui.stage.removeParticipant('');
     ui.roomUi.updateCount();
-    if (ui.session.role !== 'VIEWER') await reportRoomConnection('connected', ui.session.csrfToken);
-    await reportRoomConnection('joined', ui.session.csrfToken).catch(() => {});
+    if (ui.session.capabilities?.canStartMeeting) {
+      const connected = await reportRoomConnection('connected', ui.session.csrfToken);
+      ui.session.meeting.status = connected.meetingStatus;
+      ui.session.meeting.startedAt = connected.startedAt || ui.session.meeting.startedAt;
+    }
+    const joined = await reportRoomConnection('joined', ui.session.csrfToken).catch(() => null);
+    if (joined?.startedAt) ui.session.meeting.startedAt = joined.startedAt;
     ui.roomUi.machine.set('connected');
     statusMachine.set('connected');
     floatingModel.update({ title: tokenData.meeting.title, live: true });
     ui.questions = setupQuestions(room, {
       csrfToken: ui.session.csrfToken,
-      role: ui.session.role,
+      role: ui.session.capabilities?.canModerateQuestions ? 'ORGANIZER' : ui.session.role,
       onError: (message) => showMessage(message, true),
       onChange: ({ pending }) => { updateCounter('questionUnread', pending); floatingModel.update({ pendingQuestions: pending }); },
       onNewQuestion: () => {
@@ -1178,7 +1431,7 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     });
     ui.chat = setupChat(room, ui.session.identity, {
       csrfToken: ui.session.csrfToken,
-      role: ui.session.role,
+      role: ui.session.meetingRole,
       displayName: ui.session.displayName,
       sendQuestion: async (text) => {
         const question = await ui.questions.submit(text);
@@ -1234,6 +1487,14 @@ async function initializeRoom() {
   window.visualViewport?.addEventListener('scroll', syncViewport);
   document.getElementById('preflightForm').addEventListener('submit', submitPreflight);
   document.getElementById('previewButton').addEventListener('click', () => startPreview().catch((error) => { document.getElementById('preflightError').textContent = error.message; }));
+  document.getElementById('preflightSpeakerTest').addEventListener('click', () => {
+    const button = document.getElementById('preflightSpeakerTest');
+    button.disabled = true;
+    testSpeaker(document.getElementById('preflightSpeaker').value)
+      .then(() => { document.getElementById('preflightError').textContent = 'Prueba de altavoz completada.'; })
+      .catch((error) => { document.getElementById('preflightError').textContent = error.message; })
+      .finally(() => { button.disabled = false; });
+  });
   window.addEventListener('pagehide', () => {
     stopPreview();
     clearTimeout(recordingPollTimer);
@@ -1256,19 +1517,24 @@ async function initializeRoom() {
   try {
     statusMachine.set('validating_invitation');
     ui.session = await getRoomSession();
+    ui.session.meetingRole = RATCore.normalizeMeetingRole(ui.session.meeting.type, ui.session.meetingRole, ui.session.role);
+    ui.session.capabilities = ui.session.capabilities || RATCore.meetingRoleCapabilities(ui.session.meeting.type, ui.session.meetingRole);
+    ui.session.publishSources = Array.isArray(ui.session.publishSources) ? ui.session.publishSources : [];
     const shouldBeViewer = pageRole === 'viewer';
-    if (shouldBeViewer !== (ui.session.role === 'VIEWER')) {
-      window.location.replace(ui.session.role === 'VIEWER' ? '/viewer.html' : '/presenter.html'); return;
+    const viewerExperience = ui.session.meetingRole === 'ATTENDEE' || (ui.session.legacyAccess && ui.session.role === 'VIEWER');
+    if (shouldBeViewer !== viewerExperience) {
+      window.location.replace(viewerExperience ? '/viewer.html' : '/presenter.html'); return;
     }
     document.getElementById('meetingTitle').textContent = ui.session.meeting.title;
     document.getElementById('trainerName').textContent = ui.session.meeting.trainerName;
-    floatingModel.update({ title: ui.session.meeting.title, connection: 'waiting_for_room', role: ui.session.role, mode: ui.session.meeting.type, locked: ui.session.meeting.roomLocked === true });
+    document.getElementById('meetingRoleBadge').textContent = RATCore.roleLabel(ui.session.meetingRole);
+    floatingModel.update({ title: ui.session.meeting.title, connection: 'waiting_for_room', role: ui.session.role, meetingRole: ui.session.meetingRole, mode: ui.session.meeting.type, locked: ui.session.meeting.roomLocked === true });
     renderRoomLock(ui.session.meeting.roomLocked === true);
     statusMachine.set('waiting_for_room');
     await enumerateDevices(); await setupPreflight();
   } catch (error) {
     statusMachine.set(error.code === 'ROOM_ENDED' ? 'room_ended' : 'access_denied', error.message);
-    document.querySelector('.room-layout').innerHTML = `<div class="access-denied branded-empty"><img src="assets/icon-192.png" alt="Icono de R.A. Training Streaming"><h1>Acceso no disponible</h1><p></p><a class="button primary" href="/index.html">Volver al inicio</a></div>`;
+    document.querySelector('.room-layout').innerHTML = `<div class="access-denied branded-empty"><img src="assets/streaming-app-logo.png" alt="Logo oficial de R.A. Training Streaming"><h1>Acceso no disponible</h1><p></p><a class="button primary" href="/index.html">Volver al inicio</a></div>`;
     document.querySelector('.access-denied p').textContent = error.message;
     document.getElementById('roomControls').hidden = true;
   }

@@ -55,6 +55,8 @@ function attachConnectionUI(room, { statusBadge, countBadge, qualityBadge, float
     LivekitClient.RoomEvent.TrackUnmuted,
     LivekitClient.RoomEvent.LocalTrackPublished,
     LivekitClient.RoomEvent.LocalTrackUnpublished,
+    LivekitClient.RoomEvent.ParticipantMetadataChanged,
+    LivekitClient.RoomEvent.ParticipantNameChanged,
   ].filter(Boolean);
   mediaEvents.forEach((event) => room.on(event, handlers.mediaChanged));
   room.on(LivekitClient.RoomEvent.Reconnecting, handlers.reconnecting);

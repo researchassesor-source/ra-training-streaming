@@ -33,17 +33,31 @@
     ORGANIZER: 'Organizador',
     PANELIST: 'Panelista',
     VIEWER: 'Asistente',
+    HOST: 'Anfitrión',
+    TEACHER: 'Docente',
+    COHOST: 'Coanfitrión',
+    MODERATOR: 'Moderador',
+    ATTENDEE: 'Asistente',
+    PARTICIPANT: 'Participante',
+    STUDENT: 'Estudiante',
+  });
+
+  const MEETING_ROLES = Object.freeze({
+    WEBINAR: Object.freeze(['HOST', 'COHOST', 'MODERATOR', 'PANELIST', 'ATTENDEE']),
+    SESSION: Object.freeze(['HOST', 'COHOST', 'MODERATOR', 'PARTICIPANT']),
+    CLASS: Object.freeze(['TEACHER', 'COHOST', 'MODERATOR', 'STUDENT']),
   });
 
   const MEETING_DEFAULTS = Object.freeze({
     description: '', trainerName: 'Capacitador por definir', durationMinutes: 60,
     type: 'WEBINAR', status: 'SCHEDULED', capacity: 100, allowChat: true,
     allowFiles: true, allowReactions: true, allowRaiseHand: true, allowRecording: false,
-    allowQuestions: true,
+    allowQuestions: true, allowPanelistScreenShare: true,
+    allowParticipantScreenShare: true, allowStudentScreenShare: false,
     recordingConsentRequired: false, allowTranscription: false,
     transcriptionConsentRequired: false, transcriptionLanguage: 'es',
     transcriptionRetentionDays: 90, allowPanelistTranscriptAccess: false,
-    deletedAt: null, cancelledAt: null, archivedAt: null,
+    deletedAt: null, cancelledAt: null, archivedAt: null, rolePolicyVersion: 1,
   });
 
   function validDate(value) {
@@ -113,9 +127,12 @@
       trainerName: typeof source.trainerName === 'string' && source.trainerName.trim() ? source.trainerName : 'Capacitador por definir',
       durationMinutes,
       capacity,
+      type: ['WEBINAR', 'SESSION', 'CLASS'].includes(String(source.meetingType || source.type || '').toUpperCase()) ? String(source.meetingType || source.type).toUpperCase() : 'WEBINAR',
       scheduledAt: scheduledDate ? scheduledDate.toISOString() : null,
       endsAt: endDate ? endDate.toISOString() : null,
     };
+    meeting.meetingType = meeting.type;
+    meeting.rolePolicyVersion = Number(source.rolePolicyVersion) >= 2 ? 2 : 1;
     for (const [name, fallback] of Object.entries(MEETING_DEFAULTS)) {
       if (typeof fallback === 'boolean' && typeof source[name] !== 'boolean') meeting[name] = fallback;
     }
@@ -156,6 +173,74 @@
 
   function roleLabel(role) {
     return ROLE_LABELS[String(role || '').toUpperCase()] || 'Participante';
+  }
+
+  function roleDescription(type, meetingRole) {
+    const role = normalizeMeetingRole(type, meetingRole);
+    const descriptions = {
+      HOST: 'Dirige la reunión, administra participantes y puede finalizarla para todos.',
+      TEACHER: 'Dirige la clase, administra estudiantes y puede finalizarla para todos.',
+      COHOST: 'Administra la sala y los participantes; la grabación queda reservada al anfitrión.',
+      MODERATOR: 'Modera el chat, las preguntas y las solicitudes de participación.',
+      PANELIST: 'Puede usar audio, cámara y pantalla, además de chat, preguntas y reacciones.',
+      ATTENDEE: 'Puede ver la transmisión, usar el chat, reaccionar y pedir la palabra.',
+      PARTICIPANT: 'Puede usar audio, cámara, pantalla, chat y reacciones.',
+      STUDENT: 'Puede usar audio, cámara, chat, preguntas y mano; la pantalla requiere autorización.',
+    };
+    return descriptions[role] || 'Acceso de participante con permisos definidos por la reunión.';
+  }
+
+  function defaultMeetingRole(type, legacyRole = 'VIEWER') {
+    const meetingType = MEETING_ROLES[type] ? type : 'WEBINAR';
+    const role = String(legacyRole || 'VIEWER').toUpperCase();
+    if (role === 'ADMIN' || role === 'ORGANIZER') return meetingType === 'CLASS' ? 'TEACHER' : 'HOST';
+    if (role === 'PANELIST') return meetingType === 'SESSION' ? 'PARTICIPANT' : meetingType === 'CLASS' ? 'STUDENT' : 'PANELIST';
+    return meetingType === 'SESSION' ? 'PARTICIPANT' : meetingType === 'CLASS' ? 'STUDENT' : 'ATTENDEE';
+  }
+
+  function normalizeMeetingRole(type, meetingRole, legacyRole) {
+    const meetingType = MEETING_ROLES[type] ? type : 'WEBINAR';
+    const requested = String(meetingRole || '').toUpperCase();
+    return MEETING_ROLES[meetingType].includes(requested) ? requested : defaultMeetingRole(meetingType, legacyRole);
+  }
+
+  function meetingRoleCapabilities(type, meetingRole) {
+    const role = normalizeMeetingRole(type, meetingRole);
+    const host = role === 'HOST' || role === 'TEACHER';
+    const cohost = role === 'COHOST';
+    const moderator = role === 'MODERATOR';
+    return {
+      canStartMeeting: host || cohost,
+      canEndMeeting: host || cohost,
+      canManageRoom: host || cohost,
+      canManageInvitations: host || cohost,
+      canManageParticipants: host || cohost,
+      canModerateChat: host || cohost || moderator,
+      canModerateQuestions: host || cohost || moderator,
+      canManageRecording: host,
+      canViewDiagnostics: host || cohost,
+      canUsePresenterPanel: role !== 'ATTENDEE',
+      canRaiseHand: !host && !cohost,
+    };
+  }
+
+  function meetingTiming(meeting = {}, now = Date.now()) {
+    const current = validDate(now)?.getTime() ?? Date.now();
+    const status = String(meeting.status || 'SCHEDULED').toUpperCase();
+    if (status === 'CANCELLED') return { state: 'cancelled', label: 'Cancelada', elapsedSeconds: 0, remainingSeconds: null };
+    if (['COMPLETED', 'ARCHIVED'].includes(status)) return { state: 'ended', label: 'Finalizada', elapsedSeconds: 0, remainingSeconds: 0 };
+    const startedCandidates = [validDate(meeting.startedAt), validDate(meeting.livekitConfirmedAt)].filter(Boolean).map((date) => date.getTime());
+    const started = startedCandidates.length ? Math.max(...startedCandidates) : null;
+    if (status !== 'LIVE' || !started) return { state: 'scheduled', label: 'Programada', elapsedSeconds: 0, remainingSeconds: null };
+    const elapsedSeconds = Math.max(0, Math.floor((current - started) / 1_000));
+    const durationSeconds = Math.max(60, Number(meeting.durationMinutes || 60) * 60);
+    return {
+      state: 'live',
+      label: 'En vivo',
+      elapsedSeconds,
+      remainingSeconds: Math.max(0, durationSeconds - elapsedSeconds),
+      overtime: elapsedSeconds > durationSeconds,
+    };
   }
 
   function roomConnectionErrorMessage(error = {}) {
@@ -259,10 +344,13 @@
       quality: 'unknown',
       locked: false,
       role: 'VIEWER',
+      meetingRole: 'ATTENDEE',
       mode: 'WEBINAR',
       chatMessages: [],
       chatDraft: '',
       participantItems: [],
+      activeSpeaker: null,
+      speakerMode: 'auto',
       ...initial,
     };
     const listeners = new Set();
@@ -296,6 +384,7 @@
   return {
     CONNECTION_STATES,
     MEETING_DEFAULTS,
+    MEETING_ROLES,
     RECORDING_STATES,
     ROLE_LABELS,
     ConnectionStateMachine,
@@ -304,10 +393,15 @@
     createFloatingModel,
     createUnreadCounter,
     calendarRange,
+    defaultMeetingRole,
     localDateKey,
     meetingsForLocalDay,
+    meetingRoleCapabilities,
+    meetingTiming,
     isLivePublication,
     normalizeMeeting,
+    normalizeMeetingRole,
+    roleDescription,
     roleLabel,
     roomConnectionErrorMessage,
     safeHttpUrl,
