@@ -1,6 +1,6 @@
 # Privacidad, grabación y transcripción
 
-Los asistentes deben aceptar el aviso de privacidad antes de recibir un token de conexión. Cuando una reunión exige consentimiento de grabación o transcripción, esas decisiones también se registran en la sesión firmada y en auditoría con fecha, sala y valores booleanos; nunca se guarda el token de invitación.
+Todos los accesos creados con la política de roles actual deben aceptar el aviso de privacidad antes de recibir un token de conexión. Cuando una reunión exige consentimiento de grabación o transcripción, esas decisiones también se registran en la sesión firmada y en auditoría con fecha, sala y valores booleanos; nunca se guarda el token de invitación. Solo las sesiones organizadoras históricas ya emitidas conservan su comportamiento previo para evitar una ruptura retroactiva.
 
 La interfaz distingue capacidad de estado real. Habilitar grabación en una reunión no muestra una grabación activa: el indicador aparece únicamente cuando LiveKit Egress confirma el estado `EGRESS_ACTIVE`. La notificación visible es **“Esta sesión está siendo grabada.”**
 

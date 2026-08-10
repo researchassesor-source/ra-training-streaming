@@ -6,15 +6,9 @@ Cada pestaña conserva un selector opaco de sesión de sala. Por eso un organiza
 
 ## Roles y modos
 
-| Función | Organizador | Panelista | Asistente |
-|---|---:|---:|---:|
-| Publicar cámara, micrófono y pantalla | Sí | Sí | Al recibir palabra |
-| Finalizar, bloquear, invitar, grabar | Sí | No | No |
-| Dar/quitar palabra, silenciar, expulsar, bloquear participante | Sí | No | No |
-| Moderar Q&A | Sí | Sí | No |
-| Chat, pregunta, voto y reacción | Según flags | Según flags | Según flags |
+`WEBINAR` usa HOST/COHOST/MODERATOR/PANELIST/ATTENDEE; `SESSION` usa HOST/COHOST/MODERATOR/PARTICIPANT; `CLASS` usa TEACHER/COHOST/MODERATOR/STUDENT. La publicación base y las capacidades están centralizadas en `meeting-permissions.js`, se incluyen por fuente en el JWT y se vuelven a validar en cada acción Express. La UI oculta acciones irrelevantes, pero no se usa como barrera de seguridad.
 
-`WEBINAR` reserva publicación para organizador/panelistas. La mano del organizador se oculta y la cola queda en Participantes. El asistente solicita palabra; no puede autopromoverse. `SESSION` representa reunión y `CLASS` conserva el mismo contrato seguro, ajustado por flags. La UI oculta o deshabilita acciones que el rol no puede ejecutar.
+ATTENDEE empieza sin cámara, micrófono o pantalla y puede recibir micrófono temporal. PANELIST publica cámara/micrófono y pantalla configurable. PARTICIPANT publica cámara/micrófono y pantalla configurable. STUDENT publica cámara/micrófono y solo comparte pantalla tras autorización. HOST/TEACHER controlan grabación; COHOST no. MODERATOR gestiona chat, Q&A y solicitudes sin finalizar ni grabar.
 
 ## Controles principales
 
@@ -34,15 +28,15 @@ El estado visual procede del track publicado y sus eventos, no del clic ni de la
 
 Al iniciar pantalla aparece un toast **Mantén los controles visibles mientras presentas**. La preferencia local **Abrir panel flotante al compartir** permite solicitar apertura automática desde ese gesto.
 
-Cuando `documentPictureInPicture` funciona solicita inicialmente una ventana de aproximadamente 680×86 y renderiza un dock de hasta 650×56 con estado, temporizador y acciones esenciales. El usuario puede expandirlo a la vista detallada con logo, título, conexión, calidad, bloqueo, participantes, manos, mensajes, preguntas pendientes, reacción reciente y grabación real. Incluye micrófono, cámara, detener pantalla, chat, preguntas, participantes, mano/ver manos, Más, Salir y volver. La preferencia compacta/expandida se conserva mientras vive la instancia.
+Cuando `documentPictureInPicture` funciona usa tres tamaños orientativos: Compacto 420×210, Completo 420×430 y Mínimo 300×72. Compacto combina la barra esencial con cámara/avatar, nombre y rol del hablante; Completo añade métricas y acciones; Mínimo deja una cápsula de estado. Automático sigue a LiveKit con debounce, Fijado conserva una persona elegida y Oculto elimina la miniatura. La cámara auxiliar está silenciada para evitar audio duplicado. Incluye micrófono, cámara, detener pantalla, chat, preguntas, participantes, mano/ver manos, Más, Salir y volver.
 
 Chat y Participantes se abren como popovers compactos desde el mismo botón que los cierra. Solo uno puede estar abierto, Escape o un clic exterior lo cierran, y `aria-expanded` refleja el estado. Chat conserva el borrador entre cierres, comparte el historial reciente y el estado enviado/fallido con la sala, usa Enter para enviar y Shift+Enter para nueva línea. Participantes muestra rol y estados reales de micrófono, cámara, pantalla, mano y permiso, con las mismas rutas seguras de moderación de la sala.
 
-Cerrar la ventana no altera reunión ni medios y el botón permite reabrirla. Si la API no existe, falla o cierra inmediatamente, se abre un panel arrastrable dentro de la reunión. Ese fallback conserva todos los controles, pero no puede permanecer sobre otra aplicación. No se promete “siempre encima” fuera de navegadores compatibles.
+Cerrar la ventana no altera reunión ni medios y el botón permite reabrirla. Al cerrar se desmontan listeners, track auxiliar y arrastre. Si la API no existe, falla o cierra inmediatamente, se abre un panel arrastrable dentro de la reunión. Ese fallback conserva los controles, pero no puede permanecer sobre otra aplicación. No se promete “siempre encima” fuera de navegadores compatibles.
 
 ## Panel lateral y chat
 
-Chat, Preguntas y Participantes comparten un panel. Cerrarlo añade `panel-closed` al layout, elimina la columna y entrega todo el ancho al escenario. En tablet el panel es lateral superpuesto y en móvil se comporta como hoja/pantalla completa sin destruir `Room`.
+Chat, Preguntas y Participantes comparten un panel. En móvil empieza cerrado; recibir mensajes solo incrementa el badge y nunca lo abre. Cerrarlo añade `panel-closed` al layout, elimina la columna y entrega todo el ancho al escenario. La preferencia se conserva durante la sesión. En tablet el panel es lateral superpuesto y en móvil se comporta como hoja/pantalla completa sin destruir `Room`.
 
 El compositor conserva borradores por tipo, dos líneas autoexpandibles, Enter para enviar, Shift+Enter para nueva línea, protección IME, límites de 2.000/600 caracteres, adjuntos validados, envío, fallo y reintento. Con el panel cerrado, mensajes incrementan contador y producen sonido/toast agrupado; en segundo plano también se solicita notificación del sistema si el usuario otorgó permiso.
 
@@ -66,7 +60,7 @@ La cola de manos conserva orden y hora. En Webinar organizador/panelista revisa 
 
 Reacciones disponibles: 👍, 👏, ❤️, 😂, 🎉 y ✅. Se retransmiten con identidad, tienen rate limit y animación breve que respeta `prefers-reduced-motion`.
 
-Los toasts usan `aria-live`, cierre y caducidad; eventos repetidos se agrupan. El botón de notificaciones diferencia solicitando, concedido, rechazado y no compatible. `Notification.requestPermission()` solo se ejecuta desde el clic. Sonidos, volumen y categorías se conservan localmente sin datos sensibles.
+Los toasts usan `aria-live`, cierre y caducidad; eventos repetidos se agrupan. El botón de notificaciones diferencia solicitando, concedido, rechazado y no compatible. `Notification.requestPermission()` solo se ejecuta desde el clic. El volumen global multiplica todas las pistas remotas actuales/futuras y cada participante tiene un factor individual; audio de pantalla usa el mismo camino y el micrófono local nunca cambia. Sonidos, volumen y categorías se conservan localmente sin datos sensibles.
 
 ## Estado, temporizador y red
 
@@ -99,6 +93,6 @@ La sala limita mensajes montados a 300 y el historial proyectado del dock a 60, 
 3. Probar chat bidireccional, Q&A, reacción, mano, promoción, moderación y bloqueos.
 4. Probar pantalla, evento `ended`, miniatura, audio, Document PiP o fallback y controles de medios.
 5. Probar conexión/reconexión, salir y finalizar.
-6. Revisar 360×640, 375×667, 390×844, 412×915, 768×1024, 1024×768, 1366×768 y 1920×1080 sin overflow.
+6. Revisar 360×640, 375×667, 390×844, 412×915, 768×1024, 1024×768, 1366×768, 1440×900 y 1920×1080 sin overflow.
 
 Limitaciones: una salida abrupta requiere webhook LiveKit para auditoría autoritativa; locks/rate limits en memoria requieren coordinación compartida con varias instancias; grabación y transcripción reales requieren Egress, almacenamiento y proveedor configurados; una herramienta automatizada no puede elegir de forma fiable el elemento del selector nativo de pantalla.

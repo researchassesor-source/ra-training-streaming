@@ -6,6 +6,7 @@
 
 - `auth.js`: usuarios, roles, scrypt, sesiones y revocación por versión.
 - `meetings.js`: modelo, validaciones y ciclo de vida de reuniones.
+- `meeting-permissions.js`: modalidades, roles canónicos, capacidades y fuentes LiveKit mínimas.
 - `invitations.js`: creación, hash, caducidad, usos y revocación.
 - `room-session.js`: identidad, rol y sala firmados en cookie HttpOnly.
 - `rooms.js`: registro de salas con política fail-closed.
@@ -67,18 +68,17 @@ Estados: `DRAFT` (Borrador), `SCHEDULED` (Programada), `LIVE` (En vivo confirmad
 
 ## Roles
 
-| Capacidad | ADMIN | ORGANIZER | PANELIST | VIEWER |
-|---|---:|---:|---:|---:|
-| Usuarios y auditoría | Sí | No | No | No |
-| Reuniones propias | Todas | Sí | No | No |
-| Iniciar/finalizar reunión | Sí | Sí | No | No |
-| Grabar | Sí | Sí | No | No |
-| Cámara/mic/pantalla | Sí | Sí | Sí | Solo al recibir palabra |
-| Ver cola y moderar Q&A | Sí | Sí | Sí | No |
-| Dar/quitar palabra y expulsar | Sí | Sí | No | No |
-| Chat/preguntas/reacciones | Según reunión | Según reunión | Según reunión | Según reunión |
+`ADMIN`, `ORGANIZER`, `PANELIST` y `VIEWER` se conservan como roles de cuenta/compatibilidad. Dentro de una sala se usa `meetingRole`, validado según la modalidad:
 
-Un ORGANIZER solo administra reuniones creadas por él o donde coincide con `trainerId`. ADMIN puede administrar todas.
+| Modalidad | Roles de sala |
+|---|---|
+| `WEBINAR` | `HOST`, `COHOST`, `MODERATOR`, `PANELIST`, `ATTENDEE` |
+| `SESSION` | `HOST`, `COHOST`, `MODERATOR`, `PARTICIPANT` |
+| `CLASS` | `TEACHER`, `COHOST`, `MODERATOR`, `STUDENT` |
+
+HOST/TEACHER controlan sala, participantes, invitaciones, grabación y finalización. COHOST administra sala/participantes/invitaciones/finalización, pero no grabación. MODERATOR gestiona chat, Q&A y solicitudes. PANELIST/PARTICIPANT/STUDENT publican según la modalidad y sus overrides por fuente; ATTENDEE empieza sin publicación y puede recibir micrófono temporal. Un ORGANIZER solo administra reuniones creadas por él o donde coincide con `trainerId`; ADMIN puede administrar todas.
+
+La autorización se repite en tres capas: capacidad de ruta Express, `canPublishSources` del token/actualización LiveKit y proyección visual. `rooms.js` persiste `roleOverrides` y `mediaGrants` por identidad. Los valores `false` son denegaciones explícitas, no ausencia de configuración.
 
 ## Persistencia
 
@@ -88,7 +88,9 @@ Para alto volumen o varias instancias, la evolución recomendada es PostgreSQL p
 
 ## Compatibilidad de datos históricos
 
-Toda lectura de reuniones pasa por `normalizeStoredMeeting` en `meetings.js`, tanto con almacenamiento local como con R2. La normalización es no destructiva: completa en memoria títulos, sala, entrenador, duración, capacidad, tipo, estado, permisos y timestamps ausentes, pero no reescribe el objeto histórico. Una migración persistente futura deberá ser explícita, versionada y respaldada.
+Toda lectura de reuniones pasa por `normalizeStoredMeeting` en `meetings.js`, tanto con almacenamiento local como con R2. La normalización es no destructiva: completa en memoria títulos, sala, entrenador, duración, capacidad, `meetingType`, política de roles, permisos y timestamps ausentes, pero no reescribe el objeto histórico. `rolePolicyVersion=1` identifica el fallback compatible; las reuniones nuevas usan versión 2. Una migración persistente futura deberá ser explícita, versionada y respaldada.
+
+Las invitaciones nuevas con `meetingRole` usan la matriz canónica. Un cliente histórico que solo envía `role=PANELIST|VIEWER` conserva `legacyAccess` y la semántica anterior. Los hashes HMAC nuevos y SHA-256 heredados se resuelven sin almacenar el token en claro.
 
 Las fechas inválidas se representan como ausencia de fecha y nunca como `Invalid Date`. El calendario agrupa por fecha local para evitar que una reunión cambie de día por conversión UTC; por ejemplo, una reunión local del 30 de julio permanece en el 30 de julio.
 

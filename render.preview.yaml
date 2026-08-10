@@ -3,7 +3,7 @@ services:
     name: ra-training-streaming-preview
     runtime: node
     plan: free
-    branch: feature/optimizacion-streaming-webinar
+    branch: feature/streaming-ux-roles-mobile
     autoDeploy: false
     buildCommand: npm ci && npm run build:track-processors
     startCommand: npm start

@@ -5,7 +5,7 @@
 - Cookies HttpOnly, SameSite=Lax, caducidad controlada y `Secure` obligatorio en Producción.
 - Token anti-CSRF para mutaciones administrativas y de sala.
 - Contraseñas con `crypto.scrypt`, sal aleatoria y comparación timing-safe.
-- Roles `ADMIN`, `ORGANIZER`, `PANELIST`, `VIEWER` evaluados en servidor.
+- Roles de cuenta `ADMIN`, `ORGANIZER`, `PANELIST`, `VIEWER` y roles canónicos por modalidad evaluados en servidor.
 - Sesiones revocables mediante `sessionVersion`; desactivar o cambiar contraseña invalida accesos.
 - Protección del bootstrap: no se lista hash, no se edita ni elimina desde la aplicación.
 - Invitaciones de 256 bits; almacenamiento solo del hash, expiración, revocación y máximo de usos.
@@ -25,6 +25,7 @@
 - Cada acceso a sala emite una cookie HttpOnly firmada con nombre único y un selector opaco por pestaña. `X-Room-Session-ID` solo selecciona la cookie; no reemplaza firma, expiración, rol, sala ni CSRF.
 - Los errores de sesión y CSRF distinguen ausencia, expiración e incompatibilidad de token sin incluir cookies, firmas ni valores CSRF en respuestas o logs.
 - Conceder palabra persiste una autorización de publicación limitada a esa identidad y sala para que sobreviva a una reconexión; quitar palabra, expulsar o bloquear la revoca.
+- Los JWT y actualizaciones LiveKit usan `canPublishSources` mínimas; cambiar rol o conceder/retirar cámara, micrófono o pantalla se revalida, persiste y audita.
 - Deepgram usa exclusivamente `https://api.deepgram.com/v1/listen`, hostname/path exactos y `Authorization: Token`; configuración con credenciales en URL, query o fragmento se rechaza.
 - La resolución DNS del endpoint se valida en Preview/Producción contra loopback, privadas y link-local; `redirect: error` evita saltos a otro destino.
 - La URL R2 para Deepgram caduca entre 300 y 900 segundos, no se persiste ni se devuelve en la API de transcripción.
@@ -32,7 +33,7 @@
 
 ## Políticas de roles
 
-ADMIN tiene control global. ORGANIZER solo administra reuniones propias o asignadas y no puede crear ADMIN. PANELIST controla medios y modera manos dentro de su sesión de sala, pero no usuarios ni grabaciones. VIEWER recibe publicación de audio/video solo cuando un moderador concede la palabra.
+ADMIN tiene control global. ORGANIZER solo administra reuniones propias o asignadas y no puede crear ADMIN. En sala, HOST/TEACHER y COHOST poseen capacidades administrativas explícitas; MODERATOR limita su alcance a chat/Q&A/solicitudes; PANELIST, PARTICIPANT y STUDENT no reciben acciones destructivas; ATTENDEE empieza sin fuentes de publicación. Un cambio de parámetros del navegador no puede elevar el rol porque invitación, sesión y acción se validan en el servidor.
 
 ## Encabezados
 
@@ -50,7 +51,7 @@ Express emite `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `P
 
 ## Auditoría de reunión
 
-Se registran entrada, salida explícita, reconexión, pantalla iniciada/detenida, micrófono silenciado, petición/aceptación/rechazo/fallo de micrófono, concesión/revocación de palabra, rechazo de mano, promoción, degradación, expulsión/bloqueo, bloqueo de sala, preguntas creadas/respondidas/descartadas, grabación y finalización. No se guardan textos completos del chat ni de las preguntas en auditoría. Una salida abrupta sin petición HTTP depende de futura integración de webhooks LiveKit para quedar registrada de forma autoritativa.
+Se registran entrada, salida explícita, reconexión, pantalla iniciada/detenida, micrófono silenciado, petición/aceptación/rechazo/fallo de micrófono, concesión/revocación de palabra, cambio de rol, concesión/revocación de fuentes, rechazo de mano, promoción, degradación, expulsión/bloqueo, bloqueo de sala, preguntas creadas/respondidas/descartadas, grabación y finalización. No se guardan textos completos del chat ni de las preguntas en auditoría. Una salida abrupta sin petición HTTP depende de futura integración de webhooks LiveKit para quedar registrada de forma autoritativa.
 
 ## Respuesta a incidentes
 

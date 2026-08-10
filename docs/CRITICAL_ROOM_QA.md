@@ -40,7 +40,7 @@ Esta matriz reproduce las regresiones corregidas sin depender de Producción.
 3. Abrir Chat desde el dock, escribir sin enviar, cerrar con el mismo botón y reabrir: el borrador debe conservarse.
 4. Enviar con Enter, insertar una línea con Shift+Enter y comprobar estados enviado/fallido. Reabrir el dock no debe duplicar mensajes ni listeners.
 5. Abrir Participantes mientras Chat está abierto: debe quedar un solo popover. Probar solicitar micrófono, dar/quitar palabra y **Más**; Escape y clic exterior deben cerrar.
-6. Medir el dock en escritorio y móvil: hasta 650×56, sin scroll horizontal ni solapamiento de controles.
+6. Medir el panel en escritorio y móvil: compacto 420×210, completo 420×430 y mínimo 300×72 como tamaños orientativos, sin scroll horizontal ni solapamiento de controles.
 
 ## Responsive
 

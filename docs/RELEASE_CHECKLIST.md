@@ -2,7 +2,7 @@
 
 ## Antes de commit
 
-- [ ] Rama actual: `feature/optimizacion-streaming-webinar`.
+- [ ] Rama actual: `feature/streaming-ux-roles-mobile`.
 - [ ] `.env` y `.local-data/` no aparecen en `git status`.
 - [ ] `node --check` pasa para todos los módulos de servidor y frontend modificados.
 - [ ] `npm test` pasa sin tests omitidos ni falsos positivos.
@@ -16,7 +16,7 @@
 
 Ejecutar solo cuando el alcance de la entrega lo autorice expresamente. Esta lista nunca autoriza Producción.
 
-1. Crear Preview desde `feature/optimizacion-streaming-webinar` con `render.preview.yaml`, nunca desde `main` ni con `render.yaml`.
+1. Crear Preview desde `feature/streaming-ux-roles-mobile` con `render.preview.yaml`, nunca desde `main` ni con `render.yaml`.
 2. Configurar `APP_ENV=preview`, URL pública HTTPS, secretos de sesión/invitación y bootstrap exclusivos.
 3. Usar LiveKit, bucket R2/S3 y proveedor de transcripción de prueba; nunca credenciales o datos de Producción.
 4. Confirmar el aislamiento antes de definir `PREVIEW_ISOLATION_ACK=true`.
@@ -56,7 +56,9 @@ Ejecutar solo cuando el alcance de la entrega lo autorice expresamente. Esta lis
 - [ ] PANELIST respeta el permiso de consulta; VIEWER recibe 403; ninguna respuesta o log expone claves ni `providerJobId`.
 - [ ] El detalle de transcripción no expone URL R2; bucket permanece privado y la URL enviada al proveedor caduca en 5–15 minutos.
 - [ ] Probar búsqueda, filtro de participante, timestamps, confianza, nombres desconocidos y cambios sin guardar.
-- [ ] Document PiP abre con dock compacto de hasta 650×56, expande/contrae, controla mic/cámara/pantalla/paneles/salida, cierra sin desconectar y reabre compacto; fallback interno completo y mensaje honesto.
+- [ ] Document PiP abre en modo compacto 420×210, completo 420×430 y mínimo 300×72 (tamaños orientativos); controla medios/paneles/salida, cierra sin desconectar y conserva un fallback interno honesto.
+- [ ] Hablante activo cambia con estabilidad, se puede fijar u ocultar y la miniatura adicional permanece silenciada para no duplicar audio.
+- [ ] Volumen global afecta pistas actuales/futuras y audio de pantalla; volumen individual solo modifica a la persona elegida.
 - [ ] Popovers del dock: Chat y Participantes alternan con su mismo botón, son mutuamente excluyentes, cierran con Escape/clic exterior y conservan borrador e historial sin duplicar listeners.
 - [ ] Cerrar Chat/Preguntas/Participantes elimina la columna y expande inmediatamente el escenario.
 - [ ] Pantalla real en spotlight, vídeo con `srcObject`, una miniatura de hablante activo con prioridad remota/debounce/fallback local/avatar, audio veraz y recuperación al silenciar, despublicar o terminar desde el navegador.

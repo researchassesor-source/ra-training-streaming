@@ -13,7 +13,7 @@ Plataforma web para webinars, clases y sesiones en vivo de R.A. Training. Combin
 
 Los tokens de invitación nuevos se guardan como HMAC-SHA-256 con un secreto independiente. Los hashes SHA-256 históricos siguen siendo legibles para no romper invitaciones antiguas. Al abrir `/i/<token>`, el servidor valida expiración, revocación y usos, crea una cookie HttpOnly de sala y redirige a una URL sin token. El navegador nunca decide su rol, sala ni identidad LiveKit.
 
-Consulta [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md), [Seguridad](docs/SECURITY.md), [Preview aislado](docs/PREVIEW_DEPLOYMENT.md) y [Promoción a Producción](docs/PRODUCTION_PROMOTION.md) para el diseño completo.
+Consulta [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [contrato Streaming UX](docs/STREAMING_UX_RELEASE.md), [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md), [Seguridad](docs/SECURITY.md), [Preview aislado](docs/PREVIEW_DEPLOYMENT.md) y [Promoción a Producción](docs/PRODUCTION_PROMOTION.md) para el diseño completo.
 
 ## Experiencia de reunión
 
@@ -23,6 +23,9 @@ Consulta [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [Arquitectura](d
 - Q&A persistente con edición propia pendiente, votos, respuesta escrita/en vivo, destacado, descarte y orden por votos o fecha.
 - Bloqueo reversible de sala, invitaciones creadas dentro de la reunión, moderación con consentimiento, reacciones, toasts agrupados, notificaciones y atajos.
 - Temporizador desde conexión confirmada, calidad de red de LiveKit y grabación mostrada únicamente cuando Egress confirma `RECORDING`.
+- Perfiles reales de Webinar, Sesión y Clase con roles canónicos, invitaciones por rol y permisos LiveKit mínimos por fuente.
+- Prejoin seguro desde 360 px, chat móvil cerrado por defecto, estados multimedia textuales y volumen real global/individual para pistas actuales y futuras.
+- Panel del presentador completo/compacto/mínimo con hablante activo automático, fijado u oculto, sin duplicar audio ni reconectar la sala.
 
 ## Requisitos
 
@@ -108,6 +111,7 @@ npm test
 npm run build:track-processors
 node --check server\index.js
 git diff --check
+powershell -File scripts\livekit-load-preview.ps1 # solo plan; no genera conexiones
 ```
 
 `npm test` usa `node:test`, servidores HTTP efímeros, almacenamiento temporal y servicios LiveKit/transcripción simulados. Cubre compatibilidad legada, bloqueo, Q&A, controles flotantes, notificaciones, grabación, permisos, exportaciones y sanitización sin tocar Producción.

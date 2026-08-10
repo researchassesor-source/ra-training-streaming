@@ -1,6 +1,6 @@
 # Preview aislado
 
-`render.preview.yaml` describe un servicio independiente para la rama `feature/optimizacion-streaming-webinar`. No modifica `render.yaml`, no comparte nombre con el servicio existente y tiene despliegue automático desactivado.
+`render.preview.yaml` describe un servicio independiente para la rama `feature/streaming-ux-roles-mobile`. No modifica `render.yaml`, no comparte nombre con el servicio existente y tiene despliegue automático desactivado.
 
 ## Barreras de arranque
 
