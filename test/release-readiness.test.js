@@ -86,6 +86,24 @@ test('Preview configuration fails closed until every isolated real integration i
   assert.ok(validateRuntimeConfig({ ...validPreview, livekitWsUrl: 'wss://' }).some((message) => message.includes('LiveKit')));
 });
 
+test('Preview reports the Render commit while Production keeps an explicit application version', () => {
+  const script = "console.log(require('./server/config').config.appVersion)";
+  const baseEnv = {
+    ...process.env,
+    NODE_ENV: 'production',
+    APP_VERSION: 'shared-stale-version',
+    RENDER_GIT_COMMIT: 'current-render-commit',
+  };
+  const previewVersion = execFileSync(process.execPath, ['-e', script], {
+    cwd: path.join(__dirname, '..'), env: { ...baseEnv, APP_ENV: 'preview' }, encoding: 'utf8',
+  }).trim();
+  const productionVersion = execFileSync(process.execPath, ['-e', script], {
+    cwd: path.join(__dirname, '..'), env: { ...baseEnv, APP_ENV: 'production' }, encoding: 'utf8',
+  }).trim();
+  assert.equal(previewVersion, 'current-render-commit');
+  assert.equal(productionVersion, 'shared-stale-version');
+});
+
 test('safe diagnostics redact credential-shaped metadata recursively', () => {
   assert.deepEqual(safeMetadata({ room: 'training', nested: { apiKey: 'secret-value', token: 'token-value' } }), {
     room: 'training', nested: { apiKey: '[redacted]', token: '[redacted]' },

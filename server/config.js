@@ -45,6 +45,10 @@ const appDisplayEnv = String(process.env.APP_DISPLAY_ENV || ({
 const configuredPublicUrl = normalizePublicUrl(process.env.APP_PUBLIC_URL);
 const appPublicUrl = configuredPublicUrl || (isProductionLike ? '' : `http://localhost:${port}`);
 const sessionSecret = process.env.SESSION_SECRET || 'dev-insecure-secret-change-me';
+const renderGitCommit = String(process.env.RENDER_GIT_COMMIT || '').trim();
+const configuredAppVersion = appEnv === 'preview'
+  ? (renderGitCommit || process.env.APP_VERSION)
+  : (process.env.APP_VERSION || renderGitCommit);
 
 const config = {
   nodeEnv,
@@ -52,7 +56,7 @@ const config = {
   appDisplayEnv,
   appName: String(process.env.APP_NAME || 'R.A. Training Streaming').trim(),
   appPublicUrl,
-  appVersion: String(process.env.APP_VERSION || process.env.RENDER_GIT_COMMIT || (appEnv === 'development' ? 'desarrollo' : 'sin-versión')).trim().slice(0, 64),
+  appVersion: String(configuredAppVersion || (appEnv === 'development' ? 'desarrollo' : 'sin-versión')).trim().slice(0, 64),
   appTimeZone: String(process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
   appTimeZoneLabel: String(process.env.APP_TIME_ZONE_LABEL || process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
   noIndex: appEnv === 'preview',
