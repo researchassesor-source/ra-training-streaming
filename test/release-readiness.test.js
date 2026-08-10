@@ -13,7 +13,7 @@ process.env.SESSION_SECRET = 'test-session-secret-with-more-than-32-characters';
 process.env.INVITATION_HASH_SECRET = 'test-invitation-secret-with-more-than-32-characters';
 
 const { config, validateRuntimeConfig } = require('../server/config');
-const { invitationSharePayload } = require('../server/invitation-message');
+const { invitationSharePayload, meetingSchedule } = require('../server/invitation-message');
 const { safeMetadata } = require('../server/logger');
 const { HttpTranscriptionProvider, isPrivateAddress } = require('../server/transcription-provider');
 const { safeRequestPath } = require('../server/app');
@@ -45,6 +45,12 @@ test('panelist invitation explains private publishing permissions', () => {
   assert.match(payload.message, /panelista/i);
   assert.match(payload.message, /audio, cámara y pantalla/i);
   assert.match(payload.message, /No lo compartas públicamente/i);
+});
+
+test('an unscheduled draft invitation never falls back to the Unix epoch', () => {
+  const schedule = meetingSchedule({ scheduledAt: null });
+  assert.equal(schedule.date, 'Por confirmar');
+  assert.equal(schedule.time, 'Por confirmar');
 });
 
 test('Preview configuration fails closed until every isolated real integration is acknowledged', () => {
@@ -125,7 +131,7 @@ test('HTTP transcription health distinguishes configured from remotely available
 test('Preview Blueprint is isolated, manual and cannot silently fall back to mocks', () => {
   const blueprint = fs.readFileSync(path.join(__dirname, '..', 'render.preview.yaml'), 'utf8');
   assert.match(blueprint, /name: ra-training-streaming-preview/);
-  assert.match(blueprint, /branch: feature\/optimizacion-streaming-webinar/);
+  assert.match(blueprint, /branch: feature\/streaming-ux-roles-mobile/);
   assert.match(blueprint, /autoDeploy: false/);
   assert.match(blueprint, /healthCheckPath: \/health/);
   assert.match(blueprint, /key: APP_ENV\s+value: preview/);
@@ -133,6 +139,17 @@ test('Preview Blueprint is isolated, manual and cannot silently fall back to moc
   assert.match(blueprint, /key: TRANSCRIPTION_API_URL\s+value: https:\/\/api\.deepgram\.com\/v1\/listen/);
   assert.match(blueprint, /key: TRANSCRIPTION_ALLOWED_HOSTS\s+value: api\.deepgram\.com/);
   assert.doesNotMatch(blueprint, /value: mock/);
+});
+
+test('load harness is Preview-only, staged and high-cost guarded', () => {
+  const harness = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'livekit-load-preview.ps1'), 'utf8');
+  assert.match(harness, /ValidateSet\(25, 50, 100, 250, 500, 750, 1000\)/);
+  assert.match(harness, /APP_ENV -ne "preview"/);
+  assert.match(harness, /LOAD_TEST_ALLOWED_HOST/);
+  assert.match(harness, /LOAD_TEST_PREVIEW_ACK/);
+  assert.match(harness, /Subscribers -ge 100[\s\S]*ApproveHighCost/);
+  assert.match(harness, /lk[\s\S]*load-test/);
+  assert.doesNotMatch(harness, /productionAllowed\s*=\s*\$true/);
 });
 
 test('Preview responses enforce noindex, HSTS and Secure room cookies', () => {

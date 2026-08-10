@@ -107,7 +107,7 @@ test('official logo and optimized derivatives exist and all required surfaces re
     recordings: fs.readFileSync(path.join(publicDir, 'recordings.html'), 'utf8'),
   };
   for (const [surface, source] of Object.entries(references)) assert.match(source, /streaming-app-logo|icon-192|favicon-32|mascot-login/, surface);
-  assert.match(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'), /icon-512\.png/);
+  assert.match(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'), /streaming-app-logo-512\.png/);
   const brandSource = fs.readFileSync(path.join(publicDir, 'brand.js'), 'utf8');
   const visibleBrandSources = [brandSource, fs.readFileSync(path.join(publicDir, 'sounds.js'), 'utf8'), references.login].join('\n');
   assert.doesNotMatch(visibleBrandSources, /assets\/logo\.png|assets\/mascot\.png/);
@@ -142,8 +142,10 @@ test('media controls time out safely and block duplicate screen-share requests',
 
 test('preflight stays visible until LiveKit connects and exposes a retry on failure', () => {
   const roomUi = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
-  assert.match(roomUi, /privacyConsent\.disabled = !viewer/);
-  assert.match(roomUi, /privacyConsent\.required = false/);
+  assert.match(roomUi, /privacyConsent\.disabled = false/);
+  assert.match(roomUi, /privacyConsent\.required = true/);
+  assert.match(roomUi, /requiredConsentsAccepted/);
+  assert.match(roomUi, /preflightSpeakerTest/);
   assert.match(roomUi, /await connectRoom\(\{ joinCamera, joinMicrophone \}\);[\s\S]*preflightDialog'\)\.close\(\)/);
   assert.match(roomUi, /button\.textContent = shouldRetry \? 'Reintentar conexión'/);
   assert.match(roomUi, /RATCore\.roomConnectionErrorMessage\(requestError\)/);

@@ -32,8 +32,11 @@ test('floating controls synchronize every critical state and fall back inside th
   assert.match(source, /if \(fallback\)[\s\S]*?model\.subscribe/);
   assert.match(source, /let mode = 'compact'/);
   assert.match(source, /data-mode="\$\{mode\}"/);
-  assert.match(source, /applyMode\(documentRef, mode === 'compact' \? 'expanded' : 'compact'\)/);
-  assert.match(source, /requestWindow\(\{ width: mode === 'compact' \? 680 : 460/);
+  assert.match(source, /mode === 'compact' \? 'full' : mode === 'full' \? 'minimal' : 'compact'/);
+  assert.match(source, /compact: \[420, 210\][\s\S]*full: \[420, 430\][\s\S]*minimal: \[300, 72\]/);
+  assert.match(source, /requestWindow\(\{ width: sizes\[mode\]\[0\], height: sizes\[mode\]\[1\] \}\)/);
+  assert.match(source, /companion-speaker/);
+  assert.match(source, /renderActiveSpeaker/);
   assert.match(source, /companion-popover/);
   assert.match(source, /setPopover\(documentRef, 'chat'\)/);
   assert.match(source, /setPopover\(documentRef, 'participants'\)/);
@@ -63,6 +66,8 @@ test('stage renders one debounced active-speaker mini while screen sharing and c
   assert.match(css, /\.video-tile\.has-video \.video-avatar\s*\{\s*display:\s*none/);
   assert.match(css, /\.active-speaker-mini/);
   assert.match(css, /\.active-speaker-mini\.is-speaking/);
+  assert.match(css, /\.companion-speaker/);
+  assert.match(css, /data-mode="minimal"/);
 });
 
 test('side panel collapse, mobile controls and reduced motion are explicit', () => {
@@ -74,6 +79,34 @@ test('side panel collapse, mobile controls and reduced motion are explicit', () 
   assert.match(css, /\.mobile-only\s*\{\s*display:\s*none/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /outline:\s*3px solid/);
+});
+
+test('new mobile, media and invitation contracts are explicit and accessible', () => {
+  const room = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
+  const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
+  const dashboard = fs.readFileSync(path.join(publicDir, 'dashboard.js'), 'utf8');
+  const dashboardHtml = fs.readFileSync(path.join(publicDir, 'dashboard.html'), 'utf8');
+  const presenter = fs.readFileSync(path.join(publicDir, 'presenter.html'), 'utf8');
+  const viewer = fs.readFileSync(path.join(publicDir, 'viewer.html'), 'utf8');
+  assert.match(room, /matchMedia\?\.\('\(max-width: 700px\)'\)[\s\S]*closeSidePanel\(\)/);
+  assert.match(room, /sessionStorage\.setItem\('rat:room-side-panel', 'closed'\)/);
+  assert.match(room, /if \(ui\.activeTab !==[\s\S]*counter\.increment\(\)/);
+  assert.match(css, /button\[data-media-state="active"\][^{]*\{[^}]*var\(--brand-orange\)/);
+  assert.match(css, /button\[data-media-state="locked"\][^{]*\{[^}]*#4d5668/);
+  assert.match(css, /data-media-state="locked"\][^:]*::after[^}]*🔒/);
+  assert.match(css, /@media \(max-width: 370px\)/);
+  assert.match(css, /safe-area-inset-left/);
+  assert.match(presenter, /id="preflightRole"/);
+  assert.match(presenter, /id="preflightType"/);
+  assert.match(presenter, /id="preflightSpeakerTest"/);
+  assert.match(presenter, /id="screenCompatibilityHelp"/);
+  assert.match(viewer, /id="chatControlUnread"[^>]*aria-label="Mensajes nuevos"/);
+  assert.match(room, /updateCounter\('chatControlUnread', count\)/);
+  assert.match(room, /speakerModeLabel'\)\.hidden = !canUsePresenterPanel/);
+  assert.match(room, /recordingHelp'\)\.hidden = !ui\.session\.capabilities\?\.canManageRecording/);
+  assert.match(dashboard, /RATCore\.MEETING_ROLES\[meeting\.type\]/);
+  assert.match(dashboard, /meetingRole: role/);
+  assert.match(dashboardHtml, /id="openInvitationLink"/);
 });
 
 test('meeting notifier groups repeated toasts and reports permission states', async () => {

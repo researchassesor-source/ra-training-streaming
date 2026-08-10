@@ -565,6 +565,46 @@ test('invitation redemption removes the token from the URL and creates a room co
   mockRoomService.participants = [];
 });
 
+test('canonical invitations bind modality and role, force privileged single use and ignore URL tampering', async () => {
+  const admin = await login();
+  const meeting = await meetings.createMeeting({
+    title: 'Clase con accesos canÃ³nicos', room: 'clase-accesos-canonicos', trainerName: 'Docente',
+    scheduledAt: null, durationMinutes: 45, status: 'LIVE', type: 'CLASS', createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const teacher = await request(`/api/meetings/${meeting.room}/invitations`, {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: { meetingRole: 'TEACHER', singleUse: false, expiresInMinutes: 60 },
+  });
+  assert.equal(teacher.response.status, 201, JSON.stringify(teacher.data));
+  assert.equal(teacher.data.invitation.meetingRole, 'TEACHER');
+  assert.equal(teacher.data.invitation.role, 'ORGANIZER');
+  assert.equal(teacher.data.invitation.maxUses, 1);
+  assert.match(teacher.data.message, /Docente/i);
+  const invalid = await request(`/api/meetings/${meeting.room}/invitations`, {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: { meetingRole: 'HOST', expiresInMinutes: 60 },
+  });
+  assert.equal(invalid.response.status, 400);
+
+  const student = await request(`/api/meetings/${meeting.room}/invitations`, {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: { meetingRole: 'STUDENT', expiresInMinutes: 60 },
+  });
+  assert.equal(student.response.status, 201, JSON.stringify(student.data));
+  assert.equal(student.data.invitation.meetingRole, 'STUDENT');
+  const redemption = await request(`${student.data.path}?meetingRole=TEACHER&role=ORGANIZER`, { redirect: 'manual' });
+  assert.equal(redemption.response.status, 303);
+  assert.match(redemption.response.headers.get('location'), /^\/presenter\.html\?roomSession=/);
+  const roomSessionId = new URL(redemption.response.headers.get('location'), baseUrl).searchParams.get('roomSession');
+  const session = await request('/api/room-session', { cookie: redemption.cookies.join('; '), roomSessionId });
+  assert.equal(session.response.status, 200, JSON.stringify(session.data));
+  assert.equal(session.data.meetingRole, 'STUDENT');
+  assert.equal(session.data.role, 'PANELIST');
+  assert.equal(session.data.consentRequired, true);
+  assert.deepEqual(session.data.publishSources.sort(), ['CAMERA', 'MICROPHONE'].sort());
+});
+
 test('viewer consent is persisted and required before issuing a LiveKit token', async () => {
   const meeting = await meetings.createMeeting({
     title: 'Consentimiento verificable', room: 'consentimiento-verificable', trainerName: 'Trainer', scheduledAt: null,
@@ -594,6 +634,90 @@ test('viewer consent is persisted and required before issuing a LiveKit token', 
   const events = await audit.listEvents({ room: meeting.room, action: 'PARTICIPANT_CONSENT_RECORDED' });
   assert.equal(events.length, 1);
   assert.deepEqual({ privacy: events[0].metadata.privacy, recording: events[0].metadata.recording, transcription: events[0].metadata.transcription }, { privacy: true, recording: true, transcription: true });
+});
+
+test('canonical roles block escalation and update LiveKit publication sources in real time', async () => {
+  const meeting = await meetings.createMeeting({
+    title: 'Webinar con funciones', room: 'webinar-funciones', trainerName: 'Trainer', scheduledAt: null,
+    durationMinutes: 60, status: 'LIVE', type: 'WEBINAR', createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const host = createRoomSession({
+    room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingType: 'WEBINAR',
+    meetingRole: 'HOST', legacyAccess: false, displayName: 'AnfitriÃ³n',
+  });
+  const attendee = createRoomSession({
+    room: meeting.room, meetingId: meeting.id, role: 'VIEWER', meetingType: 'WEBINAR',
+    meetingRole: 'ATTENDEE', legacyAccess: false, displayName: 'Asistente',
+  });
+  const cohost = createRoomSession({
+    room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingType: 'WEBINAR',
+    meetingRole: 'COHOST', legacyAccess: false, displayName: 'Coanfitrión',
+  });
+  const cookieJar = [
+    roomCookie(host.token, host.session.sid).split(';')[0],
+    roomCookie(attendee.token, attendee.session.sid).split(';')[0],
+    roomCookie(cohost.token, cohost.session.sid).split(';')[0],
+  ].join('; ');
+  mockRoomService.participants = [
+    { identity: host.session.identity, metadata: JSON.stringify({ meetingRole: 'HOST', meetingType: 'WEBINAR' }), permission: { canPublish: true }, tracks: [] },
+    { identity: attendee.session.identity, metadata: JSON.stringify({ meetingRole: 'ATTENDEE', meetingType: 'WEBINAR' }), permission: { canPublish: false }, tracks: [] },
+    { identity: cohost.session.identity, metadata: JSON.stringify({ meetingRole: 'COHOST', meetingType: 'WEBINAR' }), permission: { canPublish: true }, tracks: [] },
+  ];
+  mockRoomService.updates = [];
+  const consent = await request('/api/room-session/consent', {
+    method: 'POST', cookie: cookieJar, roomSessionId: attendee.session.sid, roomCsrf: attendee.session.csrf,
+    body: { privacy: true, recording: false, transcription: false },
+  });
+  assert.equal(consent.response.status, 200, JSON.stringify(consent.data));
+  const attendeeToken = await request('/api/token', { cookie: consent.cookie, roomSessionId: attendee.session.sid });
+  assert.equal(attendeeToken.response.status, 200, JSON.stringify(attendeeToken.data));
+  assert.deepEqual(attendeeToken.data.publishSources, []);
+  const jwtPayload = JSON.parse(Buffer.from(attendeeToken.data.token.split('.')[1], 'base64url').toString('utf8'));
+  assert.equal(jwtPayload.video.canPublish, false);
+  assert.deepEqual(jwtPayload.video.canPublishSources || [], []);
+
+  const escalated = await request('/api/participants/role', {
+    method: 'POST', cookie: cookieJar, roomSessionId: attendee.session.sid, roomCsrf: attendee.session.csrf,
+    body: { targetIdentity: host.session.identity, meetingRole: 'COHOST' },
+  });
+  assert.equal(escalated.response.status, 403);
+  const primaryProtected = await request('/api/participants/role', {
+    method: 'POST', cookie: cookieJar, roomSessionId: cohost.session.sid, roomCsrf: cohost.session.csrf,
+    body: { targetIdentity: host.session.identity, meetingRole: 'ATTENDEE' },
+  });
+  assert.equal(primaryProtected.response.status, 409);
+  assert.equal(primaryProtected.data.code, 'PRIMARY_ROLE_PROTECTED');
+  const changed = await request('/api/participants/role', {
+    method: 'POST', cookie: cookieJar, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { targetIdentity: attendee.session.identity, meetingRole: 'PANELIST' },
+  });
+  assert.equal(changed.response.status, 200, JSON.stringify(changed.data));
+  assert.deepEqual(changed.data.publishSources.sort(), ['CAMERA', 'MICROPHONE', 'SCREEN_SHARE', 'SCREEN_SHARE_AUDIO'].sort());
+  assert.ok(mockRoomService.updates.at(-1).update.permission.canPublishSources.length >= 4);
+  assert.match(mockRoomService.updates.at(-1).update.metadata, /"meetingRole":"PANELIST"/);
+  assert.equal((await rooms.participantAccess(meeting.room, attendee.session.identity)).meetingRole, 'PANELIST');
+
+  const revoked = await request('/api/participants/permissions', {
+    method: 'POST', cookie: cookieJar, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { targetIdentity: attendee.session.identity, source: 'screen', granted: false },
+  });
+  assert.equal(revoked.response.status, 200, JSON.stringify(revoked.data));
+  assert.ok(revoked.data.publishSources.includes('MICROPHONE'));
+  assert.ok(revoked.data.publishSources.includes('CAMERA'));
+  assert.equal(revoked.data.publishSources.includes('SCREEN_SHARE'), false);
+  assert.equal((await rooms.participantAccess(meeting.room, attendee.session.identity)).grants.screen, false);
+  const degraded = await request('/api/participants/role', {
+    method: 'POST', cookie: cookieJar, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { targetIdentity: attendee.session.identity, meetingRole: 'ATTENDEE' },
+  });
+  assert.equal(degraded.response.status, 200, JSON.stringify(degraded.data));
+  assert.deepEqual(degraded.data.publishSources, []);
+  assert.deepEqual((await rooms.participantAccess(meeting.room, attendee.session.identity)).grants, {});
+  const events = await audit.listEvents({ room: meeting.room, limit: 100 });
+  assert.ok(events.some((event) => event.action === 'PARTICIPANT_ROLE_CHANGED' && event.target === attendee.session.identity));
+  assert.ok(events.some((event) => event.action === 'MEDIA_PERMISSION_REVOKED' && event.target === attendee.session.identity));
+  mockRoomService.participants = [];
 });
 
 test('health diagnostics expose identity and availability without credentials', async () => {

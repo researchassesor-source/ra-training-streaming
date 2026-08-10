@@ -12,10 +12,14 @@ const {
   safeHttpUrl,
   calendarRange,
   meetingsForLocalDay,
+  meetingRoleCapabilities,
+  meetingTiming,
   isLivePublication,
+  normalizeMeetingRole,
+  roleDescription,
   upcomingMeetings,
 } = require('../public/app-core');
-const { classifyTrackSource, selectActiveSpeaker } = require('../public/stage');
+const { attachRemoteStageEvents, classifyTrackSource, effectiveRemoteVolume, selectActiveSpeaker } = require('../public/stage');
 const { partitionQuestionFlow } = require('../public/questions');
 const { nextPasswordType } = require('../public/password-toggle');
 
@@ -81,6 +85,82 @@ test('active speaker selection prefers a remote speaker and falls back stably to
   assert.equal(selectActiveSpeaker(participants, ['local', 'remote-a']), 'remote-a');
   assert.equal(selectActiveSpeaker(participants, ['remote-b']), 'local');
   assert.equal(selectActiveSpeaker(participants, []), 'local');
+});
+
+test('meeting profiles expose canonical roles and least-privilege capabilities', () => {
+  assert.equal(normalizeMeetingRole('WEBINAR', 'ATTENDEE'), 'ATTENDEE');
+  assert.equal(normalizeMeetingRole('SESSION', '', 'VIEWER'), 'PARTICIPANT');
+  assert.equal(normalizeMeetingRole('CLASS', '', 'ORGANIZER'), 'TEACHER');
+  assert.equal(meetingRoleCapabilities('WEBINAR', 'ATTENDEE').canManageParticipants, false);
+  assert.equal(meetingRoleCapabilities('WEBINAR', 'MODERATOR').canModerateQuestions, true);
+  assert.equal(meetingRoleCapabilities('CLASS', 'TEACHER').canManageRecording, true);
+  assert.match(roleDescription('CLASS', 'STUDENT'), /pantalla requiere autorizaci.n/i);
+});
+
+test('meeting timer starts from confirmed live time and handles terminal states', () => {
+  const live = meetingTiming({
+    status: 'LIVE', durationMinutes: 30,
+    startedAt: '2035-05-01T12:00:00.000Z', livekitConfirmedAt: '2035-05-01T12:01:00.000Z',
+  }, new Date('2035-05-01T12:11:30.000Z'));
+  assert.deepEqual({ state: live.state, elapsed: live.elapsedSeconds, remaining: live.remainingSeconds }, { state: 'live', elapsed: 630, remaining: 1_170 });
+  assert.equal(meetingTiming({ status: 'SCHEDULED', createdAt: '2020-01-01T00:00:00.000Z' }).elapsedSeconds, 0);
+  assert.equal(meetingTiming({ status: 'COMPLETED' }).state, 'ended');
+  assert.equal(meetingTiming({ status: 'CANCELLED' }).state, 'cancelled');
+});
+
+test('meeting and participant volume combine for current and future remote tracks without duplicate audio', () => {
+  assert.equal(effectiveRemoteVolume(0.5, 0.5), 0.25);
+  assert.equal(effectiveRemoteVolume(0, 1), 0);
+  assert.equal(effectiveRemoteVolume(2, -1), 0);
+  const previous = { document: global.document, LivekitClient: global.LivekitClient };
+  const appended = [];
+  const element = () => ({ classList: { add() {} }, dataset: {}, removeCalls: 0, remove() { this.removeCalls += 1; } });
+  global.document = {
+    documentElement: { dataset: {} }, body: { appendChild(item) { appended.push(item); } },
+    addEventListener() {}, querySelectorAll() { return []; }, getElementById() { return null; },
+  };
+  global.LivekitClient = {
+    RoomEvent: {
+      TrackSubscribed: 'subscribed', TrackUnsubscribed: 'unsubscribed', TrackPublished: 'published',
+      TrackUnpublished: 'unpublished', ParticipantDisconnected: 'disconnected', ActiveSpeakersChanged: 'speakers',
+      TrackMuted: 'muted', TrackUnmuted: 'unmuted',
+    },
+    Track: { Source: { Microphone: 'microphone' } },
+  };
+  const handlers = new Map();
+  const removed = [];
+  const room = { on(event, handler) { handlers.set(event, handler); }, off(event, handler) { removed.push([event, handler]); } };
+  const stage = { setScreenAudio() {}, removeTrack() {}, setParticipantState() {}, setTrack() {}, setSpeaking() {}, removeParticipant() {} };
+  const makeTrack = () => {
+    const media = element();
+    return { kind: 'audio', media, volumes: [], detachCalls: 0, attach() { return media; }, detach() { this.detachCalls += 1; return []; }, setVolume(value) { this.volumes.push(value); } };
+  };
+  try {
+    const audio = attachRemoteStageEvents(room, stage);
+    audio.setMeetingVolume(0.5);
+    audio.setParticipantVolume('ana', 0.5);
+    const current = makeTrack();
+    handlers.get('subscribed')(current, { source: 'microphone' }, { identity: 'ana' });
+    assert.equal(current.volumes.at(-1), 0.25);
+    audio.setMeetingVolume(0);
+    assert.equal(current.volumes.at(-1), 0);
+    const future = makeTrack();
+    handlers.get('subscribed')(future, { source: 'screen_share_audio' }, { identity: 'beto' });
+    assert.equal(future.volumes.at(-1), 0);
+    audio.setMeetingVolume(1);
+    assert.equal(future.volumes.at(-1), 1);
+    const replacement = makeTrack();
+    handlers.get('subscribed')(replacement, { source: 'microphone' }, { identity: 'ana' });
+    assert.equal(current.detachCalls, 1);
+    assert.equal(current.media.removeCalls, 1);
+    audio.dispose();
+    assert.equal(removed.length, Object.keys(global.LivekitClient.RoomEvent).length);
+    assert.ok(replacement.detachCalls >= 1);
+    assert.equal(appended.length, 3);
+  } finally {
+    global.document = previous.document;
+    global.LivekitClient = previous.LivekitClient;
+  }
 });
 
 test('discarded questions are partitioned out of the active Q&A flow', () => {
