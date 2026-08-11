@@ -320,6 +320,19 @@
       return true;
     }
 
+    replace(items = []) {
+      this.items = items
+        .filter((item) => item?.identity)
+        .map((item, index) => ({
+          identity: item.identity,
+          displayName: item.displayName || item.identity,
+          raisedAt: item.raisedAt || new Date().toISOString(),
+          status: item.status || 'PENDING',
+          order: index + 1,
+        }));
+      return this.list();
+    }
+
     list() { return this.items.map((item) => ({ ...item })); }
   }
 

@@ -458,7 +458,10 @@ function openTab(name, { focus = true } = {}) {
   document.querySelectorAll('[data-room-tab]').forEach((button) => { const active = button.dataset.roomTab === name; button.setAttribute('aria-selected', String(active)); button.classList.toggle('active', active); });
   document.querySelectorAll('[data-room-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.roomPanel === name));
   if (name === 'chat') unreadChat.clear();
-  if (name === 'participants') renderHandQueue();
+  if (name === 'participants') {
+    renderHandQueue();
+    syncSpeakerRequests().catch(() => {});
+  }
   if (focus && (name === 'chat' || name === 'questions')) window.setTimeout(() => document.getElementById('chatInput')?.focus(), 0);
   window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
 }
@@ -511,7 +514,7 @@ function renderParticipants(participants = []) {
         microphone: media.microphone,
         role: participantRole(participant),
         roleCode: participantRoleCode(participant),
-        eligible: participantRoleCode(participant) !== 'ATTENDEE',
+        eligible: participantRoleCode(participant) !== 'ATTENDEE' || temporarySpeaker,
         local: participant.isLocal,
         keepVisible: true,
       });
@@ -595,7 +598,7 @@ function updatePinnedSpeakers(participants = []) {
   const select = document.getElementById('pinnedSpeaker');
   if (!select) return;
   const previous = ui.pinnedSpeakerIdentity || select.value;
-  const eligible = participants.filter((participant) => participantRoleCode(participant) !== 'ATTENDEE');
+  const eligible = participants.filter((participant) => participantRoleCode(participant) !== 'ATTENDEE' || participantCanPublishSource(participant, 'MICROPHONE'));
   const signature = eligible.map((participant) => participant.identity).join('|');
   if (select.dataset.signature !== signature) {
     select.dataset.signature = signature;
@@ -633,17 +636,36 @@ function renderHandQueue() {
   }
 }
 
+async function syncSpeakerRequests() {
+  if (!ui.session) return [];
+  const result = await roomRequest('/api/room/speaker-requests');
+  const items = (result.items || []).map((item) => ({
+    identity: item.participantIdentity,
+    displayName: item.participantName,
+    raisedAt: item.requestedAt,
+    status: item.status,
+  }));
+  handQueue.replace(items);
+  const ownRequest = items.find((item) => item.identity === ui.session.identity);
+  ui.handRaised = ownRequest?.status === 'PENDING';
+  floatingModel.update({ handRaised: ui.handRaised });
+  setButtonState(document.getElementById('btnHand'), ui.handRaised, 'Cancelar', 'Mano');
+  renderHandQueue();
+  ui.roomUi?.updateCount();
+  return items;
+}
+
 async function promoteParticipant(item) {
   try {
     await roomRequest('/api/participants/promote', { method: 'POST', body: { targetIdentity: item.identity } }, ui.session.csrfToken);
-    handQueue.update(item.identity, 'GRANTED'); renderHandQueue(); ui.roomUi?.updateCount();
+    await syncSpeakerRequests();
   } catch (error) { showMessage(error.message, true); }
 }
 
 async function rejectHand(item) {
   try {
     await ui.chat.sendSystem({ kind: 'hand-rejected', targetIdentity: item.identity });
-    handQueue.remove(item.identity); renderHandQueue(); ui.roomUi?.updateCount();
+    await syncSpeakerRequests();
   } catch (error) { showMessage(error.message, true); }
 }
 
@@ -714,7 +736,7 @@ async function muteParticipant(targetIdentity) {
 async function demoteParticipant(targetIdentity) {
   try {
     await roomRequest('/api/participants/demote', { method: 'POST', body: { targetIdentity } }, ui.session.csrfToken);
-    handQueue.remove(targetIdentity); renderHandQueue(); ui.roomUi?.updateCount();
+    await syncSpeakerRequests();
     showMessage('Se retiró el permiso temporal para publicar.');
   } catch (error) { showMessage(error.message, true); }
 }
@@ -742,6 +764,7 @@ async function toggleHand() {
   setButtonState(document.getElementById('btnHand'), ui.handRaised, 'Cancelar', 'Mano');
   floatingModel.update({ handRaised: ui.handRaised });
   await ui.chat.sendSystem({ kind: ui.handRaised ? 'hand-raise' : 'hand-lower', identity: ui.session.identity, displayName: ui.session.displayName, raisedAt: new Date().toISOString() });
+  await syncSpeakerRequests();
 }
 
 async function selfDemote() {
@@ -783,7 +806,7 @@ function handleData(payload, participant) {
       notifier.notify('hand-raised', { title: 'Mano levantada', message: `${message.displayName || participantName(participant)} solicitó la palabra.`, system: false });
     }
     if (message.kind === 'hand-lower') { handQueue.remove(participant?.identity || message.identity); renderHandQueue(); ui.roomUi?.updateCount(); }
-    if (message.kind === 'hand-approved' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); renderMediaPermissions(); showMessage('El organizador te dio la palabra.'); }
+    if (message.kind === 'hand-approved' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); renderMediaPermissions(); showMessage('Se te concedió la palabra. Activa tu micrófono cuando estés listo.'); }
     if (message.kind === 'hand-rejected' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); showMessage('La solicitud fue cerrada por el organizador.'); }
     if (message.kind === 'word-revoked' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; if (ui.screen) finishScreenShare(true); renderMediaPermissions(); showMessage('El organizador retiró el permiso para hablar.'); }
     if (message.kind === 'permission-changed' && message.targetIdentity === ui.session.identity) {
@@ -1392,6 +1415,7 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     onParticipantsChanged: renderParticipants,
     onReconnected: () => {
       queryRecordingStatus();
+      syncSpeakerRequests().catch(() => {});
       reportRoomConnection('reconnected', ui.session.csrfToken).catch(() => {});
       notifier.notify('connection-restored', { title: 'Conexión restablecida', message: 'La reunión volvió a estar sincronizada.', tone: 'success', sound: 'reconnected' });
     },
@@ -1453,6 +1477,7 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
       },
     });
     setupControls(); configureMeetingMode(); renderMediaPermissions(); renderParticipants([room.localParticipant, ...room.remoteParticipants.values()]);
+    await syncSpeakerRequests();
     ui.stage.setParticipantState(ui.session.identity, `${ui.session.displayName} (tú)`, { microphone: false, local: true, keepVisible: true });
     startMeetingTimer();
     await queryRecordingStatus();
@@ -1496,6 +1521,7 @@ async function initializeRoom() {
       .finally(() => { button.disabled = false; });
   });
   window.addEventListener('pagehide', () => {
+    if (ui.session?.csrfToken) roomRequest('/api/room-session/leave', { method: 'POST', body: {}, keepalive: true }, ui.session.csrfToken).catch(() => {});
     stopPreview();
     clearTimeout(recordingPollTimer);
     clearInterval(ui.elapsedTimer);

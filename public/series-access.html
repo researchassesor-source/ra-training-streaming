@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Acceso a capacitación | R.A. Training Streaming</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="series-access-body">
+  <header class="topbar series-access-topbar">
+    <div id="brand"></div>
+    <span id="seriesRole" class="badge">Acceso individual</span>
+  </header>
+  <main class="series-access-shell" aria-live="polite">
+    <section class="series-hero">
+      <p class="eyebrow">Tu capacitación</p>
+      <h1 id="seriesTitle">Validando acceso…</h1>
+      <p id="seriesDescription" class="muted"></p>
+      <div class="series-meta">
+        <span id="seriesTrainer"></span>
+        <span id="seriesProgress"></span>
+      </div>
+    </section>
+
+    <section id="phaseCard" class="series-phase-card" aria-labelledby="phaseTitle">
+      <div class="series-phase-copy">
+        <p id="phaseEyebrow" class="eyebrow">Próxima sesión</p>
+        <h2 id="phaseTitle">Cargando…</h2>
+        <p id="phaseMessage" class="muted"></p>
+        <p id="phaseCountdown" class="series-countdown"></p>
+      </div>
+      <button id="enterButton" class="primary" type="button" hidden>Entrar ahora</button>
+    </section>
+
+    <div class="series-access-grid">
+      <section id="preparationCard" class="card series-preparation" hidden>
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Preparación</p>
+            <h2>Configura tu acceso</h2>
+          </div>
+          <span class="badge">No conectado</span>
+        </div>
+        <p class="muted">La plataforma no entra a LiveKit ni activa cámara o micrófono desde esta pantalla.</p>
+        <label for="participantName">Nombre visible</label>
+        <input id="participantName" maxlength="80" autocomplete="name" />
+        <div class="form-grid">
+          <label>Micrófono
+            <select id="seriesMicrophone"><option value="">Predeterminado</option></select>
+          </label>
+          <label>Cámara
+            <select id="seriesCamera"><option value="">Predeterminada</option></select>
+          </label>
+          <label>Altavoz
+            <select id="seriesSpeaker"><option value="">Predeterminado</option></select>
+          </label>
+        </div>
+        <div class="series-device-actions">
+          <button id="previewButton" class="secondary" type="button">Probar cámara y micrófono</button>
+          <button id="speakerButton" class="secondary" type="button">Probar altavoz</button>
+        </div>
+        <video id="seriesPreview" class="series-preview" autoplay muted playsinline hidden></video>
+        <div id="audioMeter" class="series-audio-meter" role="meter" aria-label="Nivel de micrófono"><span></span></div>
+        <fieldset class="series-consents">
+          <legend>Avisos y consentimiento</legend>
+          <label><input id="privacyConsent" type="checkbox" /> Acepto el aviso de privacidad para ingresar.</label>
+          <label><input id="recordingConsent" type="checkbox" /> Entiendo que una sesión puede ser grabada cuando el organizador lo indique.</label>
+          <label><input id="transcriptionConsent" type="checkbox" /> Entiendo que una sesión puede ser transcrita cuando el organizador lo indique.</label>
+        </fieldset>
+        <button id="savePreparation" class="primary" type="button">Guardar preparación</button>
+        <p id="seriesFeedback" class="muted" role="status"></p>
+      </section>
+
+      <section class="card series-agenda" aria-labelledby="agendaTitle">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Calendario</p>
+            <h2 id="agendaTitle">Todas las sesiones</h2>
+          </div>
+        </div>
+        <ol id="seriesSessions" class="series-session-list"></ol>
+      </section>
+    </div>
+  </main>
+  <script src="brand.js"></script>
+  <script src="app-core.js"></script>
+  <script src="series-access.js"></script>
+</body>
+</html>

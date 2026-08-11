@@ -4,10 +4,13 @@ const state = {
   user: null,
   csrf: '',
   meetings: [],
+  series: [],
   recordings: [],
   users: [],
   summary: null,
   invitation: null,
+  seriesShare: null,
+  activeSeriesId: null,
   calendarDate: new Date(),
   calendarView: 'month',
 };
@@ -42,6 +45,10 @@ const AUDIT_LABELS = {
   TRANSCRIPTION_REQUESTED: 'Transcripción solicitada', TRANSCRIPTION_VALIDATION_FAILED: 'Solicitud de transcripción rechazada',
   TRANSCRIPTION_STARTED: 'Procesamiento de transcripción iniciado', TRANSCRIPTION_PROVIDER_SUBMITTED: 'Audio enviado al proveedor',
   TRANSCRIPTION_SPEAKER_RENAMED: 'Hablante renombrado', TRANSCRIPTION_EXPORTED: 'Transcripción exportada',
+  SERIES_CREATED: 'Capacitación creada', SERIES_UPDATED: 'Capacitación actualizada', SERIES_RESCHEDULED: 'Sesión reprogramada',
+  SERIES_ACCESS_CREATED: 'Acceso estable creado', SERIES_ACCESS_REVOKED: 'Acceso estable revocado', SERIES_ACCESS_REGENERATED: 'Acceso estable regenerado',
+  SPEAKER_REQUESTED: 'Solicitud de palabra creada', SPEAKER_GRANTED: 'Palabra concedida', SPEAKER_REJECTED: 'Solicitud de palabra rechazada', SPEAKER_REVOKED: 'Palabra retirada',
+  ATTENDANCE_UPDATED: 'Asistencia actualizada', SERIES_SESSION_ENTERED: 'Entrada a sesión de capacitación',
   ROOM_OPEN_ATTEMPT: 'Intento de abrir reunión', ROOM_CONNECTION_FAILED: 'Error de conexión a la reunión',
   ROOM_RETRY: 'Reintento de conexión', ROOM_CONNECTED: 'Reunión iniciada', ROOM_ENDED: 'Reunión finalizada',
   PARTICIPANT_CONSENT_RECORDED: 'Consentimiento de participante registrado',
@@ -171,14 +178,60 @@ function meetingAction(label, action, meeting, className = 'secondary compact') 
   return button;
 }
 
+function seriesMatchesFilters(series) {
+  const query = document.getElementById('meetingSearch').value.trim().toLowerCase();
+  const status = document.getElementById('meetingStatusFilter').value;
+  const haystack = `${series.title} ${series.trainerName} ${(series.sessions || []).map((session) => `${session.title} ${session.room}`).join(' ')}`.toLowerCase();
+  return (!query || haystack.includes(query)) && (!status || series.sessions.some((session) => session.status === status));
+}
+
+function renderSeriesCard(series) {
+  const card = document.createElement('article'); card.className = 'training-series-card';
+  const header = document.createElement('div'); header.className = 'training-series-heading';
+  const title = document.createElement('div');
+  title.append(textElement('p', 'Capacitación', 'eyebrow'), textElement('h2', series.title), textElement('p', `${series.trainerName} · ${TYPE_LABELS[series.type]} · ${series.sessions.length} sesiones`, 'muted'));
+  header.append(title, statusPill(series.resolution?.phase === 'LIVE' ? 'LIVE' : series.resolution?.phase === 'COMPLETED' || series.status === 'COMPLETED' ? 'COMPLETED' : 'SCHEDULED'));
+  const progress = document.createElement('div'); progress.className = 'series-progress';
+  const progressValue = series.sessions.length ? Math.round((Number(series.resolution?.completedCount || 0) / series.sessions.length) * 100) : 0;
+  const progressFill = document.createElement('span'); progressFill.style.width = `${progressValue}%`; progress.appendChild(progressFill);
+  const actions = document.createElement('div'); actions.className = 'meeting-actions series-primary-actions';
+  actions.append(meetingAction('Compartir acceso', openSeriesShare, series, 'primary compact'), meetingAction('Participantes', openSeriesAttendance, series));
+  if (series.resolution?.meeting && !['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(series.resolution.meeting.status)) {
+    actions.append(meetingAction(series.resolution.meeting.status === 'LIVE' ? 'Abrir sesión actual' : 'Abrir próxima sesión', () => launchMeeting(series.resolution.meeting), series));
+  }
+  const more = document.createElement('details'); more.className = 'action-menu';
+  const moreSummary = document.createElement('summary'); moreSummary.textContent = 'Más acciones';
+  const moreItems = document.createElement('div'); moreItems.className = 'action-menu-items';
+  moreItems.appendChild(meetingAction('Copiar calendario', async () => {
+    const calendar = `${series.title}\n\n${series.sessions.map((session) => `Sesión ${session.sessionNumber}: ${formatDate(session.scheduledAt)}`).join('\n')}`;
+    try { await copyText(calendar); notice('Calendario copiado.'); } catch (error) { notice(error.message, 'error'); }
+  }, series));
+  if (series.resolution?.meeting) moreItems.appendChild(meetingAction('Editar próxima sesión', () => openMeetingDialog(series.resolution.meeting), series));
+  more.append(moreSummary, moreItems); actions.appendChild(more);
+  const sessionList = document.createElement('ol'); sessionList.className = 'series-dashboard-session-list';
+  for (const session of series.sessions) {
+    const row = document.createElement('li');
+    const info = document.createElement('div'); info.append(textElement('strong', `Sesión ${session.sessionNumber}`), textElement('span', `${formatDate(session.scheduledAt)} · ${session.durationMinutes} min`, 'muted small'));
+    const rowActions = document.createElement('div'); rowActions.className = 'series-session-actions';
+    rowActions.append(statusPill(session.status), meetingAction('Editar', openMeetingDialog, session));
+    if (!['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(session.status)) rowActions.append(meetingAction(session.status === 'LIVE' ? 'Abrir' : 'Iniciar', launchMeeting, session, 'secondary compact'));
+    row.append(info, rowActions); sessionList.appendChild(row);
+  }
+  card.append(header, textElement('p', series.description || 'Sin descripción', 'muted clamp'), progress, textElement('p', `${series.resolution?.completedCount || 0} de ${series.sessions.length} sesiones completadas`, 'muted small'), actions, sessionList);
+  return card;
+}
+
 function renderMeetings() {
   const list = document.getElementById('meetingsList');
   list.replaceChildren();
-  const filtered = state.meetings.filter(meetingMatchesFilters);
-  if (!filtered.length) {
+  const filteredSeries = state.series.filter(seriesMatchesFilters);
+  const filtered = state.meetings.filter((meeting) => !meeting.seriesId && meetingMatchesFilters(meeting));
+  if (!filtered.length && !filteredSeries.length) {
     list.appendChild(emptyState('No hay reuniones que coincidan con los filtros.', 'Ajusta los filtros o crea una nueva reunión.'));
     return;
   }
+  for (const series of filteredSeries) list.appendChild(renderSeriesCard(series));
+  if (filteredSeries.length && filtered.length) list.appendChild(textElement('h2', 'Reuniones independientes', 'meeting-list-divider'));
   for (const meeting of filtered) {
     const card = document.createElement('article');
     card.className = 'meeting-card';
@@ -241,6 +294,123 @@ function localDateTimeValue(value) {
   const date = new Date(value);
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
+}
+
+function defaultSeriesDate(dayOffset = 1) {
+  const date = new Date(Date.now() + dayOffset * 86_400_000);
+  date.setHours(10, 0, 0, 0);
+  return localDateTimeValue(date);
+}
+
+function addSeriesSession(value = {}) {
+  const container = document.getElementById('seriesSessionRows');
+  const row = document.createElement('div'); row.className = 'series-form-session-row';
+  const number = container.children.length + 1;
+  const dateLabel = document.createElement('label'); dateLabel.textContent = `Sesión ${number} · fecha y hora`;
+  const date = document.createElement('input'); date.type = 'datetime-local'; date.required = true; date.dataset.seriesDate = 'true'; date.value = value.scheduledAt ? localDateTimeValue(value.scheduledAt) : defaultSeriesDate(number * 7);
+  const durationLabel = document.createElement('label'); durationLabel.textContent = 'Duración (minutos)';
+  const duration = document.createElement('input'); duration.type = 'number'; duration.min = '1'; duration.max = '1440'; duration.required = true; duration.dataset.seriesDuration = 'true'; duration.value = String(value.durationMinutes || 60);
+  const remove = textElement('button', 'Quitar', 'secondary compact'); remove.type = 'button'; remove.addEventListener('click', () => { row.remove(); [...container.children].forEach((item, index) => { item.querySelector('label').firstChild.textContent = `Sesión ${index + 1} · fecha y hora`; }); });
+  dateLabel.appendChild(date); durationLabel.appendChild(duration); row.append(dateLabel, durationLabel, remove); container.appendChild(row);
+}
+
+function openSeriesDialog() {
+  document.getElementById('seriesForm').reset();
+  document.getElementById('seriesFormTimezone').value = 'America/Guayaquil';
+  document.getElementById('seriesEarlyAccess').value = '120';
+  const rows = document.getElementById('seriesSessionRows'); rows.replaceChildren();
+  addSeriesSession({ scheduledAt: defaultSeriesDate(1) }); addSeriesSession({ scheduledAt: defaultSeriesDate(8) });
+  document.getElementById('seriesFormError').textContent = '';
+  document.getElementById('seriesDialog').showModal();
+}
+
+async function saveSeries(event) {
+  event.preventDefault();
+  const sessions = [...document.querySelectorAll('.series-form-session-row')].map((row) => ({
+    scheduledAt: new Date(row.querySelector('[data-series-date]').value).toISOString(),
+    durationMinutes: Number(row.querySelector('[data-series-duration]').value),
+  }));
+  const payload = {
+    title: document.getElementById('seriesFormTitle').value.trim(), description: document.getElementById('seriesFormDescription').value.trim(),
+    trainerName: document.getElementById('seriesFormTrainer').value.trim(), type: document.getElementById('seriesFormType').value,
+    timezone: document.getElementById('seriesFormTimezone').value.trim(), earlyAccessMinutes: Number(document.getElementById('seriesEarlyAccess').value), sessions,
+    allowChat: document.getElementById('seriesAllowChat').checked, allowFiles: document.getElementById('seriesAllowFiles').checked,
+    allowReactions: document.getElementById('seriesAllowReactions').checked, allowRaiseHand: document.getElementById('seriesAllowRaiseHand').checked,
+    allowRecording: document.getElementById('seriesAllowRecording').checked, allowTranscription: document.getElementById('seriesAllowTranscription').checked,
+  };
+  const error = document.getElementById('seriesFormError'); error.textContent = '';
+  try { await api('/api/series', { method: 'POST', body: payload }); document.getElementById('seriesDialog').close(); notice('Capacitación y sesiones creadas.'); await loadMeetings(); }
+  catch (requestError) { error.textContent = requestError.message; }
+}
+
+function showSeriesShare(access) {
+  state.seriesShare = access;
+  document.getElementById('seriesShareResult').hidden = false;
+  document.getElementById('seriesAccessUrl').value = access.url || '';
+  document.getElementById('seriesInvitationMessage').value = access.invitationMessage || '';
+}
+
+function renderSeriesAccessList(items) {
+  const container = document.getElementById('seriesAccessList'); container.replaceChildren();
+  if (!items.length) { container.appendChild(emptyState('Todavía no hay accesos individuales.', 'Crea uno con el nombre del participante.')); return; }
+  for (const access of items) {
+    const row = document.createElement('article'); row.className = 'series-access-admin-row';
+    const info = document.createElement('div'); info.append(textElement('strong', access.participantName), textElement('span', `${access.status === 'ACTIVE' ? 'Activo' : 'Revocado'} · ${access.usageCount || 0} aperturas`, 'muted small'));
+    const actions = document.createElement('div'); actions.className = 'series-session-actions';
+    if (access.status === 'ACTIVE') {
+      actions.append(meetingAction('Ver y copiar', () => showSeriesShare(access), access), meetingAction('Revocar', async () => {
+        if (!await askConfirmation({ title: 'Revocar acceso individual', message: `El enlace de ${access.participantName} dejará de funcionar en todas las sesiones.`, confirmLabel: 'Revocar', danger: true })) return;
+        await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/accesses/${encodeURIComponent(access.id)}`, { method: 'DELETE' }); await loadSeriesAccesses(); notice('Acceso revocado.');
+      }, access, 'danger compact'));
+    } else actions.append(meetingAction('Regenerar', async () => {
+      const result = await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/accesses/${encodeURIComponent(access.id)}/regenerate`, { method: 'POST', body: {} }); showSeriesShare(result.access); await loadSeriesAccesses(); notice('Se generó un nuevo enlace individual.');
+    }, access, 'secondary compact'));
+    row.append(info, actions); container.appendChild(row);
+  }
+}
+
+async function loadSeriesAccesses() {
+  const data = await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/accesses`); renderSeriesAccessList(data.items || []); return data.items || [];
+}
+
+async function openSeriesShare(series) {
+  state.activeSeriesId = series.id; state.seriesShare = null;
+  document.getElementById('seriesShareTitle').textContent = series.title;
+  document.getElementById('seriesParticipantName').value = ''; document.getElementById('seriesParticipantKey').value = '';
+  document.getElementById('seriesShareResult').hidden = true; document.getElementById('seriesShareError').textContent = '';
+  document.getElementById('seriesShareDialog').showModal();
+  try { await loadSeriesAccesses(); } catch (error) { document.getElementById('seriesShareError').textContent = error.message; }
+}
+
+async function createSeriesAccess(event) {
+  event.preventDefault();
+  try {
+    const result = await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/accesses`, { method: 'POST', body: { participantName: document.getElementById('seriesParticipantName').value.trim(), participantKey: document.getElementById('seriesParticipantKey').value.trim() || undefined } });
+    showSeriesShare(result.access); await loadSeriesAccesses(); notice(result.reused ? 'Se recuperó el acceso estable existente.' : 'Acceso estable creado.');
+  } catch (error) { document.getElementById('seriesShareError').textContent = error.message; }
+}
+
+async function openSeriesAttendance(series) {
+  document.getElementById('seriesAttendanceTitle').textContent = `Participantes · ${series.title}`;
+  const container = document.getElementById('seriesAttendanceTable'); container.replaceChildren(textElement('p', 'Cargando asistencia…', 'muted'));
+  document.getElementById('seriesAttendanceDialog').showModal();
+  try {
+    const data = await api(`/api/series/${encodeURIComponent(series.id)}/attendance`);
+    if (!data.items.length) { container.replaceChildren(emptyState('Aún no hay asistencia confirmada.', 'La asistencia aparece después de una conexión real a LiveKit.')); return; }
+    const table = document.createElement('table'); table.className = 'data-table';
+    const head = document.createElement('thead'); const headRow = document.createElement('tr'); headRow.appendChild(textElement('th', 'Participante'));
+    for (let index = 1; index <= data.totalSessions; index += 1) headRow.appendChild(textElement('th', `Sesión ${index}`)); head.appendChild(headRow);
+    const body = document.createElement('tbody');
+    for (const person of data.items) {
+      const row = document.createElement('tr'); row.appendChild(textElement('td', person.participantName || person.participantKey));
+      for (let index = 1; index <= data.totalSessions; index += 1) {
+        const record = person.sessions[index]; const minutes = record ? Math.max(1, Math.round(record.accumulatedMs / 60_000)) : 0;
+        row.appendChild(textElement('td', record ? `${minutes} min · ${formatDate(record.firstJoinedAt)}` : 'Sin conexión'));
+      }
+      body.appendChild(row);
+    }
+    table.append(head, body); container.replaceChildren(table);
+  } catch (error) { container.replaceChildren(textElement('p', error.message, 'form-error')); }
 }
 
 function openMeetingDialog(meeting = null) {
@@ -410,8 +580,12 @@ async function launchMeeting(meeting) {
 
 async function loadMeetings() {
   const includeDeleted = state.user?.role === 'ADMIN' && document.getElementById('includeDeleted').checked;
-  const data = await api(`/api/meetings${includeDeleted ? '?includeDeleted=true' : ''}`);
+  const [data, seriesData] = await Promise.all([
+    api(`/api/meetings${includeDeleted ? '?includeDeleted=true' : ''}`),
+    api('/api/series'),
+  ]);
   state.meetings = data.items.map(RATCore.normalizeMeeting);
+  state.series = (seriesData.items || []).map((series) => ({ ...series, sessions: (series.sessions || []).map(RATCore.normalizeMeeting) }));
   renderMeetings();
   renderCalendar();
   renderUpcoming();
@@ -715,7 +889,16 @@ async function initialize() {
 document.getElementById('dashboardNav').addEventListener('click', (event) => { const button = event.target.closest('[data-section]'); if (button) showSection(button.dataset.section); });
 document.querySelectorAll('[data-go]').forEach((button) => button.addEventListener('click', () => showSection(button.dataset.go)));
 document.querySelectorAll('[data-open-meeting]').forEach((button) => button.addEventListener('click', () => openMeetingDialog()));
+document.querySelectorAll('[data-open-series]').forEach((button) => button.addEventListener('click', openSeriesDialog));
 document.getElementById('meetingForm').addEventListener('submit', saveMeeting);
+document.getElementById('seriesForm').addEventListener('submit', saveSeries);
+document.getElementById('seriesShareForm').addEventListener('submit', createSeriesAccess);
+document.getElementById('addSeriesSession').addEventListener('click', () => addSeriesSession());
+document.querySelectorAll('[data-copy-series]').forEach((button) => button.addEventListener('click', async () => {
+  if (!state.seriesShare?.[button.dataset.copySeries]) return;
+  try { await copyText(state.seriesShare[button.dataset.copySeries]); notice('Contenido copiado.'); } catch (error) { notice(error.message, 'error'); }
+}));
+document.getElementById('seriesWhatsApp').addEventListener('click', () => { if (state.seriesShare?.whatsappUrl) window.open(state.seriesShare.whatsappUrl, '_blank', 'noopener,noreferrer'); });
 document.getElementById('userForm').addEventListener('submit', saveUser);
 document.getElementById('openUserModal').addEventListener('click', () => openUserDialog());
 document.getElementById('loadRecordings').addEventListener('click', loadRecordings);
@@ -744,6 +927,9 @@ document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { 
 for (const id of ['userPassword', 'userPasswordConfirm']) document.getElementById(id).addEventListener('input', () => { const password = document.getElementById('userPassword').value; const confirmation = document.getElementById('userPasswordConfirm').value; const match = document.getElementById('userPasswordMatch'); match.textContent = confirmation ? (password === confirmation ? 'Las contraseñas coinciden.' : 'Las contraseñas no coinciden.') : ''; match.className = `password-match ${password === confirmation ? 'matches' : 'mismatch'}`; });
 document.getElementById('logoutButton').addEventListener('click', async () => { try { await api('/api/auth/logout', { method: 'POST', body: {} }); } finally { window.location.replace('/index.html'); } });
 bindDialog(document.getElementById('meetingDialog'), '[data-close-dialog]');
+bindDialog(document.getElementById('seriesDialog'), '[data-close-series]');
+bindDialog(document.getElementById('seriesShareDialog'), '[data-close-series-share]');
+bindDialog(document.getElementById('seriesAttendanceDialog'), '[data-close-series-attendance]');
 bindDialog(document.getElementById('userDialog'), '[data-close-user]');
 bindDialog(document.getElementById('invitationDialog'), '[data-close-invitation]');
 document.getElementById('meetingAllowTranscription').addEventListener('change', (event) => {

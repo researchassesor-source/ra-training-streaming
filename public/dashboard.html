@@ -98,6 +98,7 @@
           <select id="meetingStatusFilter" aria-label="Filtrar reuniones por estado"><option value="">Todos los estados</option></select>
           <label class="check-row admin-only"><input id="includeDeleted" type="checkbox" /> Incluir eliminadas</label>
         </div>
+        <div class="series-dashboard-actions"><button class="primary" type="button" data-open-series>Nueva capacitación</button><span class="muted">Crea un ciclo con varias sesiones y un enlace estable por participante.</span></div>
         <div id="meetingsList" class="meeting-list"></div>
       </section>
 
@@ -209,6 +210,71 @@
       </fieldset>
       <p id="meetingFormError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancelar</button><button id="saveMeeting" class="primary" type="submit">Guardar reunión</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="seriesDialog" class="app-dialog">
+    <form id="seriesForm" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Ciclo de capacitación</p><h2>Nueva capacitación</h2><p class="muted">Cada fecha crea una sala independiente. Los participantes conservarán un único enlace personal.</p></div><button class="icon-action" type="button" data-close-series aria-label="Cerrar">×</button></div>
+      <fieldset class="meeting-form-section">
+        <legend>Información general</legend>
+        <div class="form-grid">
+          <label class="span-2">Título <span class="required-mark">*</span><input id="seriesFormTitle" maxlength="140" required /></label>
+          <label class="span-2">Descripción<textarea id="seriesFormDescription" maxlength="2000" rows="3"></textarea></label>
+          <label>Capacitador <span class="required-mark">*</span><input id="seriesFormTrainer" maxlength="100" required /></label>
+          <label>Modalidad<select id="seriesFormType"><option value="WEBINAR">Webinar</option><option value="SESSION">Sesión</option><option value="CLASS">Clase</option></select></label>
+          <label>Zona horaria<input id="seriesFormTimezone" value="America/Guayaquil" maxlength="80" required /></label>
+          <label>Sala de espera (minutos)<input id="seriesEarlyAccess" type="number" min="0" max="10080" value="120" required /></label>
+        </div>
+      </fieldset>
+      <fieldset class="meeting-form-section">
+        <legend>Sesiones</legend>
+        <div id="seriesSessionRows" class="series-form-sessions"></div>
+        <button id="addSeriesSession" class="secondary compact" type="button">Agregar sesión</button>
+      </fieldset>
+      <fieldset class="meeting-form-section options-fieldset"><legend>Funciones</legend><div class="option-grid">
+        <label><input id="seriesAllowChat" type="checkbox" checked /> Chat</label>
+        <label><input id="seriesAllowFiles" type="checkbox" checked /> Archivos</label>
+        <label><input id="seriesAllowReactions" type="checkbox" checked /> Reacciones</label>
+        <label><input id="seriesAllowRaiseHand" type="checkbox" checked /> Solicitudes de palabra</label>
+        <label><input id="seriesAllowRecording" type="checkbox" /> Grabación</label>
+        <label><input id="seriesAllowTranscription" type="checkbox" /> Transcripción</label>
+      </div></fieldset>
+      <p id="seriesFormError" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><button class="secondary" type="button" data-close-series>Cancelar</button><button class="primary" type="submit">Crear capacitación</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="seriesShareDialog" class="app-dialog invitation-dialog">
+    <form id="seriesShareForm" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Acceso estable individual</p><h2 id="seriesShareTitle">Compartir capacitación</h2><p class="muted">Un mismo enlace lleva automáticamente a la sesión vigente. No se crean accesos de anfitrión desde aquí.</p></div><button class="icon-action" type="button" data-close-series-share aria-label="Cerrar">×</button></div>
+      <div class="form-grid">
+        <label>Nombre del participante<input id="seriesParticipantName" minlength="2" maxlength="80" required /></label>
+        <label>Identificador interno (opcional)<input id="seriesParticipantKey" minlength="2" maxlength="80" placeholder="correo o código" /></label>
+      </div>
+      <button class="primary" type="submit">Crear o recuperar acceso</button>
+      <section id="seriesShareResult" class="series-share-result" hidden>
+        <label>Enlace individual<input id="seriesAccessUrl" type="url" readonly /></label>
+        <label>Invitación<textarea id="seriesInvitationMessage" rows="8" readonly></textarea></label>
+        <div class="invitation-actions">
+          <button type="button" class="secondary" data-copy-series="url">Copiar enlace</button>
+          <button type="button" class="secondary" data-copy-series="invitationMessage">Copiar invitación</button>
+          <button type="button" class="secondary" data-copy-series="reminder2h">Copiar recordatorio 2 h</button>
+          <button type="button" class="secondary" data-copy-series="reminder15m">Copiar recordatorio 15 min</button>
+          <button id="seriesWhatsApp" type="button" class="primary">Abrir WhatsApp</button>
+        </div>
+      </section>
+      <h3>Accesos del ciclo</h3>
+      <div id="seriesAccessList" class="series-access-admin-list"></div>
+      <p id="seriesShareError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="seriesAttendanceDialog" class="app-dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Asistencia real</p><h2 id="seriesAttendanceTitle">Participantes</h2></div><button class="icon-action" type="button" data-close-series-attendance aria-label="Cerrar">×</button></div>
+      <div id="seriesAttendanceTable" class="table-wrap"></div>
+      <div class="dialog-actions"><button class="secondary" type="button" data-close-series-attendance>Cerrar</button></div>
     </form>
   </dialog>
 
