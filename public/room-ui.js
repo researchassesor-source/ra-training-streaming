@@ -39,6 +39,8 @@ const ui = {
   speakerMode: 'auto',
   pinnedSpeakerIdentity: null,
   livekitAvailable: false,
+  temporaryMicrophoneAllowed: null,
+  lastWordGrantNoticeAt: 0,
 };
 const handQueue = new RATCore.HandQueue();
 const floatingModel = RATCore.createFloatingModel();
@@ -95,6 +97,13 @@ function showMessage(message, critical = false) {
   element.className = critical ? 'form-error' : 'muted';
   if (critical) playAlert('critical');
   notifier.notify(`message-${critical ? 'critical' : 'info'}`, { title: critical ? 'Atención' : 'Reunión', message, tone: critical ? 'critical' : 'info', system: false });
+}
+
+function showWordGrantNotice() {
+  const now = Date.now();
+  if (now - ui.lastWordGrantNoticeAt < 1_500) return;
+  ui.lastWordGrantNoticeAt = now;
+  showMessage('Se te concedió la palabra. Activa tu micrófono cuando estés listo.');
 }
 
 function askConfirmation({ title, message, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false }) {
@@ -806,7 +815,7 @@ function handleData(payload, participant) {
       notifier.notify('hand-raised', { title: 'Mano levantada', message: `${message.displayName || participantName(participant)} solicitó la palabra.`, system: false });
     }
     if (message.kind === 'hand-lower') { handQueue.remove(participant?.identity || message.identity); renderHandQueue(); ui.roomUi?.updateCount(); }
-    if (message.kind === 'hand-approved' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); renderMediaPermissions(); showMessage('Se te concedió la palabra. Activa tu micrófono cuando estés listo.'); }
+    if (message.kind === 'hand-approved' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); renderMediaPermissions(); showWordGrantNotice(); }
     if (message.kind === 'hand-rejected' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; floatingModel.update({ handRaised: false }); setButtonState(document.getElementById('btnHand'), false, 'Cancelar', 'Mano'); showMessage('La solicitud fue cerrada por el organizador.'); }
     if (message.kind === 'word-revoked' && message.targetIdentity === ui.session.identity) { ui.handRaised = false; if (ui.screen) finishScreenShare(true); renderMediaPermissions(); showMessage('El organizador retiró el permiso para hablar.'); }
     if (message.kind === 'permission-changed' && message.targetIdentity === ui.session.identity) {
@@ -862,6 +871,7 @@ function handleData(payload, participant) {
 }
 
 function renderMediaPermissions() {
+  const previousTemporaryMicrophone = ui.temporaryMicrophoneAllowed;
   const microphoneAllowed = hasPublishPermission('MICROPHONE');
   const cameraAllowed = hasPublishPermission('CAMERA');
   const screenAllowed = hasPublishPermission('SCREENSHARE');
@@ -887,6 +897,8 @@ function renderMediaPermissions() {
   if (ui.session?.capabilities?.canRaiseHand) {
     const handButton = document.getElementById('btnHand');
     const temporaryMicrophone = microphoneAllowed && !['PANELIST', 'PARTICIPANT', 'STUDENT', 'MODERATOR', 'HOST', 'TEACHER', 'COHOST'].includes(ui.session.meetingRole);
+    ui.temporaryMicrophoneAllowed = temporaryMicrophone;
+    if (previousTemporaryMicrophone === false && temporaryMicrophone) showWordGrantNotice();
     if (temporaryMicrophone) {
       handButton.onclick = async () => { try { await selfDemote(); } catch (error) { showMessage(error.message, true); } };
       setButtonState(handButton, true, 'Bajar mano', 'Mano');

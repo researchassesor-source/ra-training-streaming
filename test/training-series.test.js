@@ -199,6 +199,8 @@ test('waiting and dashboard contracts keep LiveKit behind explicit live entry', 
   assert.match(dashboardHtml, /data-copy-series="reminder2h"/);
   assert.match(roomUi, /syncSpeakerRequests/);
   assert.match(roomUi, /temporarySpeaker/);
+  assert.match(roomUi, /function showWordGrantNotice\(\)/);
+  assert.match(roomUi, /previousTemporaryMicrophone === false && temporaryMicrophone/);
   const queue = new RATCore.HandQueue();
   queue.replace([{ identity: 'one', displayName: 'Uno', status: 'GRANTED', raisedAt: '2026-08-11T10:00:00.000Z' }]);
   assert.deepEqual(queue.list().map((item) => [item.identity, item.status, item.order]), [['one', 'GRANTED', 1]]);
