@@ -227,10 +227,17 @@ test('waiting and dashboard contracts keep LiveKit behind explicit live entry', 
   assert.match(dashboardHtml, /data-copy-series="reminder2h"/);
   assert.match(dashboardHtml, /ACCESO GENERAL/);
   assert.match(dashboardHtml, /Crear o recuperar enlace general/);
+  assert.match(dashboardHtml, /dashboard\.js\?v=general-access-result-fix/);
+  assert.match(dashboardHtml, /id="seriesGeneralStatus"[^>]*role="status"/);
+  assert.match(dashboardHtml, /id="seriesGeneralShareResult"[^>]*tabindex="-1"/);
+  assert.match(dashboardHtml, /id="seriesShareError"[^>]*role="alert"[^>]*tabindex="-1"/);
   assert.match(dashboardHtml, /data-copy-series-general="reminder15m"/);
   assert.match(dashboardHtml, /ACCESO INDIVIDUAL/);
   assert.match(dashboard, /\/general-access/);
   assert.match(dashboard, /access\.mode !== 'GENERAL'/);
+  assert.match(dashboard, /showGeneralSeriesShare\(result\.access, \{ reveal: true \}\)/);
+  assert.match(dashboard, /scrollIntoView\(\{ behavior: 'smooth', block: 'nearest' \}\)/);
+  assert.match(dashboard, /showSeriesShareError\(requestError\.message\)/);
   assert.match(html, /privacy-consent-option[^>]*>[\s\S]*?type="checkbox" required[^>]*>[\s\S]*?He leído el aviso de privacidad y acepto participar\./);
   assert.match(script, /button\.disabled = !document\.getElementById\('privacyConsent'\)\.checked \|\| !validName/);
   assert.match(style, /\.privacy-consent-option input[^}]*appearance: none/);
