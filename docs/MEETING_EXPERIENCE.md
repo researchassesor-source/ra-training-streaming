@@ -60,13 +60,17 @@ La cola de manos conserva orden y hora. En Webinar organizador/panelista revisa 
 
 Reacciones disponibles: 👍, 👏, ❤️, 😂, 🎉 y ✅. Se retransmiten con identidad, tienen rate limit y animación breve que respeta `prefers-reduced-motion`.
 
-Los toasts usan `aria-live`, cierre y caducidad; eventos repetidos se agrupan. El botón de notificaciones diferencia solicitando, concedido, rechazado y no compatible. `Notification.requestPermission()` solo se ejecuta desde el clic. El volumen global multiplica todas las pistas remotas actuales/futuras y cada participante tiene un factor individual; audio de pantalla usa el mismo camino y el micrófono local nunca cambia. Sonidos, volumen y categorías se conservan localmente sin datos sensibles.
+Los toasts usan `aria-live`, cierre y caducidad; eventos repetidos se agrupan. El botón de notificaciones diferencia solicitando, concedido, rechazado y no compatible. `Notification.requestPermission()` solo se ejecuta desde el clic. El volumen global empieza en 100 % en cada reunión y multiplica todas las pistas remotas actuales/futuras; si se modifica, se conserva solo mientras la persona permanece en esa sala. Cada participante tiene un factor individual, el audio de pantalla usa el mismo camino y el micrófono local nunca cambia. Las preferencias de sonidos y categorías sí se conservan localmente, sin datos sensibles.
 
 ## Estado, temporizador y red
 
 El temporizador comienza tras conexión LiveKit confirmada y usa `meeting.startedAt`, por lo que no reinicia al reconectar. La calidad procede de `ConnectionQualityChanged`: excelente, buena, inestable o sin medir. Reconnecting/disconnected pertenecen a la máquina de conexión y nunca se mezclan con grabación.
 
 Bloquear sala impide nuevos canjes, no desconecta asistentes existentes ni revoca permanentemente enlaces. Desbloquear restaura invitaciones activas. El check y el consumo se serializan por sala dentro de una instancia.
+
+## Facebook Live manual
+
+HOST/TEACHER puede pegar Server URL y Stream Key desde Facebook Live Producer. El backend acepta únicamente `rtmp://`/`rtmps://`, envía el destino directamente a un RoomComposite Egress de streaming y nunca guarda, registra ni devuelve la clave. Ese Egress es independiente del Egress de grabación: sus consultas, errores y detención no cambian el estado de grabación ni interrumpen la sala. La UI informa **Señal enviada a Facebook** porque, sin Meta API, no puede confirmar que la publicación ya sea pública. Al finalizar para todos, el servidor intenta detener cualquier Egress externo de la sala sin bloquear el cierre si Facebook falla.
 
 ## Atajos y accesibilidad
 

@@ -49,6 +49,12 @@ const {
 const { createRateLimiter } = require('./rate-limit');
 const { createLiveKitStatusProbe } = require('./livekit-status');
 const {
+  facebookStateFromEgress,
+  isRecordingEgress,
+  isStreamingEgress,
+  validateFacebookDestination,
+} = require('./facebook-live');
+const {
   AppError,
   asyncHandler,
   limitedUserAgent,
@@ -175,6 +181,33 @@ function createApp(overrides = {}) {
   const livekitProbe = overrides.livekitProbe || createLiveKitStatusProbe({ roomService, wsUrl: LIVEKIT_WS_URL });
   const storageProbe = overrides.storageProbe || storageStatus;
   const pendingMediaRequests = new Map();
+  const facebookEgressByRoom = new Map();
+
+  function isFacebookEgress(room, info) {
+    return isStreamingEgress(info) || facebookEgressByRoom.get(room)?.egressId === info?.egressId;
+  }
+
+  async function facebookEgress(room) {
+    const egresses = await egressClient.listEgress({ roomName: room });
+    const tracked = facebookEgressByRoom.get(room);
+    const matches = egresses.filter((info) => isFacebookEgress(room, info));
+    const trackedMatch = matches.find((info) => info.egressId === tracked?.egressId);
+    if (trackedMatch && facebookStateFromEgress(trackedMatch).active) return trackedMatch;
+    return matches.find((info) => facebookStateFromEgress(info).active) || trackedMatch || matches.at(-1) || null;
+  }
+
+  function publicFacebookState(room, info) {
+    const metadata = facebookEgressByRoom.get(room) || {};
+    const state = facebookStateFromEgress(info, metadata);
+    facebookEgressByRoom.set(room, {
+      provider: 'facebook',
+      egressId: state.egressId,
+      status: state.state,
+      startedAt: metadata.startedAt || (state.active ? new Date().toISOString() : null),
+      stoppedAt: state.active ? null : metadata.stoppedAt || (metadata.egressId ? new Date().toISOString() : null),
+    });
+    return { ...state, startedAt: facebookEgressByRoom.get(room).startedAt, stoppedAt: facebookEgressByRoom.get(room).stoppedAt };
+  }
 
   async function transcriptionStatus(options) {
     if (typeof transcriptionProvider.healthStatus === 'function') return transcriptionProvider.healthStatus(options);
@@ -1441,7 +1474,8 @@ function createApp(overrides = {}) {
     if (!recordingConfigured || !req.meeting.allowRecording) return res.json({ state: 'DISABLED', active: false, egressId: null, configured: false });
     try {
       const active = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
-      const state = active.length ? recordingStateFromEgress(active[0]) : { state: 'IDLE', active: false, egressId: null };
+      const recording = active.find(isRecordingEgress);
+      const state = recording ? recordingStateFromEgress(recording) : { state: 'IDLE', active: false, egressId: null };
       res.json({ ...state, configured: true });
     } catch {
       res.json({ state: 'FAILED', active: false, egressId: null, configured: true, message: 'No fue posible consultar Egress.' });
@@ -1454,7 +1488,8 @@ function createApp(overrides = {}) {
       if (!req.meeting.allowRecording || req.meeting.status !== 'LIVE') throw new AppError(409, 'La grabación no está permitida en esta reunión', 'RECORDING_DISABLED');
       const participants = await assertCallerPresent(req);
       const existing = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
-      if (existing.length > 0) return res.json({ ...recordingStateFromEgress(existing[0]), alreadyRunning: true });
+      const currentRecording = existing.find(isRecordingEgress);
+      if (currentRecording) return res.json({ ...recordingStateFromEgress(currentRecording), alreadyRunning: true });
       const filepath = `recordings/${req.roomSession.room}/${Date.now()}`;
       const info = await egressClient.startRoomCompositeEgress(
         req.roomSession.room,
@@ -1503,7 +1538,7 @@ function createApp(overrides = {}) {
       await assertCallerPresent(req);
       const egressId = sanitizeText(req.body?.egressId, { field: 'egressId', min: 5, max: 120, required: true });
       const active = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
-      if (!active.some((egress) => egress.egressId === egressId)) throw new AppError(404, 'Grabación activa no encontrada en esta sala', 'NOT_FOUND');
+      if (!active.some((egress) => egress.egressId === egressId && isRecordingEgress(egress))) throw new AppError(404, 'Grabación activa no encontrada en esta sala', 'NOT_FOUND');
       const info = await egressClient.stopEgress(egressId);
       const state = recordingStateFromEgress(info);
       const responseState = state.active ? state : { state: state.state === 'FAILED' ? 'FAILED' : 'PROCESSING', active: false, egressId: null };
@@ -1516,8 +1551,68 @@ function createApp(overrides = {}) {
     }
   }));
 
+  app.get('/api/facebook-live/status', requireRoomSession, roomMeeting, asyncHandler(async (req, res) => {
+    try {
+      res.json(publicFacebookState(req.roomSession.room, await facebookEgress(req.roomSession.room)));
+    } catch {
+      res.json({ provider: 'facebook', state: 'ERROR', active: false, egressId: null, startedAt: null, stoppedAt: null, message: 'No fue posible consultar la señal externa.' });
+    }
+  }));
+
+  app.post('/api/facebook-live/start', requireRoomSession, requireRoomCsrf, roomMeeting, requireRoomCapability('canManageRecording'), asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    if (config.isProductionLike && !req.secure) throw new AppError(400, 'Facebook Live requiere una conexión HTTPS', 'HTTPS_REQUIRED');
+    await assertCallerPresent(req);
+    const { output } = validateFacebookDestination(req.body?.serverUrl, req.body?.streamKey);
+    try {
+      const current = await facebookEgress(req.roomSession.room);
+      const currentState = publicFacebookState(req.roomSession.room, current);
+      if (currentState.active) return res.json({ ...currentState, alreadyRunning: true });
+      const info = await egressClient.startRoomCompositeEgress(req.roomSession.room, output, { layout: 'speaker' });
+      facebookEgressByRoom.set(req.roomSession.room, {
+        provider: 'facebook', egressId: info.egressId, status: 'SENDING', startedAt: new Date().toISOString(), stoppedAt: null,
+      });
+      const state = publicFacebookState(req.roomSession.room, info);
+      await relayRoomData(req, { kind: 'external-stream-status', ...state, sentAt: new Date().toISOString() });
+      res.status(201).json({ ...state, alreadyRunning: false });
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(502, 'No fue posible iniciar la señal hacia Facebook', 'FACEBOOK_EGRESS_FAILED');
+    } finally {
+      output.urls.fill('');
+      if (req.body) req.body.streamKey = '';
+    }
+  }));
+
+  app.post('/api/facebook-live/stop', requireRoomSession, requireRoomCsrf, roomMeeting, requireRoomCapability('canManageRecording'), asyncHandler(async (req, res) => {
+    await assertCallerPresent(req);
+    try {
+      const current = await facebookEgress(req.roomSession.room);
+      const requestedId = req.body?.egressId
+        ? sanitizeText(req.body.egressId, { field: 'egressId', min: 5, max: 120, required: true })
+        : current?.egressId;
+      if (!current || current.egressId !== requestedId || !publicFacebookState(req.roomSession.room, current).active) {
+        throw new AppError(404, 'Transmisión externa activa no encontrada', 'FACEBOOK_EGRESS_NOT_FOUND');
+      }
+      const info = await egressClient.stopEgress(requestedId);
+      const metadata = facebookEgressByRoom.get(req.roomSession.room) || {};
+      facebookEgressByRoom.set(req.roomSession.room, { ...metadata, status: 'IDLE', stoppedAt: new Date().toISOString() });
+      const state = publicFacebookState(req.roomSession.room, info);
+      await relayRoomData(req, { kind: 'external-stream-status', ...state, sentAt: new Date().toISOString() });
+      res.json({ stopped: true, ...state });
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(502, 'No fue posible detener la señal hacia Facebook', 'FACEBOOK_EGRESS_STOP_FAILED');
+    }
+  }));
+
   app.post('/api/room/end', requireRoomSession, requireRoomCsrf, roomMeeting, requireRoomCapability('canEndMeeting'), asyncHandler(async (req, res) => {
     await assertCallerPresent(req);
+    try {
+      const egresses = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
+      const external = egresses.filter((info) => isFacebookEgress(req.roomSession.room, info));
+      await Promise.allSettled(external.map((info) => egressClient.stopEgress(info.egressId)));
+    } catch { /* An external destination must never block ending the meeting. */ }
     const updated = await meetings.transitionMeeting(req.roomSession.room, 'complete');
     await roomRegistry.revokeRoom(req.roomSession.room);
     await roomService.deleteRoom(req.roomSession.room).catch((error) => {

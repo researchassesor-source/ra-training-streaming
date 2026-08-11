@@ -9,7 +9,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="style.css?v=20260730-compact3" />
+  <link rel="stylesheet" href="style.css?v=20260811-facebook1" />
 </head>
 <body class="room-body" data-page-role="presenter">
   <header class="room-topbar">
@@ -21,6 +21,7 @@
     <section class="room-stage" aria-label="Escenario de video">
       <div id="stageGrid" class="stage-grid"></div>
       <div id="reactionOverlay" class="reaction-overlay" aria-live="polite"></div>
+      <p id="externalBroadcastNotice" class="external-broadcast-notice" role="status" hidden>Esta sesión está siendo transmitida externamente.</p>
       <div id="screenShareNotice" class="screen-share-notice" hidden><strong>Estás compartiendo tu pantalla</strong><span id="screenShareAudioState">Audio de pantalla según la selección del navegador.</span><button id="stopShareNotice" type="button">Detener</button></div>
     </section>
     <aside id="sidePanel" class="room-side-panel" aria-label="Panel de colaboración">
@@ -86,6 +87,11 @@
       <button id="btnInvitePanelist" class="organizer-control" type="button">Copiar invitación de panelista</button>
       <div id="invitationRoleActions" class="organizer-control role-invitation-actions"></div>
       <button id="btnRecord" class="organizer-control" type="button">Iniciar grabación</button>
+      <section id="facebookLiveSection" class="facebook-live-section organizer-control" aria-labelledby="facebookLiveTitle" hidden>
+        <div><strong id="facebookLiveTitle">Facebook Live</strong><span id="facebookLiveState" role="status" aria-live="polite">○ No transmitiendo</span></div>
+        <p id="facebookLiveHelp" class="muted small">Conexión manual mediante LiveKit Egress, independiente de la grabación.</p>
+        <div class="facebook-live-actions"><button id="btnFacebookConfig" type="button">Configurar Facebook Live</button><button id="btnFacebookStop" class="danger" type="button" hidden>Detener Facebook Live</button></div>
+      </section>
       <button id="btnEnd" class="organizer-control danger" type="button">Finalizar para todos</button>
       <button id="btnNotifications" type="button">Activar notificaciones</button>
       <button id="btnSoundToggle" type="button" aria-pressed="true">Sonido activo</button>
@@ -122,7 +128,7 @@
           <div class="preview-wrap"><video id="previewVideo" autoplay muted playsinline></video><div id="previewPlaceholder"><strong id="previewState">Cámara apagada</strong><span>Enciéndela solo si deseas comprobarla antes de entrar.</span></div></div>
           <div class="preflight-fields">
             <label>Nombre visible<input id="displayNameInput" maxlength="80" autocomplete="name" required /></label>
-            <label class="check-row consent-option"><input id="privacyConsent" type="checkbox" required /> Leí el aviso de privacidad y acepto participar.</label>
+            <label class="check-row consent-option"><input id="privacyConsent" type="checkbox" required aria-describedby="consentHelp" /> He leído el aviso de privacidad y acepto participar.</label>
             <label class="check-row consent-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label><label class="check-row consent-option" id="transcriptionConsentLabel"><input id="transcriptionConsent" type="checkbox" /> Entiendo que la grabación puede transcribirse.</label>
             <p id="processingNotice" class="privacy-notice"></p>
             <p id="consentHelp" class="field-help" aria-live="polite">Acepta los avisos requeridos para ingresar.</p>
@@ -135,6 +141,20 @@
         </div>
       </div>
       <footer class="preflight-footer"><p id="preflightError" class="form-error" role="alert" aria-live="assertive" tabindex="-1"></p><div class="dialog-actions"><a class="button secondary" href="/index.html">Cancelar</a><button id="enterRoomButton" class="primary" type="submit" aria-busy="false">Entrar a la reunión</button></div></footer>
+    </form>
+  </dialog>
+  <dialog id="facebookLiveDialog" class="app-dialog facebook-live-dialog">
+    <form id="facebookLiveForm" autocomplete="off">
+      <h2>Configurar Facebook Live</h2>
+      <p>Obtén estos datos desde Facebook Live Producer.</p>
+      <label>Servidor RTMP/RTMPS<input id="facebookServerUrl" type="text" inputmode="url" maxlength="512" autocomplete="off" spellcheck="false" placeholder="rtmps://live-api-s.facebook.com:443/rtmp/" required /></label>
+      <label>Clave de transmisión<input id="facebookStreamKey" type="password" maxlength="512" autocomplete="off" spellcheck="false" required /></label>
+      <ol class="facebook-live-steps">
+        <li>Abre Facebook Live Producer.</li><li>Selecciona “Software de streaming”.</li><li>Copia Server URL y Stream Key.</li><li>Pégalos en R.A. Training.</li><li>Pulsa “Iniciar transmisión”.</li><li>Cuando Facebook muestre la previsualización, vuelve allí y pulsa “Transmitir en vivo”.</li>
+      </ol>
+      <p class="muted small">Este flujo es manual: R.A. Training confirma el envío de señal, no que Facebook ya la haya publicado.</p>
+      <p id="facebookLiveError" class="form-error" role="alert" aria-live="assertive"></p>
+      <div class="dialog-actions"><button id="facebookLiveCancel" class="secondary" type="button">Cancelar</button><button id="facebookLiveStart" class="primary" type="submit">Iniciar transmisión</button></div>
     </form>
   </dialog>
   <dialog id="confirmationDialog" class="app-dialog confirmation-dialog">
@@ -151,6 +171,6 @@
   <script src="connection.js?v=20260730-compact3"></script>
   <script src="chat.js?v=20260730-compact3"></script>
   <script src="questions.js?v=20260730-compact3"></script>
-  <script src="room-ui.js?v=20260730-compact3"></script>
+  <script src="room-ui.js?v=20260811-facebook1"></script>
 </body>
 </html>

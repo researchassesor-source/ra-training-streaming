@@ -22,6 +22,9 @@ const ui = {
   recording: false,
   recordingConfigured: false,
   egressId: null,
+  facebookState: 'IDLE',
+  facebookActive: false,
+  facebookEgressId: null,
   handRaised: false,
   activeTab: null,
   effectsLoaded: false,
@@ -54,6 +57,7 @@ const unreadQuestions = RATCore.createUnreadCounter((count) => { updateCounter('
 const statusMachine = new RATCore.ConnectionStateMachine(renderConnectionState);
 let recordingMachine = new RATCore.RecordingStateMachine(renderRecordingState, false);
 let recordingPollTimer = null;
+let facebookPollTimer = null;
 
 function renderRecordingState(snapshot) {
   const wasRecording = ui.recording;
@@ -76,6 +80,45 @@ function renderRecordingState(snapshot) {
     playAlert(snapshot.active ? 'recordingStart' : 'recordingStop');
     notifier.notify('recording-state', { title: snapshot.active ? 'Grabación iniciada' : 'Grabación detenida', message: snapshot.active ? 'Esta sesión está siendo grabada.' : 'La grabación dejó de estar activa.', tone: snapshot.active ? 'critical' : 'info' });
   }
+}
+
+function renderFacebookState(result = {}) {
+  const state = ['IDLE', 'SENDING', 'ACTIVE', 'STOPPING', 'ERROR'].includes(result.state) ? result.state : 'ERROR';
+  ui.facebookState = state;
+  ui.facebookActive = result.active === true;
+  ui.facebookEgressId = result.egressId || null;
+  const labels = {
+    IDLE: '○ No transmitiendo',
+    SENDING: '◉ Enviando señal',
+    ACTIVE: '🔴 Señal enviada a Facebook',
+    STOPPING: '◉ Deteniendo señal',
+    ERROR: '⚠ Error de transmisión',
+  };
+  const status = document.getElementById('facebookLiveState');
+  if (status) status.textContent = labels[state];
+  const notice = document.getElementById('externalBroadcastNotice');
+  if (notice) notice.hidden = !ui.facebookActive;
+  const configure = document.getElementById('btnFacebookConfig');
+  const stop = document.getElementById('btnFacebookStop');
+  if (configure) {
+    configure.hidden = ui.facebookActive;
+    configure.disabled = ['SENDING', 'STOPPING'].includes(state);
+    configure.textContent = state === 'ERROR' ? 'Reintentar' : 'Configurar Facebook Live';
+  }
+  if (stop) {
+    stop.hidden = !ui.facebookActive;
+    stop.disabled = state === 'STOPPING' || !ui.facebookEgressId;
+  }
+  const help = document.getElementById('facebookLiveHelp');
+  if (help) help.textContent = state === 'ACTIVE'
+    ? 'LiveKit está enviando señal. Confirma la previsualización y la publicación desde Facebook Live Producer.'
+    : state === 'ERROR' ? (result.message || 'La señal externa falló; la reunión y la grabación continúan.')
+      : 'Conexión manual mediante LiveKit Egress, independiente de la grabación.';
+  clearTimeout(facebookPollTimer);
+  if (ui.room && (ui.facebookActive || ['SENDING', 'STOPPING'].includes(state))) {
+    facebookPollTimer = window.setTimeout(queryFacebookStatus, state === 'ACTIVE' ? 5_000 : 1_500);
+  }
+  return result;
 }
 
 function renderConnectionState(snapshot) {
@@ -839,6 +882,7 @@ function handleData(payload, participant) {
       active: message.state === 'RECORDING' && message.active === true,
       egressId: message.egressId || null,
     });
+    if (message.kind === 'external-stream-status') renderFacebookState(message);
     if (message.kind === 'reaction') { renderReaction(message.reaction, message.from); playAlert('reaction'); }
     if (message.kind === 'room-lock') {
       renderRoomLock(message.locked);
@@ -1108,6 +1152,78 @@ async function toggleRecording() {
   }
 }
 
+async function queryFacebookStatus() {
+  try {
+    return renderFacebookState(await roomRequest('/api/facebook-live/status'));
+  } catch {
+    return renderFacebookState({ state: 'ERROR', active: false, message: 'No fue posible consultar la señal externa.' });
+  }
+}
+
+function clearFacebookCredentials() {
+  const server = document.getElementById('facebookServerUrl');
+  const key = document.getElementById('facebookStreamKey');
+  if (server) server.value = '';
+  if (key) key.value = '';
+}
+
+function openFacebookDialog() {
+  clearFacebookCredentials();
+  document.getElementById('facebookLiveError').textContent = '';
+  document.getElementById('facebookLiveDialog').showModal();
+  document.getElementById('facebookServerUrl').focus();
+}
+
+async function startFacebookLive(event) {
+  event.preventDefault();
+  if (!ui.session?.capabilities?.canManageRecording) return;
+  const button = document.getElementById('facebookLiveStart');
+  const error = document.getElementById('facebookLiveError');
+  const payload = {
+    serverUrl: document.getElementById('facebookServerUrl').value,
+    streamKey: document.getElementById('facebookStreamKey').value,
+  };
+  document.getElementById('facebookStreamKey').value = '';
+  button.disabled = true;
+  button.textContent = 'Iniciando…';
+  error.textContent = '';
+  try {
+    const result = await roomRequest('/api/facebook-live/start', { method: 'POST', body: payload }, ui.session.csrfToken);
+    payload.streamKey = '';
+    clearFacebookCredentials();
+    document.getElementById('facebookLiveDialog').close();
+    renderFacebookState(result);
+  } catch (requestError) {
+    payload.streamKey = '';
+    renderFacebookState({ state: 'ERROR', active: false, message: requestError.message });
+    error.textContent = requestError.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Iniciar transmisión';
+  }
+}
+
+async function stopFacebookLive() {
+  if (!ui.session?.capabilities?.canManageRecording || !ui.facebookEgressId) return;
+  const confirmed = await askConfirmation({
+    title: 'Detener Facebook Live',
+    message: 'Se detendrá únicamente la señal externa. La reunión y la grabación continuarán.',
+    confirmLabel: 'Detener Facebook Live',
+    danger: true,
+  });
+  if (!confirmed) return;
+  const button = document.getElementById('btnFacebookStop');
+  button.disabled = true;
+  try {
+    renderFacebookState(await roomRequest('/api/facebook-live/stop', { method: 'POST', body: { egressId: ui.facebookEgressId } }, ui.session.csrfToken));
+  } catch (error) {
+    renderFacebookState({ state: 'ERROR', active: false, message: error.message });
+    showMessage(error.message, true);
+  } finally {
+    button.disabled = ui.facebookState === 'STOPPING' || !ui.facebookEgressId;
+  }
+}
+
 async function leaveRoom() {
   const recording = await queryRecordingStatus();
   if ((recording.active || recording.busy) && !await askConfirmation({ title: 'Salir de la reunión', message: 'Hay una operación de grabación activa. Salir no la detendrá ni finalizará la reunión.', confirmLabel: 'Salir', danger: true })) return;
@@ -1255,6 +1371,7 @@ function configureMeetingMode() {
   document.getElementById('recordingHelp').hidden = !ui.session.capabilities?.canManageRecording;
   document.getElementById('btnLock').hidden = !ui.session.capabilities?.canManageRoom;
   document.getElementById('btnRecord').hidden = !ui.session.capabilities?.canManageRecording;
+  document.getElementById('facebookLiveSection').hidden = !ui.session.capabilities?.canManageRecording;
   document.getElementById('btnEnd').hidden = !ui.session.capabilities?.canEndMeeting;
   document.getElementById('btnInviteViewer').hidden = true;
   document.getElementById('btnInvitePanelist').hidden = true;
@@ -1320,6 +1437,14 @@ function setupControls() {
     } catch (error) { showMessage(error.message, true); }
   };
   document.getElementById('btnRecord').onclick = toggleRecording;
+  document.getElementById('btnFacebookConfig').onclick = openFacebookDialog;
+  document.getElementById('btnFacebookStop').onclick = stopFacebookLive;
+  document.getElementById('facebookLiveForm').onsubmit = startFacebookLive;
+  document.getElementById('facebookLiveCancel').onclick = () => {
+    clearFacebookCredentials();
+    document.getElementById('facebookLiveDialog').close();
+  };
+  document.getElementById('facebookLiveDialog').addEventListener('close', clearFacebookCredentials);
   document.getElementById('btnLeave').onclick = leaveRoom;
   document.getElementById('btnEnd').onclick = endRoom;
   document.getElementById('btnLock').onclick = toggleRoomLock;
@@ -1359,15 +1484,13 @@ function setupControls() {
     selfButton.setAttribute('aria-pressed', String(ui.selfView));
   };
   const volume = document.getElementById('meetingVolume');
-  const savedVolume = Number(localStorage.getItem('rat:meeting-volume'));
-  ui.meetingVolume = Number.isFinite(savedVolume) ? Math.max(0, Math.min(1, savedVolume)) : 1;
+  ui.meetingVolume = 1;
   volume.value = String(Math.round(ui.meetingVolume * 100));
   document.getElementById('meetingVolumeValue').textContent = `${volume.value}%`;
   ui.stageEvents?.setMeetingVolume(ui.meetingVolume);
   volume.oninput = () => {
     ui.meetingVolume = Number(volume.value) / 100;
     ui.stageEvents?.setMeetingVolume(ui.meetingVolume);
-    localStorage.setItem('rat:meeting-volume', String(ui.meetingVolume));
     document.getElementById('meetingVolumeValue').textContent = `${volume.value}%`;
   };
   document.getElementById('btnTestSpeaker').onclick = () => testSpeaker().then(() => showMessage('Prueba de altavoz completada.')).catch((error) => showMessage(error.message, true));
@@ -1427,6 +1550,7 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     onParticipantsChanged: renderParticipants,
     onReconnected: () => {
       queryRecordingStatus();
+      queryFacebookStatus();
       syncSpeakerRequests().catch(() => {});
       reportRoomConnection('reconnected', ui.session.csrfToken).catch(() => {});
       notifier.notify('connection-restored', { title: 'Conexión restablecida', message: 'La reunión volvió a estar sincronizada.', tone: 'success', sound: 'reconnected' });
@@ -1493,6 +1617,7 @@ async function connectRoom({ joinCamera, joinMicrophone }) {
     ui.stage.setParticipantState(ui.session.identity, `${ui.session.displayName} (tú)`, { microphone: false, local: true, keepVisible: true });
     startMeetingTimer();
     await queryRecordingStatus();
+    await queryFacebookStatus();
     await enumerateDevices().catch(() => showMessage('La reunión está conectada, pero no fue posible actualizar la lista de dispositivos.', true));
     if (joinMicrophone) await toggleMicrophone();
     if (joinCamera) await toggleCamera();
@@ -1536,6 +1661,7 @@ async function initializeRoom() {
     if (ui.session?.csrfToken) roomRequest('/api/room-session/leave', { method: 'POST', body: {}, keepalive: true }, ui.session.csrfToken).catch(() => {});
     stopPreview();
     clearTimeout(recordingPollTimer);
+    clearTimeout(facebookPollTimer);
     clearInterval(ui.elapsedTimer);
     clearTimeout(ui.reactionTimer);
     ui.chat?.dispose();

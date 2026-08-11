@@ -1676,7 +1676,18 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .preview-wrap > div { padding: 20px; display: grid; gap: 6px; text-align: center; }
 .preview-wrap > div strong { color: #edf3ff; }
 .consent-option { min-height: 48px; padding: 9px 10px; border: 1px solid #344d82; border-radius: 10px; background: #101f3e; }
-.consent-option input { min-width: 20px; min-height: 20px; }
+.consent-option input { min-width: 22px; min-height: 22px; accent-color: var(--brand-orange); }
+.consent-option:has(input:checked) { border-color: #f5a623; background: #18294d; box-shadow: inset 0 0 0 1px rgba(245,166,35,.22); }
+.external-broadcast-notice { position: absolute; z-index: 6; top: 12px; left: 50%; margin: 0; padding: 7px 11px; border: 1px solid #e19732; border-radius: 999px; color: #fff4df; background: rgba(56,35,10,.92); font-size: 12px; transform: translateX(-50%); }
+.facebook-live-section { grid-column: 1 / -1; padding: 12px; display: grid; gap: 9px; border: 1px solid #40598d; border-radius: 10px; background: #122449; }
+.facebook-live-section[hidden] { display: none; }
+.facebook-live-section > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
+.facebook-live-section p { margin: 0; }
+.facebook-live-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.facebook-live-dialog { width: min(620px, calc(100vw - 24px)); }
+.facebook-live-dialog form { display: grid; gap: 12px; }
+.facebook-live-dialog label { display: grid; gap: 6px; }
+.facebook-live-steps { margin: 0; padding-left: 22px; display: grid; gap: 5px; color: var(--text-dim); font-size: 13px; }
 .preflight-app-logo { width: 58px; height: 58px; border-radius: 13px; }
 .role-invitation-actions { display: grid; gap: 7px; }
 .role-invitation-actions button { min-height: 42px; text-align: left; }

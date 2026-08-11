@@ -45,9 +45,37 @@ const mockRoomService = {
   async sendData(room, data, kind, options) { this.sentData.push({ room, data: JSON.parse(Buffer.from(data).toString('utf8')), kind, options }); },
 };
 const mockEgressClient = {
-  async listEgress() { return []; },
-  async stopEgress() {},
-  async startRoomCompositeEgress() { return { egressId: 'egress-test' }; },
+  items: [],
+  starts: [],
+  stops: [],
+  failStart: null,
+  failStop: null,
+  reset() { this.items = []; this.starts = []; this.stops = []; this.failStart = null; this.failStop = null; },
+  async listEgress({ roomName, active } = {}) {
+    const activeStatuses = new Set(['EGRESS_STARTING', 'EGRESS_ACTIVE', 'EGRESS_ENDING']);
+    return this.items.filter((item) => (!roomName || item.roomName === roomName) && (active !== true || activeStatuses.has(item.status)));
+  },
+  async stopEgress(egressId) {
+    this.stops.push(egressId);
+    if (this.failStop) throw this.failStop;
+    const item = this.items.find((candidate) => candidate.egressId === egressId);
+    if (!item) throw new Error('egress not found');
+    item.status = 'EGRESS_COMPLETE';
+    return { ...item };
+  },
+  async startRoomCompositeEgress(roomName, output, options) {
+    this.starts.push({ roomName, output: structuredClone(output), options: structuredClone(options) });
+    if (this.failStart) throw this.failStart;
+    const info = {
+      egressId: `egress-test-${this.starts.length}`,
+      roomName,
+      status: 'EGRESS_ACTIVE',
+      streamResults: [{}],
+      request: { value: { streamOutputs: structuredClone([output]) } },
+    };
+    this.items.push(info);
+    return { ...info };
+  },
 };
 let mockLivekitAvailable = true;
 
@@ -434,6 +462,109 @@ test('viewer room sessions cannot promote participants or control recording', as
   assert.equal(promote.response.status, 403);
   const recording = await request('/api/recording/start', { method: 'POST', cookie, roomCsrf: viewer.session.csrf, body: {} });
   assert.equal(recording.response.status, 403);
+});
+
+test('manual Facebook Live uses a host-only, secret-free and recording-independent Egress flow', async () => {
+  mockEgressClient.reset();
+  mockRoomService.sentData = [];
+  const meeting = await meetings.createMeeting({
+    title: 'Facebook Live manual', room: 'facebook-live-manual', trainerName: 'Trainer', scheduledAt: null,
+    durationMinutes: 60, status: 'LIVE', allowRecording: true, type: 'WEBINAR', createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const host = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingRole: 'HOST', displayName: 'Host' });
+  const cohost = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingRole: 'COHOST', displayName: 'Cohost' });
+  const hostCookie = roomCookie(host.token, host.session.sid).split(';')[0];
+  const cohostCookie = roomCookie(cohost.token, cohost.session.sid).split(';')[0];
+  mockRoomService.participants = [{ identity: host.session.identity }, { identity: cohost.session.identity }];
+
+  const forbidden = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: cohostCookie, roomSessionId: cohost.session.sid, roomCsrf: cohost.session.csrf,
+    body: { serverUrl: 'rtmps://live-api-s.facebook.com:443/rtmp/', streamKey: 'cohost-key-123' },
+  });
+  assert.equal(forbidden.response.status, 403);
+  assert.equal(mockEgressClient.starts.length, 0);
+
+  for (const serverUrl of ['https://live-api-s.facebook.com/rtmp/', 'ftp://live-api-s.facebook.com/rtmp/']) {
+    const invalid = await request('/api/facebook-live/start', {
+      method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+      body: { serverUrl, streamKey: 'invalid-protocol-key' },
+    });
+    assert.equal(invalid.response.status, 400);
+  }
+
+  const secret = 'facebook-secret-key-123';
+  const serverUrl = 'rtmps://live-api-s.facebook.com:443/rtmp/';
+  const started = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { serverUrl, streamKey: secret },
+  });
+  assert.equal(started.response.status, 201, JSON.stringify(started.data));
+  assert.equal(started.data.state, 'ACTIVE');
+  assert.equal(started.data.active, true);
+  assert.equal(mockEgressClient.starts.length, 1);
+  assert.equal(mockEgressClient.starts[0].output.urls[0], `${serverUrl}${secret}`);
+  assert.doesNotMatch(JSON.stringify(started.data), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(started.data), /live-api-s\.facebook\.com/);
+  assert.doesNotMatch(JSON.stringify(mockRoomService.sentData), new RegExp(secret));
+  assert.equal(mockRoomService.sentData.at(-1).data.kind, 'external-stream-status');
+  assert.equal(mockRoomService.sentData.some((packet) => packet.data.kind === 'recording-status'), false);
+  assert.doesNotMatch(JSON.stringify(await audit.listEvents({ room: meeting.room })), new RegExp(secret));
+
+  const status = await request('/api/facebook-live/status', { cookie: hostCookie, roomSessionId: host.session.sid });
+  assert.equal(status.data.state, 'ACTIVE');
+  assert.doesNotMatch(JSON.stringify(status.data), new RegExp(secret));
+  const firstExternalId = started.data.egressId;
+  const stopped = await request('/api/facebook-live/stop', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf, body: { egressId: firstExternalId },
+  });
+  assert.equal(stopped.response.status, 200, JSON.stringify(stopped.data));
+  assert.equal(mockEgressClient.stops.at(-1), firstExternalId);
+
+  const recording = {
+    egressId: 'recording-independent-1', roomName: meeting.room, status: 'EGRESS_ACTIVE', fileResults: [{}],
+    request: { value: { fileOutputs: [{ filepath: 'recordings/facebook-live-manual/test.mp4' }] } },
+  };
+  mockEgressClient.items.push(recording);
+  const second = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { serverUrl, streamKey: 'second-facebook-key-456' },
+  });
+  assert.equal(second.response.status, 201, JSON.stringify(second.data));
+  await request('/api/facebook-live/stop', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf, body: { egressId: second.data.egressId },
+  });
+  assert.equal(recording.status, 'EGRESS_ACTIVE');
+  assert.equal(mockEgressClient.stops.includes(recording.egressId), false);
+
+  const failedSecret = 'never-echo-this-facebook-key';
+  mockEgressClient.failStart = new Error(`upstream included ${failedSecret}`);
+  const failed = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { serverUrl, streamKey: failedSecret },
+  });
+  assert.equal(failed.response.status, 502);
+  assert.equal(failed.data.code, 'FACEBOOK_EGRESS_FAILED');
+  assert.doesNotMatch(JSON.stringify(failed.data), new RegExp(failedSecret));
+  assert.equal((await meetings.getMeeting(meeting.room)).status, 'LIVE');
+  mockEgressClient.failStart = null;
+
+  const cleanup = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { serverUrl, streamKey: 'cleanup-facebook-key-789' },
+  });
+  assert.equal(cleanup.response.status, 201, JSON.stringify(cleanup.data));
+  mockEgressClient.failStop = new Error('Facebook destination unavailable');
+  const stopCount = mockEgressClient.stops.length;
+  const ended = await request('/api/room/end', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf, body: {},
+  });
+  assert.equal(ended.response.status, 200, JSON.stringify(ended.data));
+  assert.equal(ended.data.ended, true);
+  assert.ok(mockEgressClient.stops.slice(stopCount).includes(cleanup.data.egressId));
+  assert.equal(mockEgressClient.stops.slice(stopCount).includes(recording.egressId), false);
+  mockEgressClient.reset();
+  mockRoomService.participants = [];
 });
 
 test('chat is server-relayed, session-bound and rate limited', async () => {
