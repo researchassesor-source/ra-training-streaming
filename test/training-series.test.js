@@ -240,8 +240,9 @@ test('waiting and dashboard contracts keep LiveKit behind explicit live entry', 
   assert.match(dashboard, /showSeriesShareError\(requestError\.message\)/);
   assert.match(html, /privacy-consent-option[^>]*>[\s\S]*?type="checkbox" required[^>]*>[\s\S]*?He leído el aviso de privacidad y acepto participar\./);
   assert.match(script, /button\.disabled = !document\.getElementById\('privacyConsent'\)\.checked \|\| !validName/);
-  assert.match(style, /\.privacy-consent-option input[^}]*appearance: none/);
-  assert.match(style, /\.privacy-consent-option input:checked::after[^}]*content: '\\2713'/);
+  assert.match(style, /\.privacy-consent-option input[^}]*appearance: auto[^}]*width: 24px[^}]*height: 24px[^}]*opacity: 1[^}]*visibility: visible[^}]*accent-color: var\(--brand-orange\)/);
+  assert.doesNotMatch(style, /\.privacy-consent-option input:checked::after/);
+  assert.match(html, /style\.css\?v=privacy-checkbox-fix/);
   assert.match(roomUi, /syncSpeakerRequests/);
   assert.match(roomUi, /temporarySpeaker/);
   assert.match(roomUi, /function showWordGrantNotice\(\)/);

@@ -1683,9 +1683,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .consent-option:has(input:checked) { border-color: #f5a623; background: #18294d; box-shadow: inset 0 0 0 1px rgba(245,166,35,.22); }
 .privacy-consent-option, .consent-option.privacy-consent-option { min-height: 34px; padding: 3px 0; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 10px; border: 0; border-radius: 0; color: #f7f9ff; background: transparent; box-shadow: none; font-weight: 700; cursor: pointer; }
 .privacy-consent-option:has(input:checked), .consent-option.privacy-consent-option:has(input:checked) { border: 0; background: transparent; box-shadow: none; }
-.privacy-consent-option input, .consent-option.privacy-consent-option input { appearance: none; width: 24px; height: 24px; min-width: 24px; min-height: 24px; margin: 0; display: grid; place-items: center; border: 2px solid #dbe6ff; border-radius: 4px; background: #081127; cursor: pointer; }
-.privacy-consent-option input:checked { border-color: var(--brand-orange); background: var(--brand-orange); }
-.privacy-consent-option input:checked::after { content: '\2713'; color: #081127; font-size: 19px; font-weight: 950; line-height: 1; }
+.privacy-consent-option input, .consent-option.privacy-consent-option input { appearance: auto; width: 24px; height: 24px; min-width: 24px; min-height: 24px; margin: 0; opacity: 1; visibility: visible; accent-color: var(--brand-orange); cursor: pointer; }
 .privacy-consent-option input:focus-visible { outline: 3px solid #8fb1ff; outline-offset: 3px; }
 .external-broadcast-notice { position: absolute; z-index: 6; top: 12px; left: 50%; margin: 0; padding: 7px 11px; border: 1px solid #e19732; border-radius: 999px; color: #fff4df; background: rgba(56,35,10,.92); font-size: 12px; transform: translateX(-50%); }
 .facebook-live-section { grid-column: 1 / -1; padding: 12px; display: grid; gap: 9px; border: 1px solid #40598d; border-radius: 10px; background: #122449; }
