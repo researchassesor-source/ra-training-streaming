@@ -1,0 +1,144 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+
+const testDataDir = path.join(os.tmpdir(), `rat-training-series-${process.pid}-${Date.now()}`);
+process.env.NODE_ENV = 'test';
+process.env.LOCAL_DATA_DIR = testDataDir;
+process.env.SESSION_SECRET = 'series-test-session-secret-with-32-characters';
+process.env.INVITATION_HASH_SECRET = 'series-test-invitation-secret-with-32-characters';
+process.env.APP_PUBLIC_URL = 'http://127.0.0.1:3000';
+process.env.ADMIN_USERNAME = 'series-admin';
+process.env.ADMIN_PASSWORD = 'Series-password-123';
+
+const trainingSeries = require('../server/training-series');
+const seriesAccesses = require('../server/series-accesses');
+const speakerRequests = require('../server/speaker-requests');
+const attendance = require('../server/attendance');
+const localStore = require('../server/local-store');
+const meetings = require('../server/meetings');
+const RATCore = require('../public/app-core');
+
+test.before(async () => { await fs.rm(testDataDir, { recursive: true, force: true }); });
+test.after(async () => { await fs.rm(testDataDir, { recursive: true, force: true }); });
+
+test('a training series creates independent ordered meetings without changing legacy records', async () => {
+  const base = Date.now() + 86_400_000;
+  const created = await trainingSeries.createSeries({
+    title: 'Liderazgo seguro', description: 'Tres encuentros', trainerName: 'Andrea Ruiz', type: 'SESSION', timezone: 'America/Guayaquil',
+    earlyAccessMinutes: 120, createdBy: 'series-admin', sessions: [1, 2, 3].map((number) => ({ scheduledAt: new Date(base + number * 86_400_000).toISOString(), durationMinutes: 50 })),
+  });
+  assert.equal(created.sessions.length, 3);
+  assert.equal(new Set(created.sessions.map((meeting) => meeting.room)).size, 3);
+  assert.deepEqual(created.sessions.map((meeting) => meeting.sessionNumber), [1, 2, 3]);
+  assert.ok(created.sessions.every((meeting) => meeting.seriesId === created.series.id));
+
+  await localStore.writeJson('meetings', 'legacy-independent-room', { id: 'legacy-independent-id', room: 'legacy-independent-room', title: 'Reunión histórica', status: 'SCHEDULED' });
+  const legacy = await meetings.getMeeting('legacy-independent-room');
+  assert.equal(legacy.seriesId, null);
+  assert.equal(legacy.sessionNumber, null);
+});
+
+test('authoritative series resolution implements 2-hour waiting, live priority, cancellation and completion', () => {
+  const now = new Date('2026-08-11T15:00:00.000Z');
+  const series = { earlyAccessMinutes: 120, status: 'ACTIVE' };
+  const future = { id: 'one', sessionNumber: 1, status: 'SCHEDULED', scheduledAt: '2026-08-11T18:01:00.000Z' };
+  assert.equal(trainingSeries.resolveSeriesSession(series, [future], now).phase, 'UPCOMING');
+  const waiting = { ...future, scheduledAt: '2026-08-11T16:30:00.000Z' };
+  assert.equal(trainingSeries.resolveSeriesSession(series, [waiting], now).phase, 'WAITING');
+  assert.equal(trainingSeries.resolveSeriesSession(series, [{ ...future, status: 'LIVE' }, waiting], now).meeting.id, 'one');
+  const next = { id: 'two', sessionNumber: 2, status: 'SCHEDULED', scheduledAt: '2026-08-12T18:00:00.000Z' };
+  assert.equal(trainingSeries.resolveSeriesSession(series, [{ ...future, status: 'CANCELLED' }, next], now).meeting.id, 'two');
+  const completed = trainingSeries.resolveSeriesSession(series, [{ ...future, status: 'COMPLETED' }, { ...next, status: 'CANCELLED' }], now);
+  assert.equal(completed.phase, 'COMPLETED');
+  assert.equal(completed.canEnter, false);
+});
+
+test('individual series links are stable, hash-only and revoked independently', async () => {
+  const series = { id: 'series-access-fixture', title: 'Ciclo privado', type: 'CLASS' };
+  const ana = await seriesAccesses.createOrGetAccess({ series, participantName: 'Ana Pérez', participantKey: 'ana-01', createdBy: 'series-admin' });
+  const reused = await seriesAccesses.createOrGetAccess({ series, participantName: 'Ana Pérez', participantKey: 'ana-01', createdBy: 'series-admin' });
+  const carlos = await seriesAccesses.createOrGetAccess({ series, participantName: 'Carlos Paz', participantKey: 'carlos-01', createdBy: 'series-admin' });
+  assert.equal(reused.reused, true);
+  assert.equal(reused.token, ana.token);
+  assert.notEqual(carlos.token, ana.token);
+  const stored = await seriesAccesses.getAccess(ana.access.id);
+  assert.equal(stored.token, undefined);
+  assert.match(stored.tokenHash, /^[a-f0-9]{64}$/);
+  assert.equal((await seriesAccesses.resolveToken(carlos.token)).participantKey, 'carlos-01');
+  await seriesAccesses.revokeAccess(ana.access.id, series.id);
+  await assert.rejects(() => seriesAccesses.resolveToken(ana.token), (error) => error.code === 'SERIES_ACCESS_REVOKED');
+  assert.equal((await seriesAccesses.resolveToken(carlos.token)).status, 'ACTIVE');
+  const regenerated = await seriesAccesses.regenerateAccess(ana.access.id, series, 'series-admin');
+  assert.notEqual(regenerated.token, ana.token);
+});
+
+test('the exact same link advances through three sessions and survives rescheduling', async () => {
+  const base = Date.now() + 4 * 60 * 60_000;
+  const created = await trainingSeries.createSeries({
+    title: `Continuidad ${Date.now()}`, trainerName: 'Laura Torres', type: 'WEBINAR', earlyAccessMinutes: 120,
+    sessions: [0, 1, 2].map((offset) => ({ scheduledAt: new Date(base + offset * 86_400_000).toISOString(), durationMinutes: 45 })),
+  });
+  const stable = await seriesAccesses.createOrGetAccess({ series: created.series, participantName: 'Daniel Solís', participantKey: `daniel-${Date.now()}`, createdBy: 'series-admin' });
+  const stableUrl = seriesAccesses.publicAccess(stable.access, { includeUrl: true }).url;
+  const resolveWithSameToken = async () => {
+    const access = await seriesAccesses.resolveToken(stable.token);
+    assert.equal(access.id, stable.access.id);
+    return trainingSeries.resolveSeriesSession(created.series, await trainingSeries.seriesSessions(created.series.id), new Date());
+  };
+  assert.equal((await resolveWithSameToken()).meeting.sessionNumber, 1);
+  await meetings.transitionMeeting(created.sessions[0].room, 'complete');
+  assert.equal((await resolveWithSameToken()).meeting.sessionNumber, 2);
+  const movedDate = new Date(base + 4 * 86_400_000).toISOString();
+  await meetings.transitionMeeting(created.sessions[1].room, 'reschedule', { scheduledAt: movedDate });
+  assert.equal(seriesAccesses.publicAccess(await seriesAccesses.getAccess(stable.access.id), { includeUrl: true }).url, stableUrl);
+  assert.equal((await meetings.getMeeting(created.sessions[1].room)).scheduledAt, movedDate);
+  await meetings.transitionMeeting(created.sessions[1].room, 'complete');
+  assert.equal((await resolveWithSameToken()).meeting.sessionNumber, 3);
+  await meetings.transitionMeeting(created.sessions[2].room, 'complete');
+  const finished = await resolveWithSameToken();
+  assert.equal(finished.phase, 'COMPLETED');
+  assert.equal(finished.meeting, null);
+});
+
+test('speaker requests and attendance survive refreshes without inventing presence', async () => {
+  const request = await speakerRequests.requestSpeaker({ meetingId: 'meeting-1', room: 'room-series-1', participantIdentity: 'series-person-1', participantName: 'Ana' });
+  assert.equal(request.status, 'PENDING');
+  assert.equal((await speakerRequests.listRequests('room-series-1', { activeOnly: true }))[0].id, request.id);
+  await speakerRequests.resolveSpeaker('room-series-1', 'series-person-1', 'GRANTED', 'host-1');
+  assert.equal((await speakerRequests.listRequests('room-series-1', { activeOnly: true }))[0].status, 'GRANTED');
+  await speakerRequests.resolveSpeaker('room-series-1', 'series-person-1', 'REVOKED', 'host-1');
+  assert.equal((await speakerRequests.listRequests('room-series-1', { activeOnly: true })).length, 0);
+
+  assert.equal(await attendance.joined({ seriesId: null, meetingId: 'meeting-1', participantKey: null }), null);
+  await attendance.joined({ seriesId: 'series-attendance', meetingId: 'meeting-1', sessionNumber: 1, participantKey: 'ana-01', participantIdentity: 'series-person-1', participantName: 'Ana' });
+  await attendance.left({ seriesId: 'series-attendance', meetingId: 'meeting-1', participantKey: 'ana-01' });
+  const records = await attendance.listSeriesAttendance('series-attendance');
+  assert.equal(records.length, 1);
+  assert.equal(records[0].joinCount, 1);
+  assert.equal(records[0].activeSince, null);
+  assert.ok(records[0].firstJoinedAt);
+});
+
+test('waiting and dashboard contracts keep LiveKit behind explicit live entry', async () => {
+  const [html, script, dashboard, dashboardHtml, roomUi] = await Promise.all([
+    fs.readFile(path.join(__dirname, '..', 'public', 'series-access.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, '..', 'public', 'series-access.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, '..', 'public', 'dashboard.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, '..', 'public', 'dashboard.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, '..', 'public', 'room-ui.js'), 'utf8'),
+  ]);
+  assert.doesNotMatch(html, /livekit-client(?:\.umd)?\.js/i);
+  assert.doesNotMatch(script, /LivekitClient|\/api\/token/);
+  assert.match(script, /\/api\/series-access\/enter/);
+  assert.match(html, /No conectado/);
+  assert.match(dashboard, /Compartir acceso/);
+  assert.match(dashboardHtml, /data-copy-series="reminder2h"/);
+  assert.match(roomUi, /syncSpeakerRequests/);
+  assert.match(roomUi, /temporarySpeaker/);
+  const queue = new RATCore.HandQueue();
+  queue.replace([{ identity: 'one', displayName: 'Uno', status: 'GRANTED', raisedAt: '2026-08-11T10:00:00.000Z' }]);
+  assert.deepEqual(queue.list().map((item) => [item.identity, item.status, item.order]), [['one', 'GRANTED', 1]]);
+});

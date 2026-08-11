@@ -42,6 +42,8 @@ test('role capabilities separate hosting, moderation, recording and participatio
 
 test('minimum publication sources follow modality and central screen settings', () => {
   assert.deepEqual(resolvePublishSources({ type: 'WEBINAR', meetingRole: 'ATTENDEE' }), []);
+  assert.deepEqual(resolvePublishSources({ type: 'WEBINAR', meetingRole: 'ATTENDEE', grants: { microphone: true } }), [SOURCE.MICROPHONE]);
+  assert.deepEqual(resolvePublishSources({ type: 'WEBINAR', meetingRole: 'ATTENDEE', grants: { microphone: false } }), []);
   assert.deepEqual(resolvePublishSources({ type: 'WEBINAR', meetingRole: 'PANELIST' }), allSources);
   assert.deepEqual(resolvePublishSources({ type: 'SESSION', meetingRole: 'PARTICIPANT', settings: { allowParticipantScreenShare: false } }), [SOURCE.CAMERA, SOURCE.MICROPHONE]);
   assert.deepEqual(resolvePublishSources({ type: 'CLASS', meetingRole: 'STUDENT' }), [SOURCE.CAMERA, SOURCE.MICROPHONE]);

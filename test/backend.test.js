@@ -54,12 +54,13 @@ let mockLivekitAvailable = true;
 let server;
 let baseUrl;
 
-async function request(route, { method = 'GET', body, cookie, csrf, roomCsrf, roomSessionId, redirect = 'follow' } = {}) {
+async function request(route, { method = 'GET', body, cookie, csrf, roomCsrf, seriesCsrf, roomSessionId, redirect = 'follow' } = {}) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (cookie) headers.Cookie = cookie;
   if (csrf) headers['X-CSRF-Token'] = csrf;
   if (roomCsrf) headers['X-Room-CSRF'] = roomCsrf;
+  if (seriesCsrf) headers['X-Series-CSRF'] = seriesCsrf;
   if (roomSessionId) headers['X-Room-Session-ID'] = roomSessionId;
   const response = await fetch(`${baseUrl}${route}`, {
     method,
@@ -739,4 +740,57 @@ test('audit records actions without secret-like metadata', async () => {
   assert.equal(events[0].metadata.role, 'VIEWER');
   assert.equal(events[0].metadata.password, undefined);
   assert.equal(events[0].metadata.tokenValue, undefined);
+});
+
+test('stable series access waits without LiveKit, enters only when live and advances to the next session', async () => {
+  const admin = await login();
+  const firstDate = new Date(Date.now() + 3 * 60 * 60_000).toISOString();
+  const secondDate = new Date(Date.now() + 27 * 60 * 60_000).toISOString();
+  const created = await request('/api/series', {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: {
+      title: `Ciclo estable ${Date.now()}`, trainerName: 'Ana Entrenadora', type: 'WEBINAR', timezone: 'America/Guayaquil', earlyAccessMinutes: 120,
+      sessions: [{ scheduledAt: firstDate, durationMinutes: 45 }, { scheduledAt: secondDate, durationMinutes: 60 }],
+    },
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.data));
+  assert.equal(created.data.sessions.length, 2);
+  assert.notEqual(created.data.sessions[0].room, created.data.sessions[1].room);
+
+  const accessResult = await request(`/api/series/${created.data.id}/accesses`, {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: { participantName: 'María Participante', participantKey: 'maria-001' },
+  });
+  assert.equal(accessResult.response.status, 201, JSON.stringify(accessResult.data));
+  const stableUrl = accessResult.data.access.url;
+  const redeem = await request(new URL(stableUrl).pathname, { redirect: 'manual' });
+  assert.equal(redeem.response.status, 303);
+  assert.equal(redeem.response.headers.get('location'), '/series-access.html');
+  assert.ok(redeem.cookie?.startsWith('rat_series_access='));
+
+  const waiting = await request('/api/series-access', { cookie: redeem.cookie });
+  assert.equal(waiting.response.status, 200, JSON.stringify(waiting.data));
+  assert.equal(waiting.data.resolution.phase, 'UPCOMING');
+  assert.equal(waiting.data.resolution.canEnter, false);
+  const blocked = await request('/api/series-access/enter', { method: 'POST', cookie: redeem.cookie, seriesCsrf: waiting.data.csrfToken, body: {} });
+  assert.equal(blocked.response.status, 409);
+  assert.equal(blocked.data.code, 'MEETING_NOT_LIVE');
+
+  await meetings.transitionMeeting(created.data.sessions[0].room, 'start', { livekitConfirmedAt: new Date().toISOString() });
+  const live = await request('/api/series-access', { cookie: redeem.cookie });
+  assert.equal(live.data.resolution.phase, 'LIVE');
+  assert.equal(live.data.resolution.meeting.id, created.data.sessions[0].id);
+  const consent = await request('/api/series-access/consent', {
+    method: 'POST', cookie: redeem.cookie, seriesCsrf: live.data.csrfToken,
+    body: { privacy: true, recording: true, transcription: true },
+  });
+  assert.equal(consent.response.status, 200, JSON.stringify(consent.data));
+  const entered = await request('/api/series-access/enter', { method: 'POST', cookie: consent.cookie, seriesCsrf: consent.data.csrfToken, body: {} });
+  assert.equal(entered.response.status, 200, JSON.stringify(entered.data));
+  assert.match(entered.data.redirect, /^\/viewer\.html\?roomSession=/);
+
+  await meetings.transitionMeeting(created.data.sessions[0].room, 'complete');
+  const advanced = await request('/api/series-access', { cookie: consent.cookie });
+  assert.equal(advanced.data.resolution.meeting.id, created.data.sessions[1].id);
+  const accesses = await request(`/api/series/${created.data.id}/accesses`, { cookie: admin.cookie });
+  assert.equal(accesses.data.items[0].url, stableUrl);
 });

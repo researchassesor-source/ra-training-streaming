@@ -13,7 +13,7 @@ Plataforma web para webinars, clases y sesiones en vivo de R.A. Training. Combin
 
 Los tokens de invitación nuevos se guardan como HMAC-SHA-256 con un secreto independiente. Los hashes SHA-256 históricos siguen siendo legibles para no romper invitaciones antiguas. Al abrir `/i/<token>`, el servidor valida expiración, revocación y usos, crea una cookie HttpOnly de sala y redirige a una URL sin token. El navegador nunca decide su rol, sala ni identidad LiveKit.
 
-Consulta [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [contrato Streaming UX](docs/STREAMING_UX_RELEASE.md), [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md), [Seguridad](docs/SECURITY.md), [Preview aislado](docs/PREVIEW_DEPLOYMENT.md) y [Promoción a Producción](docs/PRODUCTION_PROMOTION.md) para el diseño completo.
+Consulta [Capacitaciones de varias sesiones](docs/TRAINING_SERIES.md), [Experiencia de reunión](docs/MEETING_EXPERIENCE.md), [contrato Streaming UX](docs/STREAMING_UX_RELEASE.md), [Arquitectura](docs/ARCHITECTURE.md), [Transcripción](docs/TRANSCRIPTION.md), [Seguridad](docs/SECURITY.md), [Preview aislado](docs/PREVIEW_DEPLOYMENT.md) y [Promoción a Producción](docs/PRODUCTION_PROMOTION.md) para el diseño completo.
 
 ## Experiencia de reunión
 
