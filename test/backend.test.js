@@ -788,9 +788,46 @@ test('stable series access waits without LiveKit, enters only when live and adva
   assert.equal(entered.response.status, 200, JSON.stringify(entered.data));
   assert.match(entered.data.redirect, /^\/viewer\.html\?roomSession=/);
 
+  const roomSessionId = new URL(entered.data.redirect, baseUrl).searchParams.get('roomSession');
+  const roomCookies = entered.cookies.join('; ');
+  const roomSession = await request('/api/room-session', { cookie: roomCookies, roomSessionId });
+  assert.equal(roomSession.response.status, 200, JSON.stringify(roomSession.data));
+  const cancelledSeries = await request(`/api/series/${created.data.id}`, {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'CANCELLED' },
+  });
+  assert.equal(cancelledSeries.response.status, 200, JSON.stringify(cancelledSeries.data));
+  assert.equal(cancelledSeries.data.resolution.phase, 'UNAVAILABLE');
+  const cancelledPublicAccess = await request('/api/series-access', { cookie: consent.cookie });
+  assert.equal(cancelledPublicAccess.response.status, 410);
+  assert.equal(cancelledPublicAccess.data.code, 'SERIES_NOT_JOINABLE');
+  const cancelledRoomToken = await request('/api/token', { cookie: roomCookies, roomSessionId });
+  assert.equal(cancelledRoomToken.response.status, 410);
+  assert.equal(cancelledRoomToken.data.code, 'SERIES_NOT_JOINABLE');
+  const restoredSeries = await request(`/api/series/${created.data.id}`, {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'ACTIVE' },
+  });
+  assert.equal(restoredSeries.response.status, 200, JSON.stringify(restoredSeries.data));
+
   await meetings.transitionMeeting(created.data.sessions[0].room, 'complete');
   const advanced = await request('/api/series-access', { cookie: consent.cookie });
   assert.equal(advanced.data.resolution.meeting.id, created.data.sessions[1].id);
   const accesses = await request(`/api/series/${created.data.id}/accesses`, { cookie: admin.cookie });
   assert.equal(accesses.data.items[0].url, stableUrl);
+
+  const forgedMeeting = await request('/api/meetings', {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: {
+      title: `ReuniÃ³n independiente ${Date.now()}`, room: `independent-${Date.now()}`, trainerName: 'Organizador',
+      type: 'SESSION', status: 'SCHEDULED', scheduledAt: secondDate, seriesId: created.data.id, sessionNumber: 99,
+    },
+  });
+  assert.equal(forgedMeeting.response.status, 201, JSON.stringify(forgedMeeting.data));
+  assert.equal(forgedMeeting.data.seriesId, null);
+  assert.equal(forgedMeeting.data.sessionNumber, null);
+  const relinkAttempt = await request(`/api/meetings/${created.data.sessions[1].room}`, {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { seriesId: forgedMeeting.data.id, sessionNumber: 99 },
+  });
+  assert.equal(relinkAttempt.response.status, 200, JSON.stringify(relinkAttempt.data));
+  assert.equal(relinkAttempt.data.seriesId, created.data.id);
+  assert.equal(relinkAttempt.data.sessionNumber, 2);
 });

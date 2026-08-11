@@ -110,6 +110,13 @@ function meetingVisibleTo(actor, meeting) {
   return actor.role === 'ADMIN' || canManageMeeting(actor, meeting);
 }
 
+function withoutSeriesLinkage(input) {
+  const clean = { ...(input && typeof input === 'object' ? input : {}) };
+  delete clean.seriesId;
+  delete clean.sessionNumber;
+  return clean;
+}
+
 function canManageSeries(actor, series) {
   if (!actor || !series) return false;
   if (actor.role === 'ADMIN') return true;
@@ -265,6 +272,10 @@ function createApp(overrides = {}) {
     if (!access || access.seriesId !== session.seriesId || access.status !== 'ACTIVE' || access.revokedAt) {
       throw new AppError(410, 'Tu acceso a la capacitaci\u00f3n fue revocado', 'SERIES_ACCESS_REVOKED');
     }
+    const series = await trainingSeries.getSeries(access.seriesId);
+    if (!series || ['DRAFT', 'CANCELLED', 'ARCHIVED'].includes(series.status)) {
+      throw new AppError(410, 'La capacitaci\u00f3n ya no admite accesos', 'SERIES_NOT_JOINABLE');
+    }
     return access;
   }
 
@@ -273,6 +284,10 @@ function createApp(overrides = {}) {
     const access = await seriesAccesses.getAccess(session.seriesAccessId);
     if (!access || access.status !== 'ACTIVE' || access.revokedAt || access.seriesId !== session.seriesId) {
       throw new AppError(410, 'Tu acceso individual a la capacitaci\u00f3n fue revocado', 'SERIES_ACCESS_REVOKED');
+    }
+    const series = await trainingSeries.getSeries(access.seriesId);
+    if (!series || series.status !== 'ACTIVE') {
+      throw new AppError(410, 'La capacitaci\u00f3n ya no admite acceso a sus salas', 'SERIES_NOT_JOINABLE');
     }
     return access;
   }
@@ -527,7 +542,7 @@ function createApp(overrides = {}) {
   }));
 
   app.post('/api/meetings', meetingLimiter, auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
-    const record = await meetings.createMeeting({ ...req.body, createdBy: req.auth.u });
+    const record = await meetings.createMeeting({ ...withoutSeriesLinkage(req.body), createdBy: req.auth.u });
     await roomRegistry.createRoom(record.room, { meetingId: record.id });
     await safeAudit({ actor: req.auth.u, action: 'MEETING_CREATED', target: record.id, room: record.room, metadata: { type: record.type, status: record.status }, ...auditContext(req) });
     res.status(201).json(record);
@@ -538,14 +553,14 @@ function createApp(overrides = {}) {
   });
 
   app.patch('/api/meetings/:room', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
-    const updated = await meetings.updateMeeting(req.params.room, req.body || {});
+    const updated = await meetings.updateMeeting(req.params.room, withoutSeriesLinkage(req.body));
     if (updated.seriesId) await trainingSeries.touchSeries(updated.seriesId);
     await safeAudit({ actor: req.auth.u, action: 'MEETING_UPDATED', target: updated.id, room: updated.room, metadata: { status: updated.status }, ...auditContext(req) });
     res.json(updated);
   }));
 
   app.post('/api/meetings/:room/duplicate', meetingLimiter, auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
-    const copy = await meetings.duplicateMeeting(req.params.room, req.body || {}, req.auth.u);
+    const copy = await meetings.duplicateMeeting(req.params.room, withoutSeriesLinkage(req.body), req.auth.u);
     await roomRegistry.createRoom(copy.room, { meetingId: copy.id });
     await safeAudit({ actor: req.auth.u, action: 'MEETING_CREATED', target: copy.id, room: copy.room, metadata: { duplicatedFrom: req.meeting.id }, ...auditContext(req) });
     res.status(201).json(copy);
@@ -638,7 +653,7 @@ function createApp(overrides = {}) {
   app.get('/s/:token', asyncHandler(async (req, res) => {
     const access = await seriesAccesses.resolveToken(req.params.token, { touch: true });
     const series = await trainingSeries.getSeries(access.seriesId);
-    if (!series || ['CANCELLED', 'ARCHIVED'].includes(series.status)) throw new AppError(410, 'Esta capacitaci\u00f3n ya no admite accesos', 'SERIES_NOT_JOINABLE');
+    if (!series || ['DRAFT', 'CANCELLED', 'ARCHIVED'].includes(series.status)) throw new AppError(410, 'Esta capacitaci\u00f3n ya no admite accesos', 'SERIES_NOT_JOINABLE');
     const created = createSeriesSession(access);
     res.setHeader('Set-Cookie', seriesCookie(created.token));
     res.redirect(303, '/series-access.html');

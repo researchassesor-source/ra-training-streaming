@@ -17,6 +17,35 @@ function validDate(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function parseZonedDateTime(value, timeZone, field) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(value || ''));
+  if (!match) throw new AppError(400, `${field} debe incluir fecha y hora`, 'VALIDATION_ERROR');
+  const targetParts = match.slice(1).map((part, index) => (index === 5 && part === undefined ? 0 : Number(part)));
+  const target = Date.UTC(targetParts[0], targetParts[1] - 1, targetParts[2], targetParts[3], targetParts[4], targetParts[5]);
+  const targetDate = new Date(target);
+  if (targetDate.getUTCFullYear() !== targetParts[0] || targetDate.getUTCMonth() !== targetParts[1] - 1 || targetDate.getUTCDate() !== targetParts[2]
+    || targetParts[3] > 23 || targetParts[4] > 59 || targetParts[5] > 59) {
+    throw new AppError(400, `${field} no es una fecha v\u00e1lida`, 'VALIDATION_ERROR');
+  }
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  });
+  let instant = target;
+  let renderedParts = [];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const rendered = Object.fromEntries(formatter.formatToParts(new Date(instant)).filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
+    renderedParts = [rendered.year, rendered.month, rendered.day, rendered.hour, rendered.minute, rendered.second];
+    const renderedAsUtc = Date.UTC(rendered.year, rendered.month - 1, rendered.day, rendered.hour, rendered.minute, rendered.second);
+    const adjustment = target - renderedAsUtc;
+    if (!adjustment) break;
+    instant += adjustment;
+  }
+  if (!renderedParts.every((part, index) => part === targetParts[index])) {
+    throw new AppError(400, `${field} no existe en la zona horaria seleccionada`, 'VALIDATION_ERROR');
+  }
+  return new Date(instant).toISOString();
+}
+
 function normalizeStoredSeries(stored) {
   const source = stored && typeof stored === 'object' ? stored : {};
   const type = normalizeMeetingType(source.meetingType || source.type);
@@ -119,17 +148,30 @@ function resolveSeriesSession(series, sessions, now = new Date()) {
   const ordered = [...(sessions || [])]
     .filter((meeting) => !meeting.deletedAt)
     .sort((a, b) => Number(a.sessionNumber || 0) - Number(b.sessionNumber || 0) || String(a.scheduledAt || '').localeCompare(String(b.scheduledAt || '')));
+  const seriesStatus = String(series?.status || 'ACTIVE').toUpperCase();
+  const completedCount = ordered.filter((meeting) => meeting.status === 'COMPLETED').length;
+  if (['DRAFT', 'CANCELLED', 'ARCHIVED'].includes(seriesStatus)) {
+    return {
+      phase: 'UNAVAILABLE', meeting: null, completed: false, canPrepare: false, canEnter: false,
+      opensAt: null, remainingMs: null, completedCount, totalSessions: ordered.length,
+    };
+  }
+  if (seriesStatus === 'COMPLETED') {
+    return {
+      phase: 'COMPLETED', meeting: null, completed: true, canPrepare: false, canEnter: false,
+      opensAt: null, remainingMs: null, completedCount, totalSessions: ordered.length,
+    };
+  }
   const valid = ordered.filter((meeting) => !['CANCELLED', 'ARCHIVED'].includes(meeting.status));
   const live = valid.find((meeting) => meeting.status === 'LIVE');
   const next = live || valid
     .filter((meeting) => meeting.status === 'SCHEDULED' && validDate(meeting.scheduledAt))
     .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt))[0] || null;
-  const completedCount = ordered.filter((meeting) => meeting.status === 'COMPLETED').length;
   const allFinished = ordered.length > 0 && !next && ordered.every((meeting) => ['COMPLETED', 'CANCELLED', 'ARCHIVED'].includes(meeting.status));
   let phase = 'UNAVAILABLE';
   let opensAt = null;
   let remainingMs = null;
-  if (allFinished || series?.status === 'COMPLETED') phase = 'COMPLETED';
+  if (allFinished) phase = 'COMPLETED';
   else if (next?.status === 'LIVE') phase = 'LIVE';
   else if (next?.scheduledAt) {
     opensAt = new Date(new Date(next.scheduledAt).getTime() - Number(series?.earlyAccessMinutes || 0) * 60_000).toISOString();
@@ -165,7 +207,9 @@ async function createSeries(input) {
   const id = crypto.randomUUID();
   const baseSlug = slugify(clean.title);
   const prepared = suppliedSessions.map((session, index) => ({
-    scheduledAt: parseDate(session.scheduledAt, { field: `sessions[${index}].scheduledAt` }),
+    scheduledAt: session.scheduledLocal
+      ? parseZonedDateTime(session.scheduledLocal, clean.timezone, `sessions[${index}].scheduledLocal`)
+      : parseDate(session.scheduledAt, { field: `sessions[${index}].scheduledAt` }),
     durationMinutes: parsePositiveInteger(session.durationMinutes, { field: `sessions[${index}].durationMinutes`, min: 1, max: 1_440, fallback: 60 }),
     room: slugify(session.room || `${baseSlug}-sesion-${index + 1}-${id.slice(0, 8)}`),
     sessionNumber: index + 1,

@@ -55,6 +55,9 @@ async function withLock(key, operation) {
   try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
 }
 
+function accessLockKey(id) { return `access:${id}`; }
+function participantLockKey(seriesId, participantKey, role) { return `participant:${seriesId}:${participantKey}:${role}`; }
+
 function participantKeyFor(name, supplied) {
   const explicit = String(supplied || '').trim().toLowerCase();
   if (explicit) return sanitizeText(explicit, { field: 'participantKey', min: 2, max: 80, required: true }).replace(/\s+/g, '-');
@@ -67,7 +70,7 @@ async function createOrGetAccess({ series, participantName, participantKey, meet
   const role = normalizeMeetingRole(type, meetingRole || publicRole(type));
   if (role !== publicRole(type)) throw new AppError(400, 'El acceso estable solo admite la funci\u00f3n participante de esta modalidad', 'SERIES_ROLE_FORBIDDEN');
   const key = participantKeyFor(name, participantKey);
-  return withLock(`${series.id}:${key}:${role}`, async () => {
+  return withLock(participantLockKey(series.id, key, role), async () => {
     const existing = (await listAccesses({ seriesId: series.id })).find((item) => item.status === 'ACTIVE' && item.participantKey === key && item.meetingRole === role);
     if (existing) return { access: existing, token: tokenFor(existing.id), reused: true };
     const id = crypto.randomUUID(); const token = tokenFor(id); const now = new Date().toISOString();
@@ -85,20 +88,26 @@ async function createOrGetAccess({ series, participantName, participantKey, meet
 async function resolveToken(token, { touch = false } = {}) {
   const match = /^([a-f0-9-]{36})\.([A-Za-z0-9_-]{40,60})$/.exec(String(token || ''));
   if (!match || !safeEqual(match[2], signatureFor(match[1]))) throw new AppError(404, 'Acceso de capacitaci\u00f3n no v\u00e1lido', 'SERIES_ACCESS_NOT_FOUND');
-  const record = await getAccess(match[1]);
-  if (!record || !safeEqual(record.tokenHash, tokenHash(token))) throw new AppError(404, 'Acceso de capacitaci\u00f3n no v\u00e1lido', 'SERIES_ACCESS_NOT_FOUND');
-  if (record.status !== 'ACTIVE' || record.revokedAt) throw new AppError(410, 'Este acceso fue revocado', 'SERIES_ACCESS_REVOKED');
-  if (!touch) return record;
-  const updated = { ...record, lastUsedAt: new Date().toISOString(), usageCount: Number(record.usageCount || 0) + 1, updatedAt: new Date().toISOString() };
-  await writeAccess(updated);
-  return updated;
+  return withLock(accessLockKey(match[1]), async () => {
+    const record = await getAccess(match[1]);
+    if (!record || !safeEqual(record.tokenHash, tokenHash(token))) throw new AppError(404, 'Acceso de capacitaci\u00f3n no v\u00e1lido', 'SERIES_ACCESS_NOT_FOUND');
+    if (record.status !== 'ACTIVE' || record.revokedAt) throw new AppError(410, 'Este acceso fue revocado', 'SERIES_ACCESS_REVOKED');
+    if (!touch) return record;
+    const updated = { ...record, lastUsedAt: new Date().toISOString(), usageCount: Number(record.usageCount || 0) + 1, updatedAt: new Date().toISOString() };
+    await writeAccess(updated);
+    return updated;
+  });
 }
 
 async function revokeAccess(id, seriesId = null) {
-  const existing = await getAccess(id);
-  if (!existing || (seriesId && existing.seriesId !== seriesId)) throw new AppError(404, 'Acceso no encontrado', 'NOT_FOUND');
-  if (existing.status === 'REVOKED') return existing;
-  return writeAccess({ ...existing, status: 'REVOKED', revokedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  const initial = await getAccess(id);
+  if (!initial || (seriesId && initial.seriesId !== seriesId)) throw new AppError(404, 'Acceso no encontrado', 'NOT_FOUND');
+  return withLock(participantLockKey(initial.seriesId, initial.participantKey, initial.meetingRole), () => withLock(accessLockKey(id), async () => {
+    const existing = await getAccess(id);
+    if (!existing || (seriesId && existing.seriesId !== seriesId)) throw new AppError(404, 'Acceso no encontrado', 'NOT_FOUND');
+    if (existing.status === 'REVOKED') return existing;
+    return writeAccess({ ...existing, status: 'REVOKED', revokedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  }));
 }
 
 async function regenerateAccess(id, series, createdBy) {

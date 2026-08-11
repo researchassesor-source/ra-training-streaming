@@ -1,6 +1,7 @@
 const { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
+const locks = new Map();
 
 function idFor(seriesId, meetingId, participantKey) { return `${seriesId}--${meetingId}--${participantKey}`; }
 function keyFor(id) { return `attendance/${encodeURIComponent(id)}.json`; }
@@ -14,21 +15,32 @@ async function read(id) {
   try { const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(id) })); return JSON.parse(await response.Body.transformToString()); }
   catch (error) { if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) return undefined; throw error; }
 }
+async function withLock(key, operation) {
+  const previous = locks.get(key) || Promise.resolve(); let release;
+  const current = new Promise((resolve) => { release = resolve; }); locks.set(key, current); await previous;
+  try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
+}
 async function joined({ seriesId, meetingId, sessionNumber, participantKey, participantIdentity, participantName }) {
-  if (!seriesId || !participantKey) return null;
-  const id = idFor(seriesId, meetingId, participantKey); const existing = await read(id); const now = new Date().toISOString();
-  return write({
-    id, seriesId, meetingId, sessionNumber, participantKey, participantIdentity, participantName,
-    firstJoinedAt: existing?.firstJoinedAt || now, lastJoinedAt: now, lastLeftAt: existing?.lastLeftAt || null,
-    activeSince: existing?.activeSince || now, accumulatedMs: Number(existing?.accumulatedMs || 0), joinCount: Number(existing?.joinCount || 0) + (existing?.activeSince ? 0 : 1), updatedAt: now,
+  if (!seriesId || !meetingId || !participantKey) return null;
+  const id = idFor(seriesId, meetingId, participantKey);
+  return withLock(id, async () => {
+    const existing = await read(id); const now = new Date().toISOString();
+    return write({
+      id, seriesId, meetingId, sessionNumber, participantKey, participantIdentity, participantName,
+      firstJoinedAt: existing?.firstJoinedAt || now, lastJoinedAt: now, lastLeftAt: existing?.lastLeftAt || null,
+      activeSince: existing?.activeSince || now, accumulatedMs: Number(existing?.accumulatedMs || 0), joinCount: Number(existing?.joinCount || 0) + (existing?.activeSince ? 0 : 1), updatedAt: now,
+    });
   });
 }
 async function left({ seriesId, meetingId, participantKey }) {
-  if (!seriesId || !participantKey) return null;
-  const id = idFor(seriesId, meetingId, participantKey); const existing = await read(id); if (!existing) return null;
-  const now = new Date(); const activeStart = existing.activeSince ? new Date(existing.activeSince).getTime() : null;
-  const elapsed = Number.isFinite(activeStart) ? Math.max(0, now.getTime() - activeStart) : 0;
-  return write({ ...existing, lastLeftAt: now.toISOString(), activeSince: null, accumulatedMs: Number(existing.accumulatedMs || 0) + elapsed, updatedAt: now.toISOString() });
+  if (!seriesId || !meetingId || !participantKey) return null;
+  const id = idFor(seriesId, meetingId, participantKey);
+  return withLock(id, async () => {
+    const existing = await read(id); if (!existing) return null;
+    const now = new Date(); const activeStart = existing.activeSince ? new Date(existing.activeSince).getTime() : null;
+    const elapsed = Number.isFinite(activeStart) ? Math.max(0, now.getTime() - activeStart) : 0;
+    return write({ ...existing, lastLeftAt: now.toISOString(), activeSince: null, accumulatedMs: Number(existing.accumulatedMs || 0) + elapsed, updatedAt: now.toISOString() });
+  });
 }
 async function listSeriesAttendance(seriesId) {
   let items;

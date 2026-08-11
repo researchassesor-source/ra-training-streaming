@@ -327,7 +327,7 @@ function openSeriesDialog() {
 async function saveSeries(event) {
   event.preventDefault();
   const sessions = [...document.querySelectorAll('.series-form-session-row')].map((row) => ({
-    scheduledAt: new Date(row.querySelector('[data-series-date]').value).toISOString(),
+    scheduledLocal: row.querySelector('[data-series-date]').value,
     durationMinutes: Number(row.querySelector('[data-series-duration]').value),
   }));
   const payload = {
