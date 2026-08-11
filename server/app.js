@@ -16,6 +16,10 @@ const invitations = require('./invitations');
 const audit = require('./audit');
 const questions = require('./questions');
 const transcriptions = require('./transcriptions');
+const trainingSeries = require('./training-series');
+const seriesAccesses = require('./series-accesses');
+const speakerRequests = require('./speaker-requests');
+const attendance = require('./attendance');
 const { createTranscriptionProvider } = require('./transcription-provider');
 const {
   clearRoomCookie,
@@ -28,8 +32,16 @@ const {
   updateDisplayName,
 } = require('./room-session');
 const {
+  createSeriesSession,
+  requireSeriesCsrf,
+  requireSeriesSession,
+  seriesCookie,
+  updateSeriesSession,
+} = require('./series-session');
+const {
   invitationRolesForType,
   legacyDefaultMeetingRole,
+  legacyRoleForMeetingRole,
   normalizeMeetingRole,
   resolvePublishSources,
   roleCapabilities,
@@ -58,7 +70,7 @@ const recordingConfigured = Boolean(
 );
 
 function safeRequestPath(pathname) {
-  return String(pathname || '').replace(/^\/i\/[^/]+/, '/i/[redacted]').slice(0, 300);
+  return String(pathname || '').replace(/^\/(i|s)\/[^/]+/, '/$1/[redacted]').slice(0, 300);
 }
 
 function defaultServices() {
@@ -96,6 +108,12 @@ function canManageMeeting(actor, meeting) {
 
 function meetingVisibleTo(actor, meeting) {
   return actor.role === 'ADMIN' || canManageMeeting(actor, meeting);
+}
+
+function canManageSeries(actor, series) {
+  if (!actor || !series) return false;
+  if (actor.role === 'ADMIN') return true;
+  return actor.role === 'ORGANIZER' && (series.createdBy === actor.u || series.trainerId === actor.u);
 }
 
 function participantMetadata(participant) {
@@ -172,7 +190,7 @@ function createApp(overrides = {}) {
     res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ${LIVEKIT_WS_URL || ''}`.trim());
     if (config.isProductionLike) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     if (config.noIndex) res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
-    if (req.path.startsWith('/api/') || req.path.startsWith('/i/')) res.setHeader('Cache-Control', 'no-store');
+    if (req.path.startsWith('/api/') || req.path.startsWith('/i/') || req.path.startsWith('/s/')) res.setHeader('Cache-Control', 'no-store');
     if (config.nodeEnv !== 'test') res.on('finish', () => log('info', 'http_request', { requestId, method: req.method, path: safeRequestPath(req.path), status: res.statusCode, durationMs: Date.now() - startedAt }));
     next();
   });
@@ -225,6 +243,38 @@ function createApp(overrides = {}) {
     const direct = await meetings.getMeeting(reference);
     if (direct) return direct;
     return (await meetings.listMeetings({ includeDeleted: true })).find((meeting) => meeting.id === reference);
+  }
+
+  async function requireManagedSeries(req, _res, next) {
+    try {
+      const series = await trainingSeries.getSeries(req.params.seriesId);
+      if (!series) throw new AppError(404, 'Capacitaci\u00f3n no encontrada', 'NOT_FOUND');
+      if (!canManageSeries(req.auth, series)) throw new AppError(403, 'No tienes permisos sobre esta capacitaci\u00f3n', 'FORBIDDEN');
+      req.trainingSeries = series;
+      next();
+    } catch (error) { next(error); }
+  }
+
+  async function seriesPayload(series, now = new Date()) {
+    const sessions = await trainingSeries.seriesSessions(series.id);
+    return { ...series, sessions, resolution: trainingSeries.resolveSeriesSession(series, sessions, now) };
+  }
+
+  async function activeSeriesAccess(session) {
+    const access = await seriesAccesses.getAccess(session?.accessId);
+    if (!access || access.seriesId !== session.seriesId || access.status !== 'ACTIVE' || access.revokedAt) {
+      throw new AppError(410, 'Tu acceso a la capacitaci\u00f3n fue revocado', 'SERIES_ACCESS_REVOKED');
+    }
+    return access;
+  }
+
+  async function ensureSeriesRoomAccess(session) {
+    if (!session?.seriesAccessId) return null;
+    const access = await seriesAccesses.getAccess(session.seriesAccessId);
+    if (!access || access.status !== 'ACTIVE' || access.revokedAt || access.seriesId !== session.seriesId) {
+      throw new AppError(410, 'Tu acceso individual a la capacitaci\u00f3n fue revocado', 'SERIES_ACCESS_REVOKED');
+    }
+    return access;
   }
 
   function canViewTranscript(actor, meeting) {
@@ -362,6 +412,104 @@ function createApp(overrides = {}) {
     res.json({ deleted: true });
   }));
 
+  function accessSharePayload(series, sessions, access) {
+    if (!access.url) return access;
+    const schedule = sessions.map((meeting) => {
+      const date = new Date(meeting.scheduledAt);
+      const formatted = Number.isNaN(date.getTime()) ? 'Fecha por confirmar' : new Intl.DateTimeFormat('es-EC', {
+        timeZone: series.timezone, dateStyle: 'long', timeStyle: 'short',
+      }).format(date);
+      return `Sesi\u00f3n ${meeting.sessionNumber}: ${formatted}`;
+    }).join('\n');
+    const header = `Has sido invitado a:\n${series.title}\n\n${schedule}\n\nEste mismo enlace funciona para todas las sesiones.\n${access.url}`;
+    const next = trainingSeries.resolveSeriesSession(series, sessions).meeting;
+    const scheduledAt = next?.scheduledAt ? new Date(next.scheduledAt).getTime() : null;
+    return {
+      ...access,
+      invitationMessage: header,
+      reminder2h: `Recordatorio: ${series.title}\nLa preparaci\u00f3n de tu pr\u00f3xima sesi\u00f3n est\u00e1 disponible. Usa el mismo enlace:\n${access.url}`,
+      reminder15m: `Recordatorio: ${series.title} comienza en aproximadamente 15 minutos. Usa tu mismo enlace:\n${access.url}`,
+      reminderSchedule: scheduledAt ? {
+        preparationAt: new Date(scheduledAt - Number(series.earlyAccessMinutes || 0) * 60_000).toISOString(),
+        reminder15mAt: new Date(scheduledAt - 15 * 60_000).toISOString(),
+        automated: false,
+      } : null,
+      whatsappUrl: `https://wa.me/?text=${encodeURIComponent(header)}`,
+    };
+  }
+
+  app.get('/api/series', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
+    const visible = (await trainingSeries.listSeries()).filter((series) => canManageSeries(req.auth, series));
+    res.json({ items: await Promise.all(visible.map((series) => seriesPayload(series))) });
+  }));
+
+  app.post('/api/series', meetingLimiter, auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
+    const created = await trainingSeries.createSeries({ ...req.body, createdBy: req.auth.u });
+    for (const meeting of created.sessions) await roomRegistry.createRoom(meeting.room, { meetingId: meeting.id });
+    await safeAudit({ actor: req.auth.u, action: 'SERIES_CREATED', target: created.series.id, metadata: { type: created.series.type, sessions: created.sessions.length }, ...auditContext(req) });
+    for (const meeting of created.sessions) {
+      await safeAudit({ actor: req.auth.u, action: 'MEETING_CREATED', target: meeting.id, room: meeting.room, metadata: { seriesId: created.series.id, sessionNumber: meeting.sessionNumber }, ...auditContext(req) });
+    }
+    res.status(201).json(await seriesPayload(created.series));
+  }));
+
+  app.get('/api/series/:seriesId', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    res.json(await seriesPayload(req.trainingSeries));
+  }));
+
+  app.patch('/api/series/:seriesId', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    const updated = await trainingSeries.updateSeries(req.params.seriesId, req.body || {});
+    await safeAudit({ actor: req.auth.u, action: 'SERIES_UPDATED', target: updated.id, metadata: { status: updated.status }, ...auditContext(req) });
+    res.json(await seriesPayload(updated));
+  }));
+
+  app.get('/api/series/:seriesId/accesses', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    const sessions = await trainingSeries.seriesSessions(req.trainingSeries.id);
+    const items = (await seriesAccesses.listAccesses({ seriesId: req.trainingSeries.id }))
+      .map((record) => accessSharePayload(req.trainingSeries, sessions, seriesAccesses.publicAccess(record, { includeUrl: true })));
+    res.json({ items });
+  }));
+
+  app.post('/api/series/:seriesId/accesses', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    const created = await seriesAccesses.createOrGetAccess({
+      series: req.trainingSeries, participantName: req.body?.participantName, participantKey: req.body?.participantKey,
+      meetingRole: req.body?.meetingRole, createdBy: req.auth.u,
+    });
+    const sessions = await trainingSeries.seriesSessions(req.trainingSeries.id);
+    const access = accessSharePayload(req.trainingSeries, sessions, seriesAccesses.publicAccess(created.access, { includeUrl: true }));
+    if (!created.reused) await safeAudit({ actor: req.auth.u, action: 'SERIES_ACCESS_CREATED', target: created.access.id, metadata: { seriesId: req.trainingSeries.id, participantKey: created.access.participantKey }, ...auditContext(req) });
+    res.status(created.reused ? 200 : 201).json({ access, reused: created.reused });
+  }));
+
+  app.delete('/api/series/:seriesId/accesses/:accessId', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    const access = await seriesAccesses.revokeAccess(req.params.accessId, req.trainingSeries.id);
+    await safeAudit({ actor: req.auth.u, action: 'SERIES_ACCESS_REVOKED', target: access.id, metadata: { seriesId: access.seriesId, participantKey: access.participantKey }, ...auditContext(req) });
+    res.json({ access: seriesAccesses.publicAccess(access) });
+  }));
+
+  app.post('/api/series/:seriesId/accesses/:accessId/regenerate', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    const created = await seriesAccesses.regenerateAccess(req.params.accessId, req.trainingSeries, req.auth.u);
+    const sessions = await trainingSeries.seriesSessions(req.trainingSeries.id);
+    const access = accessSharePayload(req.trainingSeries, sessions, seriesAccesses.publicAccess(created.access, { includeUrl: true }));
+    await safeAudit({ actor: req.auth.u, action: 'SERIES_ACCESS_REGENERATED', target: created.access.id, metadata: { seriesId: req.trainingSeries.id, participantKey: created.access.participantKey }, ...auditContext(req) });
+    res.status(201).json({ access });
+  }));
+
+  app.get('/api/series/:seriesId/attendance', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    const sessions = await trainingSeries.seriesSessions(req.trainingSeries.id);
+    const records = await attendance.listSeriesAttendance(req.trainingSeries.id);
+    const people = new Map();
+    for (const record of records) {
+      const person = people.get(record.participantKey) || { participantKey: record.participantKey, participantName: record.participantName, sessions: {} };
+      person.sessions[record.sessionNumber] = {
+        meetingId: record.meetingId, firstJoinedAt: record.firstJoinedAt, lastLeftAt: record.lastLeftAt,
+        accumulatedMs: Number(record.accumulatedMs || 0) + (record.activeSince ? Math.max(0, Date.now() - new Date(record.activeSince).getTime()) : 0),
+      };
+      people.set(record.participantKey, person);
+    }
+    res.json({ totalSessions: sessions.length, items: [...people.values()] });
+  }));
+
   app.get('/api/meetings', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
     const includeDeleted = req.query.includeDeleted === 'true' && req.auth.role === 'ADMIN';
     const items = (await meetings.listMeetings({ includeDeleted })).filter((meeting) => meetingVisibleTo(req.auth, meeting));
@@ -391,6 +539,7 @@ function createApp(overrides = {}) {
 
   app.patch('/api/meetings/:room', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
     const updated = await meetings.updateMeeting(req.params.room, req.body || {});
+    if (updated.seriesId) await trainingSeries.touchSeries(updated.seriesId);
     await safeAudit({ actor: req.auth.u, action: 'MEETING_UPDATED', target: updated.id, room: updated.room, metadata: { status: updated.status }, ...auditContext(req) });
     res.json(updated);
   }));
@@ -407,6 +556,7 @@ function createApp(overrides = {}) {
     const allowed = new Set(['reschedule', 'cancel', 'archive', 'restore', 'complete']);
     if (!allowed.has(action)) throw new AppError(400, 'Acción no válida', 'VALIDATION_ERROR');
     const updated = await meetings.transitionMeeting(req.params.room, action, req.body || {});
+    if (updated.seriesId) await trainingSeries.touchSeries(updated.seriesId);
     if (action === 'cancel' || action === 'archive' || action === 'complete') await roomRegistry.revokeRoom(updated.room);
     if (action === 'restore') await roomRegistry.createRoom(updated.room, { meetingId: updated.id });
     const auditAction = {
@@ -414,6 +564,9 @@ function createApp(overrides = {}) {
       restore: 'MEETING_RESTORED', complete: 'ROOM_ENDED',
     }[action];
     await safeAudit({ actor: req.auth.u, action: auditAction, target: updated.id, room: updated.room, ...auditContext(req) });
+    if (action === 'reschedule' && updated.seriesId) {
+      await safeAudit({ actor: req.auth.u, action: 'SERIES_RESCHEDULED', target: updated.seriesId, room: updated.room, metadata: { meetingId: updated.id, sessionNumber: updated.sessionNumber, scheduledAt: updated.scheduledAt }, ...auditContext(req) });
+    }
     res.json(updated);
   }));
 
@@ -482,6 +635,84 @@ function createApp(overrides = {}) {
     res.json(await livekitProbe({ fresh: true }));
   }));
 
+  app.get('/s/:token', asyncHandler(async (req, res) => {
+    const access = await seriesAccesses.resolveToken(req.params.token, { touch: true });
+    const series = await trainingSeries.getSeries(access.seriesId);
+    if (!series || ['CANCELLED', 'ARCHIVED'].includes(series.status)) throw new AppError(410, 'Esta capacitaci\u00f3n ya no admite accesos', 'SERIES_NOT_JOINABLE');
+    const created = createSeriesSession(access);
+    res.setHeader('Set-Cookie', seriesCookie(created.token));
+    res.redirect(303, '/series-access.html');
+  }));
+
+  app.get('/api/series-access', requireSeriesSession, asyncHandler(async (req, res) => {
+    const access = await activeSeriesAccess(req.seriesSession);
+    const series = await trainingSeries.getSeries(access.seriesId);
+    if (!series) throw new AppError(410, 'La capacitaci\u00f3n ya no est\u00e1 disponible', 'SERIES_NOT_JOINABLE');
+    const sessions = await trainingSeries.seriesSessions(series.id);
+    const resolution = trainingSeries.resolveSeriesSession(series, sessions);
+    res.json({
+      series: {
+        id: series.id, title: series.title, description: series.description, type: series.type,
+        trainerName: series.trainerName, timezone: series.timezone, earlyAccessMinutes: series.earlyAccessMinutes,
+        status: series.status, sessions: sessions.map((meeting) => ({
+          id: meeting.id, title: meeting.title, sessionNumber: meeting.sessionNumber, scheduledAt: meeting.scheduledAt,
+          durationMinutes: meeting.durationMinutes, status: meeting.status,
+        })),
+      },
+      resolution: {
+        ...resolution,
+        meeting: resolution.meeting ? {
+          id: resolution.meeting.id, title: resolution.meeting.title, sessionNumber: resolution.meeting.sessionNumber,
+          scheduledAt: resolution.meeting.scheduledAt, durationMinutes: resolution.meeting.durationMinutes, status: resolution.meeting.status,
+        } : null,
+      },
+      access: { id: access.id, participantName: req.seriesSession.displayName || access.participantName, meetingRole: access.meetingRole },
+      consents: req.seriesSession.consents || null,
+      csrfToken: req.seriesSession.csrf,
+    });
+  }));
+
+  app.patch('/api/series-access/profile', requireSeriesSession, requireSeriesCsrf, asyncHandler(async (req, res) => {
+    await activeSeriesAccess(req.seriesSession);
+    const displayName = sanitizeText(req.body?.displayName, { field: 'displayName', min: 2, max: 80, required: true });
+    const updated = updateSeriesSession(req.seriesSession, { displayName });
+    res.setHeader('Set-Cookie', seriesCookie(updated.token));
+    res.json({ displayName, csrfToken: updated.session.csrf });
+  }));
+
+  app.post('/api/series-access/consent', requireSeriesSession, requireSeriesCsrf, asyncHandler(async (req, res) => {
+    await activeSeriesAccess(req.seriesSession);
+    if (req.body?.privacy !== true) throw new AppError(400, 'Debes aceptar el aviso de privacidad para continuar', 'PRIVACY_CONSENT_REQUIRED');
+    const consents = { privacy: true, recording: req.body?.recording === true, transcription: req.body?.transcription === true, acceptedAt: new Date().toISOString() };
+    const updated = updateSeriesSession(req.seriesSession, { consents });
+    res.setHeader('Set-Cookie', seriesCookie(updated.token));
+    res.json({ consents, csrfToken: updated.session.csrf });
+  }));
+
+  app.post('/api/series-access/enter', requireSeriesSession, requireSeriesCsrf, asyncHandler(async (req, res) => {
+    const access = await activeSeriesAccess(req.seriesSession);
+    const series = await trainingSeries.getSeries(access.seriesId);
+    if (!series) throw new AppError(410, 'La capacitaci\u00f3n ya no est\u00e1 disponible', 'SERIES_NOT_JOINABLE');
+    const sessions = await trainingSeries.seriesSessions(series.id);
+    const resolution = trainingSeries.resolveSeriesSession(series, sessions);
+    if (!resolution.meeting || !resolution.canEnter) throw new AppError(409, 'La sesi\u00f3n todav\u00eda no ha comenzado', 'MEETING_NOT_LIVE');
+    if (!req.seriesSession.consents?.privacy) throw new AppError(403, 'Debes aceptar el aviso de privacidad antes de entrar', 'PRIVACY_CONSENT_REQUIRED');
+    const meeting = resolution.meeting;
+    const roomAccess = await roomRegistry.checkAccess(meeting.room);
+    if (!roomAccess.allowed) throw new AppError(roomAccess.reason === 'ROOM_LOCKED' ? 423 : 403, roomAccess.reason === 'ROOM_LOCKED' ? 'La sala est\u00e1 bloqueada' : 'La sala no est\u00e1 disponible', roomAccess.reason);
+    const role = legacyRoleForMeetingRole(meeting.type, access.meetingRole, 'VIEWER');
+    const created = createRoomSession({
+      room: meeting.room, meetingId: meeting.id, role, meetingType: meeting.type, meetingRole: access.meetingRole,
+      legacyAccess: false, displayName: req.seriesSession.displayName || access.participantName,
+      identity: `series-${access.id}`, seriesId: series.id, seriesAccessId: access.id,
+      participantKey: access.participantKey, consents: req.seriesSession.consents,
+    });
+    res.setHeader('Set-Cookie', [roomCookie(created.token), roomCookie(created.token, created.session.sid)]);
+    await safeAudit({ actor: created.session.identity, action: 'SERIES_SESSION_ENTERED', target: meeting.id, room: meeting.room, metadata: { seriesId: series.id, sessionNumber: meeting.sessionNumber, accessId: access.id }, ...auditContext(req) });
+    const viewerExperience = access.meetingRole === 'ATTENDEE';
+    res.json({ redirect: `${viewerExperience ? '/viewer.html' : '/presenter.html'}?roomSession=${encodeURIComponent(created.session.sid)}` });
+  }));
+
   app.get('/i/:token', asyncHandler(async (req, res) => {
     const preview = await invitations.peekInvitation(req.params.token);
     const meeting = await meetings.getMeeting(preview.room);
@@ -514,6 +745,7 @@ function createApp(overrides = {}) {
 
   app.get('/api/room-session', requireRoomSession, asyncHandler(async (req, res) => {
     const meeting = await meetings.getMeeting(req.roomSession.room);
+    await ensureSeriesRoomAccess(req.roomSession);
     if (!meeting || meeting.id !== req.roomSession.meetingId || meeting.deletedAt) throw new AppError(410, 'La reunión ya no está disponible', 'MEETING_NOT_JOINABLE');
     const roomState = await roomRegistry.getRoom(meeting.room);
     const participantAccess = await roomRegistry.participantAccess(meeting.room, req.roomSession.identity);
@@ -564,6 +796,8 @@ function createApp(overrides = {}) {
         allowParticipantScreenShare: meeting.allowParticipantScreenShare,
         allowStudentScreenShare: meeting.allowStudentScreenShare,
         roomLocked: roomState?.locked === true,
+        seriesId: meeting.seriesId,
+        sessionNumber: meeting.sessionNumber,
       },
     });
   }));
@@ -602,6 +836,7 @@ function createApp(overrides = {}) {
   }));
 
   app.post('/api/room-session/leave', requireRoomSession, requireRoomCsrf, asyncHandler(async (req, res) => {
+    await attendance.left({ seriesId: req.roomSession.seriesId, meetingId: req.roomSession.meetingId, participantKey: req.roomSession.participantKey }).catch(() => null);
     await roomRegistry.clearParticipantAccess(req.roomSession.room, req.roomSession.identity).catch(() => {});
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_LEFT', target: req.roomSession.meetingId, room: req.roomSession.room, ...auditContext(req) });
     res.setHeader('Set-Cookie', [clearRoomCookie(), clearRoomCookie(req.roomSessionSelector)]);
@@ -610,6 +845,7 @@ function createApp(overrides = {}) {
 
   app.get('/api/token', requireRoomSession, asyncHandler(async (req, res) => {
     const meeting = await meetings.getMeeting(req.roomSession.room);
+    await ensureSeriesRoomAccess(req.roomSession);
     if (!meeting || meeting.id !== req.roomSession.meetingId || meeting.deletedAt || ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(meeting.status)) {
       throw new AppError(410, 'La reunión finalizó o tu acceso fue retirado', 'ROOM_ENDED');
     }
@@ -637,7 +873,7 @@ function createApp(overrides = {}) {
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: req.roomSession.identity,
       name: req.roomSession.displayName,
-      metadata: JSON.stringify({ role: req.roomSession.role, meetingRole, meetingType: meeting.type, legacyAccess: req.roomSession.legacyAccess === true, invitationId: req.roomSession.invitationId || null, joinedAt: new Date().toISOString() }),
+      metadata: JSON.stringify({ role: req.roomSession.role, meetingRole, meetingType: meeting.type, legacyAccess: req.roomSession.legacyAccess === true, invitationId: req.roomSession.invitationId || null, seriesId: req.roomSession.seriesId || null, seriesAccessId: req.roomSession.seriesAccessId || null, participantKey: req.roomSession.participantKey || null, joinedAt: new Date().toISOString() }),
     });
     token.addGrant({
       room: meeting.room,
@@ -659,13 +895,14 @@ function createApp(overrides = {}) {
       publishSources,
       recordingConfigured,
       transcriptionConfigured: transcriptionProvider.isConfigured(),
-      meeting: { id: meeting.id, title: meeting.title, status: meeting.status, type: meeting.type, startedAt: meeting.startedAt, livekitConfirmedAt: meeting.livekitConfirmedAt, endsAt: meeting.endsAt, durationMinutes: meeting.durationMinutes },
+      meeting: { id: meeting.id, title: meeting.title, status: meeting.status, type: meeting.type, startedAt: meeting.startedAt, livekitConfirmedAt: meeting.livekitConfirmedAt, endsAt: meeting.endsAt, durationMinutes: meeting.durationMinutes, seriesId: meeting.seriesId, sessionNumber: meeting.sessionNumber },
     });
   }));
 
   async function roomMeeting(req, _res, next) {
     try {
       const meeting = await meetings.getMeeting(req.roomSession.room);
+      await ensureSeriesRoomAccess(req.roomSession);
       if (!meeting || meeting.id !== req.roomSession.meetingId || meeting.deletedAt) throw new AppError(410, 'La reunión ya no está disponible', 'ROOM_ENDED');
       req.meeting = meeting;
       req.roomAccess = await roomRegistry.participantAccess(meeting.room, req.roomSession.identity);
@@ -733,6 +970,17 @@ function createApp(overrides = {}) {
     }
     if (event === 'joined' || event === 'reconnected') {
       await assertCallerPresent(req);
+      const attendanceRecord = await attendance.joined({
+        seriesId: req.meeting.seriesId,
+        meetingId: req.meeting.id,
+        sessionNumber: req.meeting.sessionNumber,
+        participantKey: req.roomSession.participantKey,
+        participantIdentity: req.roomSession.identity,
+        participantName: req.roomSession.displayName,
+      }).catch(() => null);
+      if (attendanceRecord) {
+        await safeAudit({ actor: req.roomSession.identity, action: 'ATTENDANCE_UPDATED', target: req.meeting.id, room: req.meeting.room, metadata: { seriesId: req.meeting.seriesId, sessionNumber: req.meeting.sessionNumber, event }, ...auditContext(req) });
+      }
       await safeAudit({ actor: req.roomSession.identity, action: event === 'joined' ? 'PARTICIPANT_JOINED' : 'PARTICIPANT_RECONNECTED', target: req.meeting.id, room: req.meeting.room, ...auditContext(req) });
       return res.json({ acknowledged: true, meetingStatus: req.meeting.status, startedAt: req.meeting.startedAt || null });
     }
@@ -857,6 +1105,12 @@ function createApp(overrides = {}) {
     res.json({ deleted: true });
   }));
 
+  app.get('/api/room/speaker-requests', requireRoomSession, roomMeeting, asyncHandler(async (req, res) => {
+    const canModerate = req.roomCapabilities.canManageParticipants || req.roomCapabilities.canModerateChat;
+    const items = await speakerRequests.listRequests(req.roomSession.room, { activeOnly: true });
+    res.json({ items: canModerate ? items : items.filter((item) => item.participantIdentity === req.roomSession.identity) });
+  }));
+
   app.post('/api/participants/promote', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, requireRoomCapability('canManageParticipants'), asyncHandler(async (req, res) => {
     if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
     const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
@@ -868,9 +1122,11 @@ function createApp(overrides = {}) {
     const next = await participantPolicy(req.meeting, target, { grants: nextGrants });
     await roomService.updateParticipant(req.roomSession.room, targetIdentity, publishPermission(next.sourceNames));
     await roomRegistry.setSpeakerGrant(req.roomSession.room, targetIdentity, true, req.roomSession.identity);
+    await speakerRequests.resolveSpeaker(req.roomSession.room, targetIdentity, 'GRANTED', req.roomSession.identity);
     await relayRoomData(req, { kind: 'hand-approved', targetIdentity, sentAt: new Date().toISOString() }, [targetIdentity]);
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_PROMOTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKING_RIGHT_GRANTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
+    await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKER_GRANTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     res.json({ promoted: true, targetIdentity, canPublish: next.sourceNames.length > 0, publishSources: next.sourceNames });
   }));
 
@@ -886,9 +1142,11 @@ function createApp(overrides = {}) {
     const next = await participantPolicy(req.meeting, target, { grants: nextGrants });
     await roomService.updateParticipant(req.roomSession.room, targetIdentity, publishPermission(next.sourceNames));
     await roomRegistry.setSpeakerGrant(req.roomSession.room, targetIdentity, false, req.roomSession.identity);
+    await speakerRequests.resolveSpeaker(req.roomSession.room, targetIdentity, 'REVOKED', req.roomSession.identity);
     await relayRoomData(req, { kind: 'word-revoked', targetIdentity, sentAt: new Date().toISOString() }, [targetIdentity]);
     await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_DEMOTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKING_RIGHT_REVOKED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
+    await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKER_REVOKED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     res.json({ demoted: true, targetIdentity, canPublish: next.sourceNames.length > 0, publishSources: next.sourceNames });
   }));
 
@@ -928,6 +1186,9 @@ function createApp(overrides = {}) {
     const next = await participantPolicy(req.meeting, target, { grants });
     await roomService.updateParticipant(req.roomSession.room, targetIdentity, publishPermission(next.sourceNames));
     await roomRegistry.setMediaGrant(req.roomSession.room, targetIdentity, source, granted, req.roomSession.identity);
+    if (source === 'microphone') {
+      await speakerRequests.resolveSpeaker(req.roomSession.room, targetIdentity, granted ? 'GRANTED' : 'REVOKED', req.roomSession.identity);
+    }
     await relayRoomData(req, { kind: 'permission-changed', targetIdentity, source, granted, publishSources: next.sourceNames, sentAt: new Date().toISOString() }, [targetIdentity]);
     await safeAudit({ actor: req.roomSession.identity, action: granted ? 'MEDIA_PERMISSION_GRANTED' : 'MEDIA_PERMISSION_REVOKED', target: targetIdentity, room: req.roomSession.room, metadata: { source }, ...auditContext(req) });
     res.json({ changed: true, targetIdentity, source, granted, publishSources: next.sourceNames });
@@ -942,6 +1203,8 @@ function createApp(overrides = {}) {
     const next = await participantPolicy(req.meeting, target, { grants: nextGrants });
     await roomService.updateParticipant(req.roomSession.room, req.roomSession.identity, publishPermission(next.sourceNames));
     await roomRegistry.setSpeakerGrant(req.roomSession.room, req.roomSession.identity, false, req.roomSession.identity);
+    await speakerRequests.resolveSpeaker(req.roomSession.room, req.roomSession.identity, 'REVOKED', req.roomSession.identity);
+    await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKER_REVOKED', target: req.roomSession.identity, room: req.roomSession.room, ...auditContext(req) });
     res.json({ demoted: true, canPublish: next.sourceNames.length > 0, publishSources: next.sourceNames });
   }));
 
@@ -967,11 +1230,12 @@ function createApp(overrides = {}) {
     await assertModerationTarget(req, target);
     let metadata = {};
     try { metadata = JSON.parse(target.metadata || '{}'); } catch (_error) { metadata = {}; }
-    if (metadata.invitationId) await invitations.revokeInvitation(metadata.invitationId, req.roomSession.room);
+    if (metadata.seriesAccessId) await seriesAccesses.revokeAccess(metadata.seriesAccessId, metadata.seriesId || null);
+    else if (metadata.invitationId) await invitations.revokeInvitation(metadata.invitationId, req.roomSession.room);
     await roomService.removeParticipant(req.roomSession.room, targetIdentity);
     await roomRegistry.clearParticipantAccess(req.roomSession.room, targetIdentity).catch(() => {});
-    await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_BLOCKED', target: targetIdentity, room: req.roomSession.room, metadata: { invitationRevoked: Boolean(metadata.invitationId) }, ...auditContext(req) });
-    res.json({ blocked: true, invitationRevoked: Boolean(metadata.invitationId) });
+    await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_BLOCKED', target: targetIdentity, room: req.roomSession.room, metadata: { invitationRevoked: Boolean(metadata.invitationId), seriesAccessRevoked: Boolean(metadata.seriesAccessId) }, ...auditContext(req) });
+    res.json({ blocked: true, invitationRevoked: Boolean(metadata.invitationId), seriesAccessRevoked: Boolean(metadata.seriesAccessId) });
   }));
 
   app.post('/api/participants/request-media', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, requireRoomCapability('canManageParticipants'), asyncHandler(async (req, res) => {
@@ -1092,18 +1356,36 @@ function createApp(overrides = {}) {
     let destinations = participants.filter((participant) => participant.identity !== req.roomSession.identity).map((participant) => participant.identity);
     if (kind === 'hand-raise' || kind === 'hand-lower') {
       if (!req.meeting.allowRaiseHand) throw new AppError(409, 'La función de mano levantada está deshabilitada', 'HAND_DISABLED');
+      const requestRecord = kind === 'hand-raise'
+        ? await speakerRequests.requestSpeaker({
+          meetingId: req.meeting.id,
+          room: req.roomSession.room,
+          participantIdentity: req.roomSession.identity,
+          participantName: req.roomSession.displayName,
+        })
+        : await speakerRequests.resolveSpeaker(req.roomSession.room, req.roomSession.identity, 'REVOKED', req.roomSession.identity);
       message = {
         kind,
         identity: req.roomSession.identity,
         displayName: req.roomSession.displayName,
-        raisedAt: new Date().toISOString(),
+        requestId: requestRecord?.id || null,
+        raisedAt: requestRecord?.requestedAt || new Date().toISOString(),
       };
+      await safeAudit({
+        actor: req.roomSession.identity,
+        action: kind === 'hand-raise' ? 'SPEAKER_REQUESTED' : 'SPEAKER_REVOKED',
+        target: requestRecord?.id || req.roomSession.identity,
+        room: req.roomSession.room,
+        ...auditContext(req),
+      });
     } else if (kind === 'hand-rejected') {
       if (!req.roomCapabilities.canManageParticipants && !req.roomCapabilities.canModerateChat) throw new AppError(403, 'No puedes moderar manos levantadas', 'ROOM_FORBIDDEN');
       const targetIdentity = sanitizeText(req.body?.targetIdentity, { field: 'targetIdentity', min: 5, max: 100, required: true });
       if (!participants.some((participant) => participant.identity === targetIdentity)) throw new AppError(404, 'Participante no encontrado', 'NOT_FOUND');
       message = { kind, targetIdentity, sentAt: new Date().toISOString() };
       destinations = [targetIdentity];
+      const requestRecord = await speakerRequests.resolveSpeaker(req.roomSession.room, targetIdentity, 'REJECTED', req.roomSession.identity);
+      if (requestRecord) await safeAudit({ actor: req.roomSession.identity, action: 'SPEAKER_REJECTED', target: requestRecord.id, room: req.roomSession.room, ...auditContext(req) });
       await safeAudit({ actor: req.roomSession.identity, action: 'HAND_REJECTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     } else if (kind === 'reaction') {
       if (!req.meeting.allowReactions) throw new AppError(409, 'Las reacciones están deshabilitadas', 'REACTIONS_DISABLED');

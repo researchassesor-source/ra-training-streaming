@@ -126,6 +126,8 @@ function normalizeStoredMeeting(stored) {
     status: STATUSES.includes(String(source.status || '').toUpperCase()) ? String(source.status).toUpperCase() : LEGACY_DEFAULTS.status,
   };
   normalized.meetingType = normalized.type;
+  normalized.seriesId = typeof source.seriesId === 'string' && source.seriesId.trim() ? source.seriesId : null;
+  normalized.sessionNumber = Number.isInteger(Number(source.sessionNumber)) && Number(source.sessionNumber) > 0 ? Number(source.sessionNumber) : null;
   normalized.rolePolicyVersion = Number(source.rolePolicyVersion) >= 2 ? 2 : LEGACY_DEFAULTS.rolePolicyVersion;
   for (const name of ['allowChat', 'allowFiles', 'allowReactions', 'allowRaiseHand', 'allowQuestions', 'allowPanelistScreenShare', 'allowParticipantScreenShare', 'allowStudentScreenShare', 'allowRecording', 'recordingConsentRequired', 'allowTranscription', 'transcriptionConsentRequired', 'allowPanelistTranscriptAccess']) {
     normalized[name] = typeof source[name] === 'boolean' ? source[name] : LEGACY_DEFAULTS[name];
@@ -157,6 +159,14 @@ function normalizeMeetingInput(input, { partial = false } = {}) {
   if (!partial && input.trainerName === undefined) output.trainerName = LEGACY_DEFAULTS.trainerName;
   else setText('trainerName', { min: 2, max: 100, required: !partial });
   setText('trainerId', { max: 80 });
+  if (!partial || input.seriesId !== undefined) {
+    output.seriesId = input.seriesId ? sanitizeText(input.seriesId, { field: 'seriesId', min: 36, max: 80, required: true }) : null;
+  }
+  if (!partial || input.sessionNumber !== undefined) {
+    output.sessionNumber = input.sessionNumber === null || input.sessionNumber === ''
+      ? null
+      : parsePositiveInteger(input.sessionNumber, { field: 'sessionNumber', min: 1, max: 1_000, fallback: partial ? undefined : null });
+  }
 
   if (!partial || input.room !== undefined) output.room = slugify(input.room || input.title);
   if (!partial || input.scheduledAt !== undefined) output.scheduledAt = parseDate(input.scheduledAt, { field: 'scheduledAt', nullable: true });
@@ -294,6 +304,8 @@ async function duplicateMeeting(room, overrides = {}, createdBy) {
   return createMeeting({
     ...source,
     ...overrides,
+    seriesId: Object.prototype.hasOwnProperty.call(overrides, 'seriesId') ? overrides.seriesId : null,
+    sessionNumber: Object.prototype.hasOwnProperty.call(overrides, 'sessionNumber') ? overrides.sessionNumber : null,
     room: copyRoom,
     title: overrides.title || `${source.title} (copia)`,
     status: overrides.scheduledAt ? 'SCHEDULED' : 'DRAFT',

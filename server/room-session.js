@@ -31,12 +31,14 @@ function normalizeRoomSessionPayload(payload) {
   };
 }
 
-function createRoomSession({ room, meetingId, role, meetingType, meetingRole, legacyAccess, username = null, displayName = null, invitationId = null }) {
+function createRoomSession({ room, meetingId, role, meetingType, meetingRole, legacyAccess, username = null, displayName = null, invitationId = null, identity = null, seriesId = null, seriesAccessId = null, participantKey = null, consents = null }) {
   const normalizedRole = String(role || '').toUpperCase();
   if (!ROOM_ROLES.has(normalizedRole)) throw new Error('Rol de sala no válido');
   const normalizedType = normalizeMeetingType(meetingType || 'WEBINAR');
   const profiled = Boolean(meetingType || meetingRole);
-  const identity = `${normalizedRole.toLowerCase()}-${crypto.randomUUID()}`;
+  const resolvedIdentity = typeof identity === 'string' && /^[a-z0-9-]{5,100}$/i.test(identity)
+    ? identity
+    : `${normalizedRole.toLowerCase()}-${crypto.randomUUID()}`;
   const payload = {
     type: 'room',
     sid: crypto.randomUUID(),
@@ -50,9 +52,13 @@ function createRoomSession({ room, meetingId, role, meetingType, meetingRole, le
     legacyAccess: typeof legacyAccess === 'boolean' ? legacyAccess : !profiled,
     consentRequired: profiled || normalizedRole === 'VIEWER',
     username,
-    identity,
+    identity: resolvedIdentity,
     displayName: String(displayName || username || '').slice(0, 80),
     invitationId,
+    seriesId,
+    seriesAccessId,
+    participantKey,
+    consents,
     csrf: crypto.randomBytes(24).toString('base64url'),
     exp: Date.now() + config.roomSessionTtlMs,
   };
