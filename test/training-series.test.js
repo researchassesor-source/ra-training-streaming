@@ -15,6 +15,7 @@ process.env.ADMIN_PASSWORD = 'Series-password-123';
 
 const trainingSeries = require('../server/training-series');
 const seriesAccesses = require('../server/series-accesses');
+const { createSeriesSession } = require('../server/series-session');
 const speakerRequests = require('../server/speaker-requests');
 const attendance = require('../server/attendance');
 const localStore = require('../server/local-store');
@@ -83,6 +84,32 @@ test('individual series links are stable, hash-only and revoked independently', 
   assert.equal((await seriesAccesses.resolveToken(carlos.token)).status, 'ACTIVE');
   const regenerated = await seriesAccesses.regenerateAccess(ana.access.id, series, 'series-admin');
   assert.notEqual(regenerated.token, ana.token);
+});
+
+test('one general cycle link is stable while every browser receives a separate attendee identity', async () => {
+  const series = { id: `series-general-${Date.now()}`, title: 'Ciclo para todo el grupo', type: 'WEBINAR' };
+  const first = await seriesAccesses.createOrGetGeneralAccess({ series, createdBy: 'series-admin' });
+  const recovered = await seriesAccesses.createOrGetGeneralAccess({ series, createdBy: 'series-admin' });
+  assert.equal(recovered.reused, true);
+  assert.equal(recovered.token, first.token);
+  assert.equal(first.access.mode, 'GENERAL');
+  assert.equal(first.access.meetingRole, 'ATTENDEE');
+  const stored = await seriesAccesses.getAccess(first.access.id);
+  assert.equal(stored.token, undefined);
+  assert.match(stored.tokenHash, /^[a-f0-9]{64}$/);
+
+  const personA = createSeriesSession(first.access).session;
+  const personB = createSeriesSession(first.access).session;
+  assert.equal(personA.displayName, '');
+  assert.equal(personB.displayName, '');
+  assert.notEqual(personA.participantKey, personB.participantKey);
+  assert.notEqual(personA.roomIdentity, personB.roomIdentity);
+  assert.match(personA.roomIdentity, /^series-general-[a-f0-9-]{36}$/);
+
+  const regenerated = await seriesAccesses.regenerateAccess(first.access.id, series, 'series-admin');
+  assert.notEqual(regenerated.token, first.token);
+  await assert.rejects(() => seriesAccesses.resolveToken(first.token), (error) => error.code === 'SERIES_ACCESS_REVOKED');
+  assert.equal((await seriesAccesses.resolveToken(regenerated.token)).mode, 'GENERAL');
 });
 
 test('revocation cannot be undone by an in-flight access touch', async () => {
@@ -184,12 +211,13 @@ test('speaker requests and attendance survive refreshes without inventing presen
 });
 
 test('waiting and dashboard contracts keep LiveKit behind explicit live entry', async () => {
-  const [html, script, dashboard, dashboardHtml, roomUi] = await Promise.all([
+  const [html, script, dashboard, dashboardHtml, roomUi, style] = await Promise.all([
     fs.readFile(path.join(__dirname, '..', 'public', 'series-access.html'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'series-access.js'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'dashboard.js'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'dashboard.html'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'room-ui.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, '..', 'public', 'style.css'), 'utf8'),
   ]);
   assert.doesNotMatch(html, /livekit-client(?:\.umd)?\.js/i);
   assert.doesNotMatch(script, /LivekitClient|\/api\/token/);
@@ -197,6 +225,16 @@ test('waiting and dashboard contracts keep LiveKit behind explicit live entry', 
   assert.match(html, /No conectado/);
   assert.match(dashboard, /Compartir acceso/);
   assert.match(dashboardHtml, /data-copy-series="reminder2h"/);
+  assert.match(dashboardHtml, /ACCESO GENERAL/);
+  assert.match(dashboardHtml, /Crear o recuperar enlace general/);
+  assert.match(dashboardHtml, /data-copy-series-general="reminder15m"/);
+  assert.match(dashboardHtml, /ACCESO INDIVIDUAL/);
+  assert.match(dashboard, /\/general-access/);
+  assert.match(dashboard, /access\.mode !== 'GENERAL'/);
+  assert.match(html, /privacy-consent-option[^>]*>[\s\S]*?type="checkbox" required[^>]*>[\s\S]*?He leído el aviso de privacidad y acepto participar\./);
+  assert.match(script, /button\.disabled = !document\.getElementById\('privacyConsent'\)\.checked \|\| !validName/);
+  assert.match(style, /\.privacy-consent-option input[^}]*appearance: none/);
+  assert.match(style, /\.privacy-consent-option input:checked::after[^}]*content: '\\2713'/);
   assert.match(roomUi, /syncSpeakerRequests/);
   assert.match(roomUi, /temporarySpeaker/);
   assert.match(roomUi, /function showWordGrantNotice\(\)/);

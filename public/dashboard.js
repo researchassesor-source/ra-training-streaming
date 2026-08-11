@@ -10,6 +10,7 @@ const state = {
   summary: null,
   invitation: null,
   seriesShare: null,
+  seriesGeneralShare: null,
   activeSeriesId: null,
   calendarDate: new Date(),
   calendarView: 'month',
@@ -350,6 +351,13 @@ function showSeriesShare(access) {
   document.getElementById('seriesInvitationMessage').value = access.invitationMessage || '';
 }
 
+function showGeneralSeriesShare(access) {
+  state.seriesGeneralShare = access;
+  document.getElementById('seriesGeneralShareResult').hidden = false;
+  document.getElementById('seriesGeneralAccessUrl').value = access.url || '';
+  document.getElementById('seriesGeneralInvitationMessage').value = access.invitationMessage || '';
+}
+
 function renderSeriesAccessList(items) {
   const container = document.getElementById('seriesAccessList'); container.replaceChildren();
   if (!items.length) { container.appendChild(emptyState('Todavía no hay accesos individuales.', 'Crea uno con el nombre del participante.')); return; }
@@ -370,16 +378,42 @@ function renderSeriesAccessList(items) {
 }
 
 async function loadSeriesAccesses() {
-  const data = await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/accesses`); renderSeriesAccessList(data.items || []); return data.items || [];
+  const data = await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/accesses`);
+  const items = data.items || [];
+  const general = items.find((access) => access.mode === 'GENERAL' && access.status === 'ACTIVE');
+  if (general) showGeneralSeriesShare(general);
+  else { state.seriesGeneralShare = null; document.getElementById('seriesGeneralShareResult').hidden = true; }
+  renderSeriesAccessList(items.filter((access) => access.mode !== 'GENERAL'));
+  return items;
 }
 
 async function openSeriesShare(series) {
-  state.activeSeriesId = series.id; state.seriesShare = null;
+  state.activeSeriesId = series.id; state.seriesShare = null; state.seriesGeneralShare = null;
   document.getElementById('seriesShareTitle').textContent = series.title;
   document.getElementById('seriesParticipantName').value = ''; document.getElementById('seriesParticipantKey').value = '';
-  document.getElementById('seriesShareResult').hidden = true; document.getElementById('seriesShareError').textContent = '';
+  document.getElementById('seriesShareResult').hidden = true; document.getElementById('seriesGeneralShareResult').hidden = true; document.getElementById('seriesShareError').textContent = '';
   document.getElementById('seriesShareDialog').showModal();
   try { await loadSeriesAccesses(); } catch (error) { document.getElementById('seriesShareError').textContent = error.message; }
+}
+
+async function createGeneralSeriesAccess() {
+  const error = document.getElementById('seriesShareError'); error.textContent = '';
+  try {
+    const result = await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/general-access`, { method: 'POST', body: {} });
+    showGeneralSeriesShare(result.access); await loadSeriesAccesses();
+    notice(result.reused ? 'Se recuperó el enlace general existente.' : 'Enlace general creado.');
+  } catch (requestError) { error.textContent = requestError.message; }
+}
+
+async function regenerateGeneralSeriesAccess() {
+  const access = state.seriesGeneralShare;
+  if (!access) return;
+  if (!await askConfirmation({ title: 'Revocar y regenerar enlace general', message: 'El enlace general actual dejará de funcionar para todo el grupo y se creará uno nuevo.', confirmLabel: 'Revocar y regenerar', danger: true })) return;
+  const error = document.getElementById('seriesShareError'); error.textContent = '';
+  try {
+    const result = await api(`/api/series/${encodeURIComponent(state.activeSeriesId)}/accesses/${encodeURIComponent(access.id)}/regenerate`, { method: 'POST', body: {} });
+    showGeneralSeriesShare(result.access); await loadSeriesAccesses(); notice('Enlace general revocado y regenerado.');
+  } catch (requestError) { error.textContent = requestError.message; }
 }
 
 async function createSeriesAccess(event) {
@@ -893,10 +927,16 @@ document.querySelectorAll('[data-open-series]').forEach((button) => button.addEv
 document.getElementById('meetingForm').addEventListener('submit', saveMeeting);
 document.getElementById('seriesForm').addEventListener('submit', saveSeries);
 document.getElementById('seriesShareForm').addEventListener('submit', createSeriesAccess);
+document.getElementById('createGeneralSeriesAccess').addEventListener('click', createGeneralSeriesAccess);
+document.getElementById('regenerateGeneralSeriesAccess').addEventListener('click', regenerateGeneralSeriesAccess);
 document.getElementById('addSeriesSession').addEventListener('click', () => addSeriesSession());
 document.querySelectorAll('[data-copy-series]').forEach((button) => button.addEventListener('click', async () => {
   if (!state.seriesShare?.[button.dataset.copySeries]) return;
   try { await copyText(state.seriesShare[button.dataset.copySeries]); notice('Contenido copiado.'); } catch (error) { notice(error.message, 'error'); }
+}));
+document.querySelectorAll('[data-copy-series-general]').forEach((button) => button.addEventListener('click', async () => {
+  if (!state.seriesGeneralShare?.[button.dataset.copySeriesGeneral]) return;
+  try { await copyText(state.seriesGeneralShare[button.dataset.copySeriesGeneral]); notice('Contenido copiado.'); } catch (error) { notice(error.message, 'error'); }
 }));
 document.getElementById('seriesWhatsApp').addEventListener('click', () => { if (state.seriesShare?.whatsappUrl) window.open(state.seriesShare.whatsappUrl, '_blank', 'noopener,noreferrer'); });
 document.getElementById('userForm').addEventListener('submit', saveUser);

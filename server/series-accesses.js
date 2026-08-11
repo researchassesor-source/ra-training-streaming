@@ -57,6 +57,7 @@ async function withLock(key, operation) {
 
 function accessLockKey(id) { return `access:${id}`; }
 function participantLockKey(seriesId, participantKey, role) { return `participant:${seriesId}:${participantKey}:${role}`; }
+function generalLockKey(seriesId, role) { return `general:${seriesId}:${role}`; }
 
 function participantKeyFor(name, supplied) {
   const explicit = String(supplied || '').trim().toLowerCase();
@@ -85,6 +86,25 @@ async function createOrGetAccess({ series, participantName, participantKey, meet
   });
 }
 
+async function createOrGetGeneralAccess({ series, createdBy }) {
+  const type = normalizeMeetingType(series.type);
+  const role = publicRole(type);
+  return withLock(generalLockKey(series.id, role), async () => {
+    const existing = (await listAccesses({ seriesId: series.id }))
+      .find((item) => item.mode === 'GENERAL' && item.status === 'ACTIVE' && item.meetingRole === role);
+    if (existing) return { access: existing, token: tokenFor(existing.id), reused: true };
+    const id = crypto.randomUUID(); const token = tokenFor(id); const now = new Date().toISOString();
+    const record = {
+      id, seriesId: series.id, mode: 'GENERAL', participantKey: null, participantName: null,
+      meetingType: type, meetingRole: role, tokenHash: tokenHash(token), status: 'ACTIVE',
+      createdBy: String(createdBy || '').slice(0, 80), createdAt: now, updatedAt: now,
+      revokedAt: null, lastUsedAt: null, usageCount: 0,
+    };
+    await writeAccess(record);
+    return { access: record, token, reused: false };
+  });
+}
+
 async function resolveToken(token, { touch = false } = {}) {
   const match = /^([a-f0-9-]{36})\.([A-Za-z0-9_-]{40,60})$/.exec(String(token || ''));
   if (!match || !safeEqual(match[2], signatureFor(match[1]))) throw new AppError(404, 'Acceso de capacitaci\u00f3n no v\u00e1lido', 'SERIES_ACCESS_NOT_FOUND');
@@ -102,7 +122,10 @@ async function resolveToken(token, { touch = false } = {}) {
 async function revokeAccess(id, seriesId = null) {
   const initial = await getAccess(id);
   if (!initial || (seriesId && initial.seriesId !== seriesId)) throw new AppError(404, 'Acceso no encontrado', 'NOT_FOUND');
-  return withLock(participantLockKey(initial.seriesId, initial.participantKey, initial.meetingRole), () => withLock(accessLockKey(id), async () => {
+  const ownerLock = initial.mode === 'GENERAL'
+    ? generalLockKey(initial.seriesId, initial.meetingRole)
+    : participantLockKey(initial.seriesId, initial.participantKey, initial.meetingRole);
+  return withLock(ownerLock, () => withLock(accessLockKey(id), async () => {
     const existing = await getAccess(id);
     if (!existing || (seriesId && existing.seriesId !== seriesId)) throw new AppError(404, 'Acceso no encontrado', 'NOT_FOUND');
     if (existing.status === 'REVOKED') return existing;
@@ -112,6 +135,7 @@ async function revokeAccess(id, seriesId = null) {
 
 async function regenerateAccess(id, series, createdBy) {
   const existing = await revokeAccess(id, series.id);
+  if (existing.mode === 'GENERAL') return createOrGetGeneralAccess({ series, createdBy });
   return createOrGetAccess({ series, participantName: existing.participantName, participantKey: existing.participantKey, meetingRole: existing.meetingRole, createdBy });
 }
 
@@ -126,4 +150,4 @@ function publicAccess(record, { includeUrl = false } = {}) {
   return result;
 }
 
-module.exports = { createOrGetAccess, getAccess, listAccesses, publicAccess, publicRole, regenerateAccess, resolveToken, revokeAccess, tokenFor };
+module.exports = { createOrGetAccess, createOrGetGeneralAccess, getAccess, listAccesses, publicAccess, publicRole, regenerateAccess, resolveToken, revokeAccess, tokenFor };

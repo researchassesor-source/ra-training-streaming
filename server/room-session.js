@@ -31,7 +31,7 @@ function normalizeRoomSessionPayload(payload) {
   };
 }
 
-function createRoomSession({ room, meetingId, role, meetingType, meetingRole, legacyAccess, username = null, displayName = null, invitationId = null, identity = null, seriesId = null, seriesAccessId = null, participantKey = null, consents = null }) {
+function createRoomSession({ room, meetingId, role, meetingType, meetingRole, legacyAccess, username = null, displayName = null, invitationId = null, identity = null, seriesId = null, seriesAccessId = null, seriesAccessMode = null, participantKey = null, consents = null }) {
   const normalizedRole = String(role || '').toUpperCase();
   if (!ROOM_ROLES.has(normalizedRole)) throw new Error('Rol de sala no válido');
   const normalizedType = normalizeMeetingType(meetingType || 'WEBINAR');
@@ -57,6 +57,7 @@ function createRoomSession({ room, meetingId, role, meetingType, meetingRole, le
     invitationId,
     seriesId,
     seriesAccessId,
+    seriesAccessMode,
     participantKey,
     consents,
     csrf: crypto.randomBytes(24).toString('base64url'),

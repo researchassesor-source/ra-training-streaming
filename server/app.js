@@ -316,7 +316,7 @@ function createApp(overrides = {}) {
     if (!session?.seriesAccessId) return null;
     const access = await seriesAccesses.getAccess(session.seriesAccessId);
     if (!access || access.status !== 'ACTIVE' || access.revokedAt || access.seriesId !== session.seriesId) {
-      throw new AppError(410, 'Tu acceso individual a la capacitaci\u00f3n fue revocado', 'SERIES_ACCESS_REVOKED');
+      throw new AppError(410, 'Tu acceso a la capacitaci\u00f3n fue revocado', 'SERIES_ACCESS_REVOKED');
     }
     const series = await trainingSeries.getSeries(access.seriesId);
     if (!series || series.status !== 'ACTIVE') {
@@ -469,7 +469,10 @@ function createApp(overrides = {}) {
       }).format(date);
       return `Sesi\u00f3n ${meeting.sessionNumber}: ${formatted}`;
     }).join('\n');
-    const header = `Has sido invitado a:\n${series.title}\n\n${schedule}\n\nEste mismo enlace funciona para todas las sesiones.\n${access.url}`;
+    const generalNotice = access.mode === 'GENERAL'
+      ? '\n\nAcceso general del ciclo: cada asistente debe ingresar su propio nombre visible antes de entrar.'
+      : '';
+    const header = `Has sido invitado a:\n${series.title}\n\n${schedule}\n\nEste mismo enlace funciona para todas las sesiones.${generalNotice}\n${access.url}`;
     const next = trainingSeries.resolveSeriesSession(series, sessions).meeting;
     const scheduledAt = next?.scheduledAt ? new Date(next.scheduledAt).getTime() : null;
     return {
@@ -526,6 +529,14 @@ function createApp(overrides = {}) {
     const sessions = await trainingSeries.seriesSessions(req.trainingSeries.id);
     const access = accessSharePayload(req.trainingSeries, sessions, seriesAccesses.publicAccess(created.access, { includeUrl: true }));
     if (!created.reused) await safeAudit({ actor: req.auth.u, action: 'SERIES_ACCESS_CREATED', target: created.access.id, metadata: { seriesId: req.trainingSeries.id, participantKey: created.access.participantKey }, ...auditContext(req) });
+    res.status(created.reused ? 200 : 201).json({ access, reused: created.reused });
+  }));
+
+  app.post('/api/series/:seriesId/general-access', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
+    const created = await seriesAccesses.createOrGetGeneralAccess({ series: req.trainingSeries, createdBy: req.auth.u });
+    const sessions = await trainingSeries.seriesSessions(req.trainingSeries.id);
+    const access = accessSharePayload(req.trainingSeries, sessions, seriesAccesses.publicAccess(created.access, { includeUrl: true }));
+    if (!created.reused) await safeAudit({ actor: req.auth.u, action: 'SERIES_ACCESS_CREATED', target: created.access.id, metadata: { seriesId: req.trainingSeries.id, mode: 'GENERAL' }, ...auditContext(req) });
     res.status(created.reused ? 200 : 201).json({ access, reused: created.reused });
   }));
 
@@ -714,7 +725,7 @@ function createApp(overrides = {}) {
           scheduledAt: resolution.meeting.scheduledAt, durationMinutes: resolution.meeting.durationMinutes, status: resolution.meeting.status,
         } : null,
       },
-      access: { id: access.id, participantName: req.seriesSession.displayName || access.participantName, meetingRole: access.meetingRole },
+      access: { id: access.id, mode: access.mode || 'INDIVIDUAL', participantName: req.seriesSession.displayName || access.participantName || '', meetingRole: access.meetingRole },
       consents: req.seriesSession.consents || null,
       csrfToken: req.seriesSession.csrf,
     });
@@ -745,18 +756,20 @@ function createApp(overrides = {}) {
     const resolution = trainingSeries.resolveSeriesSession(series, sessions);
     if (!resolution.meeting || !resolution.canEnter) throw new AppError(409, 'La sesi\u00f3n todav\u00eda no ha comenzado', 'MEETING_NOT_LIVE');
     if (!req.seriesSession.consents?.privacy) throw new AppError(403, 'Debes aceptar el aviso de privacidad antes de entrar', 'PRIVACY_CONSENT_REQUIRED');
+    const displayName = sanitizeText(req.seriesSession.displayName, { field: 'displayName', min: 2, max: 80, required: true });
     const meeting = resolution.meeting;
     const roomAccess = await roomRegistry.checkAccess(meeting.room);
     if (!roomAccess.allowed) throw new AppError(roomAccess.reason === 'ROOM_LOCKED' ? 423 : 403, roomAccess.reason === 'ROOM_LOCKED' ? 'La sala est\u00e1 bloqueada' : 'La sala no est\u00e1 disponible', roomAccess.reason);
     const role = legacyRoleForMeetingRole(meeting.type, access.meetingRole, 'VIEWER');
     const created = createRoomSession({
       room: meeting.room, meetingId: meeting.id, role, meetingType: meeting.type, meetingRole: access.meetingRole,
-      legacyAccess: false, displayName: req.seriesSession.displayName || access.participantName,
-      identity: `series-${access.id}`, seriesId: series.id, seriesAccessId: access.id,
-      participantKey: access.participantKey, consents: req.seriesSession.consents,
+      legacyAccess: false, displayName,
+      identity: req.seriesSession.roomIdentity || `series-${access.id}`, seriesId: series.id, seriesAccessId: access.id,
+      seriesAccessMode: access.mode || 'INDIVIDUAL', participantKey: req.seriesSession.participantKey || access.participantKey,
+      consents: req.seriesSession.consents,
     });
     res.setHeader('Set-Cookie', [roomCookie(created.token), roomCookie(created.token, created.session.sid)]);
-    await safeAudit({ actor: created.session.identity, action: 'SERIES_SESSION_ENTERED', target: meeting.id, room: meeting.room, metadata: { seriesId: series.id, sessionNumber: meeting.sessionNumber, accessId: access.id }, ...auditContext(req) });
+    await safeAudit({ actor: created.session.identity, action: 'SERIES_SESSION_ENTERED', target: meeting.id, room: meeting.room, metadata: { seriesId: series.id, sessionNumber: meeting.sessionNumber, accessId: access.id, accessMode: access.mode || 'INDIVIDUAL' }, ...auditContext(req) });
     const viewerExperience = access.meetingRole === 'ATTENDEE';
     res.json({ redirect: `${viewerExperience ? '/viewer.html' : '/presenter.html'}?roomSession=${encodeURIComponent(created.session.sid)}` });
   }));
@@ -921,7 +934,7 @@ function createApp(overrides = {}) {
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: req.roomSession.identity,
       name: req.roomSession.displayName,
-      metadata: JSON.stringify({ role: req.roomSession.role, meetingRole, meetingType: meeting.type, legacyAccess: req.roomSession.legacyAccess === true, invitationId: req.roomSession.invitationId || null, seriesId: req.roomSession.seriesId || null, seriesAccessId: req.roomSession.seriesAccessId || null, participantKey: req.roomSession.participantKey || null, joinedAt: new Date().toISOString() }),
+      metadata: JSON.stringify({ role: req.roomSession.role, meetingRole, meetingType: meeting.type, legacyAccess: req.roomSession.legacyAccess === true, invitationId: req.roomSession.invitationId || null, seriesId: req.roomSession.seriesId || null, seriesAccessId: req.roomSession.seriesAccessId || null, seriesAccessMode: req.roomSession.seriesAccessMode || null, participantKey: req.roomSession.participantKey || null, joinedAt: new Date().toISOString() }),
     });
     token.addGrant({
       room: meeting.room,
@@ -1278,12 +1291,18 @@ function createApp(overrides = {}) {
     await assertModerationTarget(req, target);
     let metadata = {};
     try { metadata = JSON.parse(target.metadata || '{}'); } catch (_error) { metadata = {}; }
-    if (metadata.seriesAccessId) await seriesAccesses.revokeAccess(metadata.seriesAccessId, metadata.seriesId || null);
-    else if (metadata.invitationId) await invitations.revokeInvitation(metadata.invitationId, req.roomSession.room);
+    let seriesAccessRevoked = false;
+    if (metadata.seriesAccessId) {
+      const access = await seriesAccesses.getAccess(metadata.seriesAccessId);
+      if (access && access.mode !== 'GENERAL') {
+        await seriesAccesses.revokeAccess(metadata.seriesAccessId, metadata.seriesId || null);
+        seriesAccessRevoked = true;
+      }
+    } else if (metadata.invitationId) await invitations.revokeInvitation(metadata.invitationId, req.roomSession.room);
     await roomService.removeParticipant(req.roomSession.room, targetIdentity);
     await roomRegistry.clearParticipantAccess(req.roomSession.room, targetIdentity).catch(() => {});
-    await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_BLOCKED', target: targetIdentity, room: req.roomSession.room, metadata: { invitationRevoked: Boolean(metadata.invitationId), seriesAccessRevoked: Boolean(metadata.seriesAccessId) }, ...auditContext(req) });
-    res.json({ blocked: true, invitationRevoked: Boolean(metadata.invitationId), seriesAccessRevoked: Boolean(metadata.seriesAccessId) });
+    await safeAudit({ actor: req.roomSession.identity, action: 'PARTICIPANT_BLOCKED', target: targetIdentity, room: req.roomSession.room, metadata: { invitationRevoked: Boolean(metadata.invitationId), seriesAccessRevoked }, ...auditContext(req) });
+    res.json({ blocked: true, invitationRevoked: Boolean(metadata.invitationId), seriesAccessRevoked });
   }));
 
   app.post('/api/participants/request-media', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, requireRoomCapability('canManageParticipants'), asyncHandler(async (req, res) => {

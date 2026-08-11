@@ -6,9 +6,14 @@ const { parseCookies, safeEqual, serializeCookie } = require('./http-utils');
 const SERIES_COOKIE = 'rat_series_access';
 
 function createSeriesSession(access) {
+  const general = access.mode === 'GENERAL';
+  const participantId = crypto.randomUUID();
   const payload = {
     type: 'series-access', sid: crypto.randomUUID(), seriesId: access.seriesId, accessId: access.id,
-    participantKey: access.participantKey, displayName: access.participantName, meetingType: access.meetingType,
+    accessMode: general ? 'GENERAL' : 'INDIVIDUAL',
+    participantKey: general ? `general-${participantId}` : access.participantKey,
+    roomIdentity: general ? `series-general-${participantId}` : `series-${access.id}`,
+    displayName: general ? '' : access.participantName, meetingType: access.meetingType,
     meetingRole: access.meetingRole, csrf: crypto.randomBytes(24).toString('base64url'), consents: null,
     exp: Date.now() + config.roomSessionTtlMs,
   };

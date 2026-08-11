@@ -247,25 +247,47 @@
 
   <dialog id="seriesShareDialog" class="app-dialog invitation-dialog">
     <form id="seriesShareForm" method="dialog">
-      <div class="dialog-heading"><div><p class="eyebrow">Acceso estable individual</p><h2 id="seriesShareTitle">Compartir capacitación</h2><p class="muted">Un mismo enlace lleva automáticamente a la sesión vigente. No se crean accesos de anfitrión desde aquí.</p></div><button class="icon-action" type="button" data-close-series-share aria-label="Cerrar">×</button></div>
-      <div class="form-grid">
-        <label>Nombre del participante<input id="seriesParticipantName" minlength="2" maxlength="80" required /></label>
-        <label>Identificador interno (opcional)<input id="seriesParticipantKey" minlength="2" maxlength="80" placeholder="correo o código" /></label>
-      </div>
-      <button class="primary" type="submit">Crear o recuperar acceso</button>
-      <section id="seriesShareResult" class="series-share-result" hidden>
-        <label>Enlace individual<input id="seriesAccessUrl" type="url" readonly /></label>
-        <label>Invitación<textarea id="seriesInvitationMessage" rows="8" readonly></textarea></label>
-        <div class="invitation-actions">
-          <button type="button" class="secondary" data-copy-series="url">Copiar enlace</button>
-          <button type="button" class="secondary" data-copy-series="invitationMessage">Copiar invitación</button>
-          <button type="button" class="secondary" data-copy-series="reminder2h">Copiar recordatorio 2 h</button>
-          <button type="button" class="secondary" data-copy-series="reminder15m">Copiar recordatorio 15 min</button>
-          <button id="seriesWhatsApp" type="button" class="primary">Abrir WhatsApp</button>
-        </div>
+      <div class="dialog-heading"><div><p class="eyebrow">Compartir acceso</p><h2 id="seriesShareTitle">Compartir capacitación</h2><p class="muted">Los enlaces llevan automáticamente a la sesión vigente y nunca otorgan permisos de panelista.</p></div><button class="icon-action" type="button" data-close-series-share aria-label="Cerrar">×</button></div>
+      <section class="series-share-kind" aria-labelledby="seriesGeneralAccessTitle">
+        <p class="eyebrow">ACCESO GENERAL</p>
+        <h3 id="seriesGeneralAccessTitle">Un mismo enlace para todo el grupo</h3>
+        <p class="muted">Un mismo enlace para todos los asistentes y todas las sesiones. Cada persona ingresará su propio nombre visible.</p>
+        <button id="createGeneralSeriesAccess" class="primary" type="button">Crear o recuperar enlace general</button>
+        <section id="seriesGeneralShareResult" class="series-share-result" hidden>
+          <label>Enlace general<input id="seriesGeneralAccessUrl" type="url" readonly /></label>
+          <label>Invitación general<textarea id="seriesGeneralInvitationMessage" rows="8" readonly></textarea></label>
+          <div class="invitation-actions">
+            <button type="button" class="secondary" data-copy-series-general="url">Copiar enlace</button>
+            <button type="button" class="secondary" data-copy-series-general="invitationMessage">Copiar invitación</button>
+            <button type="button" class="secondary" data-copy-series-general="reminder2h">Recordatorio 2h</button>
+            <button type="button" class="secondary" data-copy-series-general="reminder15m">Recordatorio 15 min</button>
+            <button id="regenerateGeneralSeriesAccess" type="button" class="danger">Revocar/regenerar</button>
+          </div>
+        </section>
       </section>
-      <h3>Accesos del ciclo</h3>
-      <div id="seriesAccessList" class="series-access-admin-list"></div>
+      <section class="series-share-kind" aria-labelledby="seriesIndividualAccessTitle">
+        <p class="eyebrow">ACCESO INDIVIDUAL</p>
+        <h3 id="seriesIndividualAccessTitle">Un enlace estable por participante</h3>
+        <p class="muted">Mantiene la identidad y la asistencia individual existentes durante todo el ciclo.</p>
+        <div class="form-grid">
+          <label>Nombre del participante<input id="seriesParticipantName" minlength="2" maxlength="80" required /></label>
+          <label>Identificador interno (opcional)<input id="seriesParticipantKey" minlength="2" maxlength="80" placeholder="correo o código" /></label>
+        </div>
+        <button class="primary" type="submit">Crear o recuperar acceso individual</button>
+        <section id="seriesShareResult" class="series-share-result" hidden>
+          <label>Enlace individual<input id="seriesAccessUrl" type="url" readonly /></label>
+          <label>Invitación<textarea id="seriesInvitationMessage" rows="8" readonly></textarea></label>
+          <div class="invitation-actions">
+            <button type="button" class="secondary" data-copy-series="url">Copiar enlace</button>
+            <button type="button" class="secondary" data-copy-series="invitationMessage">Copiar invitación</button>
+            <button type="button" class="secondary" data-copy-series="reminder2h">Copiar recordatorio 2 h</button>
+            <button type="button" class="secondary" data-copy-series="reminder15m">Copiar recordatorio 15 min</button>
+            <button id="seriesWhatsApp" type="button" class="primary">Abrir WhatsApp</button>
+          </div>
+        </section>
+        <h3>Accesos individuales del ciclo</h3>
+        <div id="seriesAccessList" class="series-access-admin-list"></div>
+      </section>
       <p id="seriesShareError" class="form-error" role="alert"></p>
     </form>
   </dialog>

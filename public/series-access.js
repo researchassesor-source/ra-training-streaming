@@ -19,12 +19,12 @@ function formatDate(value, timezone) {
   catch { return dateFormatter.format(new Date(value)); }
 }
 
-function phaseContent(resolution, series) {
+function phaseContent(resolution, series, access) {
   const scheduled = resolution.meeting ? formatDate(resolution.meeting.scheduledAt, series.timezone) : '';
   if (resolution.phase === 'LIVE') return ['La sesión ha comenzado', `Sesión ${resolution.meeting.sessionNumber} disponible ahora. La conexión solo comenzará cuando pulses “Entrar ahora”.`];
   if (resolution.phase === 'WAITING') return ['Sala de espera abierta', `La sesión ${resolution.meeting.sessionNumber} está programada para ${scheduled}. Puedes preparar tus dispositivos; todavía no estás conectado.`];
   if (resolution.phase === 'UPCOMING') return ['Tu acceso está confirmado', `La preparación se habilitará ${series.earlyAccessMinutes} minutos antes. Próxima sesión: ${scheduled}.`];
-  if (resolution.phase === 'COMPLETED') return ['Capacitación completada', 'Finalizaste el ciclo. Este enlace conserva el historial de sesiones, pero ya no conecta a ninguna sala.'];
+  if (resolution.phase === 'COMPLETED') return [access?.mode === 'GENERAL' ? 'Capacitación finalizada' : 'Capacitación completada', 'Finalizaste el ciclo. Este enlace conserva el historial de sesiones, pero ya no conecta a ninguna sala.'];
   return ['Capacitación no disponible', 'No existe una próxima sesión disponible en este momento.'];
 }
 
@@ -64,9 +64,10 @@ function render(payload) {
   document.getElementById('seriesDescription').textContent = series.description || 'Ciclo de capacitación en vivo.';
   document.getElementById('seriesTrainer').textContent = `Capacitador: ${series.trainerName}`;
   document.getElementById('seriesProgress').textContent = `${resolution.completedCount} de ${resolution.totalSessions} sesiones completadas`;
-  document.getElementById('seriesRole').textContent = RATCore.roleLabel(access.meetingRole);
-  document.getElementById('participantName').value = access.participantName;
-  const [title, message] = phaseContent(resolution, series);
+  document.getElementById('seriesRole').textContent = access.mode === 'GENERAL' ? `Acceso general · ${RATCore.roleLabel(access.meetingRole)}` : `Acceso individual · ${RATCore.roleLabel(access.meetingRole)}`;
+  const nameInput = document.getElementById('participantName');
+  if (document.activeElement !== nameInput) nameInput.value = access.participantName;
+  const [title, message] = phaseContent(resolution, series, access);
   document.getElementById('phaseTitle').textContent = title;
   document.getElementById('phaseMessage').textContent = message;
   document.getElementById('phaseEyebrow').textContent = resolution.phase === 'LIVE' ? 'En vivo' : resolution.phase === 'COMPLETED' ? 'Ciclo finalizado' : 'Próxima sesión';
@@ -76,6 +77,7 @@ function render(payload) {
   document.getElementById('privacyConsent').checked = consents?.privacy === true;
   document.getElementById('recordingConsent').checked = consents?.recording === true;
   document.getElementById('transcriptionConsent').checked = consents?.transcription === true;
+  updateEnterAvailability();
   renderSessions(series, resolution); renderCountdown();
   clearInterval(state.countdownTimer); state.countdownTimer = setInterval(renderCountdown, 1_000);
 }
@@ -86,7 +88,7 @@ async function loadAccess({ quiet = false } = {}) {
     if (!quiet) {
       document.getElementById('seriesTitle').textContent = 'Acceso no disponible';
       document.getElementById('phaseTitle').textContent = error.message;
-      document.getElementById('phaseMessage').textContent = 'Solicita un nuevo enlace individual al organizador.';
+      document.getElementById('phaseMessage').textContent = 'Solicita un nuevo enlace al organizador.';
     }
   } finally {
     clearTimeout(state.pollTimer);
@@ -160,12 +162,20 @@ async function savePreparation() {
   await loadAccess({ quiet: true });
 }
 
+function updateEnterAvailability() {
+  const button = document.getElementById('enterButton');
+  const validName = document.getElementById('participantName').value.trim().length >= 2;
+  button.disabled = !document.getElementById('privacyConsent').checked || !validName;
+}
+
 document.getElementById('previewButton').addEventListener('click', () => startPreview().catch((error) => { document.getElementById('seriesFeedback').textContent = error.message; }));
 document.getElementById('speakerButton').addEventListener('click', () => testSpeaker().then(() => { document.getElementById('seriesFeedback').textContent = 'Prueba de altavoz completada.'; }).catch((error) => { document.getElementById('seriesFeedback').textContent = error.message; }));
 document.getElementById('savePreparation').addEventListener('click', () => savePreparation().catch((error) => { document.getElementById('seriesFeedback').textContent = error.message; }));
+document.getElementById('privacyConsent').addEventListener('change', updateEnterAvailability);
+document.getElementById('participantName').addEventListener('input', updateEnterAvailability);
 document.getElementById('enterButton').addEventListener('click', async () => {
   const button = document.getElementById('enterButton'); button.disabled = true;
-  try { const result = await request('/api/series-access/enter', { method: 'POST', body: {} }); stopPreview(); window.location.assign(result.redirect); }
+  try { await savePreparation(); const result = await request('/api/series-access/enter', { method: 'POST', body: {} }); stopPreview(); window.location.assign(result.redirect); }
   catch (error) { document.getElementById('phaseMessage').textContent = error.message; button.disabled = false; await loadAccess({ quiet: true }); }
 });
 window.addEventListener('pagehide', () => { stopPreview(); clearTimeout(state.pollTimer); clearInterval(state.countdownTimer); });
