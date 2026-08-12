@@ -79,7 +79,7 @@ function render(payload) {
     enterButton.hidden = !prepared || state.entering;
   } else if (resolution.phase === 'WAITING') {
     document.getElementById('phaseEyebrow').textContent = 'Comenzamos en';
-    document.getElementById('phaseTitle').textContent = prepared ? `Todo listo, ${access.participantName}` : 'Comenzamos en';
+    document.getElementById('phaseTitle').textContent = prepared ? `Todo listo, ${access.participantName}` : '';
     document.getElementById('phaseMessage').textContent = prepared
       ? 'Tu acceso está preparado. Cuando el anfitrión inicie, se habilitará el ingreso.'
       : 'Puedes dejar esta página abierta. Te avisaremos cuando la sesión esté disponible.';
