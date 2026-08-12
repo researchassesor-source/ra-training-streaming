@@ -242,8 +242,10 @@ test('waiting and dashboard contracts keep LiveKit behind explicit live entry', 
   assert.match(script, /button\.disabled = !document\.getElementById\('privacyConsent'\)\.checked \|\| !validName/);
   assert.match(style, /\.privacy-consent-option input[^}]*appearance: auto[^}]*width: 24px[^}]*height: 24px[^}]*opacity: 1[^}]*visibility: visible[^}]*accent-color: var\(--brand-orange\)/);
   assert.doesNotMatch(style, /\.privacy-consent-option input:checked::after/);
-  assert.match(style, /\.series-consents input\[type="checkbox"\][^}]*all: revert[^}]*appearance: auto[^}]*width: 22px[^}]*height: 22px[^}]*accent-color: var\(--brand-orange\)/);
-  assert.match(html, /style\.css\?v=series-checkbox-final/);
+  assert.match(style, /\.series-consents input\[type="checkbox"\][^}]*position: absolute[^}]*width: 1px[^}]*height: 1px[^}]*opacity: 0/);
+  assert.match(style, /\.series-consents label::before[^}]*width: 22px[^}]*height: 22px[^}]*border: 2px solid #8fb1ff/);
+  assert.match(style, /\.series-consents label:has\(input\[type="checkbox"\]:checked\)::before[^}]*content: "✓"[^}]*background: var\(--brand-orange\)/);
+  assert.match(html, /style\.css\?v=series-checkbox-explicit/);
   assert.match(roomUi, /syncSpeakerRequests/);
   assert.match(roomUi, /temporarySpeaker/);
   assert.match(roomUi, /function showWordGrantNotice\(\)/);

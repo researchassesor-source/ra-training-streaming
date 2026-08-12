@@ -51,18 +51,57 @@ body {
 .series-audio-meter { height: 8px; margin: 12px 0 18px; overflow: hidden; border-radius: 999px; background: #091127; }
 .series-audio-meter span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #49c58b, var(--brand-orange)); transition: width .08s linear; }
 .series-consents { display: grid; gap: 11px; margin: 18px 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
-.series-consents label { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 10px; color: var(--text-dim); cursor: pointer; }
+.series-consents label {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.series-consents .privacy-consent-option {
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+}
+
 .series-consents input[type="checkbox"] {
-  all: revert;
-  -webkit-appearance: checkbox;
-  appearance: auto;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-width: 1px;
+  min-height: 1px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+}
+
+.series-consents label::before {
+  content: "";
   width: 22px;
   height: 22px;
-  min-width: 22px;
-  min-height: 22px;
-  margin: 1px 0 0;
-  accent-color: var(--brand-orange);
-  cursor: pointer;
+  box-sizing: border-box;
+  border: 2px solid #8fb1ff;
+  border-radius: 4px;
+  background: #0b1430;
+}
+
+.series-consents label:has(input[type="checkbox"]:checked)::before {
+  content: "✓";
+  display: grid;
+  place-items: center;
+  border-color: var(--brand-orange);
+  background: var(--brand-orange);
+  color: #142046;
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.series-consents label:has(input[type="checkbox"]:focus-visible)::before {
+  outline: 3px solid #8fb1ff;
+  outline-offset: 3px;
 }
 .series-session-list { display: grid; gap: 10px; margin: 18px 0 0; padding: 0; list-style: none; }
 .series-session-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: rgba(9,17,39,.55); }
