@@ -1735,6 +1735,67 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .privacy-consent-option:has(input:checked), .consent-option.privacy-consent-option:has(input:checked) { border: 0; background: transparent; box-shadow: none; }
 .privacy-consent-option input, .consent-option.privacy-consent-option input { appearance: auto; width: 24px; height: 24px; min-width: 24px; min-height: 24px; margin: 0; opacity: 1; visibility: visible; accent-color: var(--brand-orange); cursor: pointer; }
 .privacy-consent-option input:focus-visible { outline: 3px solid #8fb1ff; outline-offset: 3px; }
+/* Prejoin: checkbox de privacidad explícito y estable */
+.preflight-fields .privacy-consent-option {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 10px;
+  padding: 6px 0;
+}
+
+.preflight-fields .privacy-consent-option > input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-width: 1px;
+  min-height: 1px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+}
+
+.preflight-fields .privacy-consent-option::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  width: 24px;
+  height: 24px;
+  box-sizing: border-box;
+  border: 2px solid #8fb1ff;
+  border-radius: 4px;
+  background: #0b1430;
+}
+
+.preflight-fields .privacy-consent-option > .privacy-consent-text {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: normal;
+  line-height: 1.45;
+}
+
+.preflight-fields .privacy-consent-option:has(> input[type="checkbox"]:checked)::before {
+  content: "✓";
+  display: grid;
+  place-items: center;
+  border-color: var(--brand-orange);
+  background: var(--brand-orange);
+  color: #142046;
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.preflight-fields .privacy-consent-option:has(> input[type="checkbox"]:focus-visible)::before {
+  outline: 3px solid #8fb1ff;
+  outline-offset: 3px;
+}
 .external-broadcast-notice { position: absolute; z-index: 6; top: 12px; left: 50%; margin: 0; padding: 7px 11px; border: 1px solid #e19732; border-radius: 999px; color: #fff4df; background: rgba(56,35,10,.92); font-size: 12px; transform: translateX(-50%); }
 .facebook-live-section { grid-column: 1 / -1; padding: 12px; display: grid; gap: 9px; border: 1px solid #40598d; border-radius: 10px; background: #122449; }
 .facebook-live-section[hidden] { display: none; }

@@ -51,6 +51,8 @@ test('prejoin, meeting volume and Facebook UI keep the directed browser contract
   const roomUi = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
   for (const html of [presenter, viewer]) {
     assert.match(html, /id="privacyConsent" type="checkbox" required[^>]*>[\s\S]*?He leído el aviso de privacidad y acepto participar\./);
+    assert.match(html, /class="privacy-consent-text">He leído el aviso de privacidad y acepto participar\.<\/span>/);
+    assert.match(html, /style\.css\?v=20260812-prejoin-consent1/);
     assert.match(html, /id="facebookStreamKey" type="password"[^>]*autocomplete="off"/);
     assert.match(html, /Obtén estos datos desde Facebook Live Producer/);
     assert.match(html, /R\.A\. Training confirma el envío de señal, no que Facebook ya la haya publicado/);

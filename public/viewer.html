@@ -9,7 +9,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="stylesheet" href="style.css?v=20260811-facebook1" />
+  <link rel="stylesheet" href="style.css?v=20260812-prejoin-consent1" />
 </head>
 <body class="room-body" data-page-role="viewer">
   <header class="room-topbar">
@@ -128,7 +128,10 @@
           <div class="preview-wrap"><video id="previewVideo" autoplay muted playsinline></video><div id="previewPlaceholder"><strong id="previewState">Cámara apagada</strong><span>Enciéndela solo si deseas comprobarla antes de entrar.</span></div></div>
           <div class="preflight-fields">
             <label>Nombre visible<input id="displayNameInput" maxlength="80" autocomplete="name" required /></label>
-            <label class="check-row consent-option privacy-consent-option"><input id="privacyConsent" type="checkbox" required aria-describedby="consentHelp" /> He leído el aviso de privacidad y acepto participar.</label>
+            <label class="check-row consent-option privacy-consent-option">
+  <input id="privacyConsent" type="checkbox" required aria-describedby="consentHelp" />
+  <span class="privacy-consent-text">He leído el aviso de privacidad y acepto participar.</span>
+</label>
             <label class="check-row consent-option" id="recordingConsentLabel"><input id="recordingConsent" type="checkbox" /> Entiendo que la reunión puede ser grabada.</label><label class="check-row consent-option" id="transcriptionConsentLabel"><input id="transcriptionConsent" type="checkbox" /> Entiendo que la grabación puede transcribirse.</label>
             <p id="processingNotice" class="privacy-notice"></p>
             <p id="consentHelp" class="field-help" aria-live="polite">Acepta los avisos requeridos para ingresar.</p>
