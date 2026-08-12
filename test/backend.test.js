@@ -998,14 +998,15 @@ test('one general series URL resolves three sessions and creates separate attend
   assert.equal(listed.data.items.filter((access) => access.mode === 'GENERAL' && access.status === 'ACTIVE').length, 1);
   assert.equal(listed.data.items.filter((access) => access.mode === 'INDIVIDUAL' && access.status === 'ACTIVE').length >= 1, true);
 
-  await meetings.transitionMeeting(created.data.sessions[0].room, 'start', { livekitConfirmedAt: new Date().toISOString() });
   const linkPath = new URL(general.data.access.url).pathname;
-  async function enterGeneralParticipant(displayName) {
+  async function prepareGeneralParticipant(displayName) {
     const redeemed = await request(linkPath, { redirect: 'manual' });
     assert.equal(redeemed.response.status, 303);
+    assert.equal(redeemed.response.headers.get('location'), '/series-access.html');
     const access = await request('/api/series-access', { cookie: redeemed.cookie });
     assert.equal(access.data.access.mode, 'GENERAL');
     assert.equal(access.data.access.participantName, '');
+    assert.equal(access.data.resolution.phase, 'WAITING');
     const profile = await request('/api/series-access/profile', {
       method: 'PATCH', cookie: redeemed.cookie, seriesCsrf: access.data.csrfToken, body: { displayName },
     });
@@ -1013,8 +1014,32 @@ test('one general series URL resolves three sessions and creates separate attend
       method: 'POST', cookie: profile.cookie, seriesCsrf: profile.data.csrfToken,
       body: { privacy: true, recording: false, transcription: false },
     });
+    return consent.cookie;
+  }
+
+  const personASeriesCookie = await prepareGeneralParticipant('Persona A');
+  const personBSeriesCookie = await prepareGeneralParticipant('Persona B');
+  await meetings.transitionMeeting(created.data.sessions[0].room, 'start', { livekitConfirmedAt: new Date().toISOString() });
+
+  const lateRedeem = await request(linkPath, { redirect: 'manual' });
+  assert.equal(lateRedeem.response.status, 303);
+  assert.match(lateRedeem.response.headers.get('location'), /^\/viewer\.html\?roomSession=/);
+  const lateRoomSessionId = new URL(lateRedeem.response.headers.get('location'), baseUrl).searchParams.get('roomSession');
+  const lateRoomCookies = lateRedeem.cookies.join('; ');
+  const lateRoomSession = await request('/api/room-session', { cookie: lateRoomCookies, roomSessionId: lateRoomSessionId });
+  assert.equal(lateRoomSession.response.status, 200, JSON.stringify(lateRoomSession.data));
+  assert.equal(lateRoomSession.data.seriesPrepared, false);
+  assert.equal(lateRoomSession.data.seriesId, created.data.id);
+  assert.equal(lateRoomSession.data.consents, null);
+  assert.equal(lateRoomSession.data.displayName, '');
+  assert.equal(lateRoomSession.data.meetingRole, 'ATTENDEE');
+
+  async function enterPreparedGeneralParticipant(displayName, seriesCookie) {
+    const access = await request('/api/series-access', { cookie: seriesCookie });
+    assert.equal(access.data.resolution.phase, 'LIVE');
+    assert.equal(access.data.consents.privacy, true);
     const entered = await request('/api/series-access/enter', {
-      method: 'POST', cookie: consent.cookie, seriesCsrf: consent.data.csrfToken, body: {},
+      method: 'POST', cookie: seriesCookie, seriesCsrf: access.data.csrfToken, body: {},
     });
     assert.equal(entered.response.status, 200, JSON.stringify(entered.data));
     const roomSessionId = new URL(entered.data.redirect, baseUrl).searchParams.get('roomSession');
@@ -1022,6 +1047,7 @@ test('one general series URL resolves three sessions and creates separate attend
     const roomSession = await request('/api/room-session', { cookie: roomCookies, roomSessionId });
     assert.equal(roomSession.response.status, 200, JSON.stringify(roomSession.data));
     assert.equal(roomSession.data.seriesPrepared, true);
+    assert.equal(roomSession.data.seriesId, created.data.id);
     const token = await request('/api/token', { cookie: roomCookies, roomSessionId });
     assert.equal(token.response.status, 200, JSON.stringify(token.data));
     mockRoomService.participants.push({ identity: roomSession.data.identity, name: displayName, metadata: '{}' });
@@ -1029,11 +1055,11 @@ test('one general series URL resolves three sessions and creates separate attend
       method: 'POST', cookie: roomCookies, roomSessionId, roomCsrf: roomSession.data.csrfToken, body: { event: 'joined' },
     });
     assert.equal(joined.response.status, 200, JSON.stringify(joined.data));
-    return { seriesCookie: consent.cookie, roomSession: roomSession.data };
+    return { seriesCookie, roomSession: roomSession.data };
   }
 
-  const personA = await enterGeneralParticipant('Persona A');
-  const personB = await enterGeneralParticipant('Persona B');
+  const personA = await enterPreparedGeneralParticipant('Persona A', personASeriesCookie);
+  const personB = await enterPreparedGeneralParticipant('Persona B', personBSeriesCookie);
   assert.notEqual(personA.roomSession.identity, personB.roomSession.identity);
   assert.equal(personA.roomSession.displayName, 'Persona A');
   assert.equal(personB.roomSession.displayName, 'Persona B');

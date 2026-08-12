@@ -699,8 +699,26 @@ function createApp(overrides = {}) {
     const series = await trainingSeries.getSeries(access.seriesId);
     if (!series || ['DRAFT', 'CANCELLED', 'ARCHIVED'].includes(series.status)) throw new AppError(410, 'Esta capacitaci\u00f3n ya no admite accesos', 'SERIES_NOT_JOINABLE');
     const created = createSeriesSession(access);
+    const sessions = await trainingSeries.seriesSessions(series.id);
+    const resolution = trainingSeries.resolveSeriesSession(series, sessions);
+    if (resolution.phase === 'LIVE' && resolution.meeting) {
+      const meeting = resolution.meeting;
+      const roomAccess = await roomRegistry.checkAccess(meeting.room);
+      if (!roomAccess.allowed) throw new AppError(roomAccess.reason === 'ROOM_LOCKED' ? 423 : 403, roomAccess.reason === 'ROOM_LOCKED' ? 'La sala est\u00e1 bloqueada' : 'La sala no est\u00e1 disponible', roomAccess.reason);
+      const role = legacyRoleForMeetingRole(meeting.type, access.meetingRole, 'VIEWER');
+      const roomSession = createRoomSession({
+        room: meeting.room, meetingId: meeting.id, role, meetingType: meeting.type, meetingRole: access.meetingRole,
+        legacyAccess: false, displayName: null,
+        identity: created.session.roomIdentity || `series-${access.id}`, seriesId: series.id, seriesAccessId: access.id,
+        seriesAccessMode: access.mode || 'INDIVIDUAL', participantKey: created.session.participantKey || access.participantKey,
+        consents: null, seriesPrepared: false,
+      });
+      res.setHeader('Set-Cookie', [seriesCookie(created.token), roomCookie(roomSession.token), roomCookie(roomSession.token, roomSession.session.sid)]);
+      const viewerExperience = access.meetingRole === 'ATTENDEE';
+      return res.redirect(303, `${viewerExperience ? '/viewer.html' : '/presenter.html'}?roomSession=${encodeURIComponent(roomSession.session.sid)}`);
+    }
     res.setHeader('Set-Cookie', seriesCookie(created.token));
-    res.redirect(303, '/series-access.html');
+    return res.redirect(303, '/series-access.html');
   }));
 
   app.get('/api/series-access', requireSeriesSession, asyncHandler(async (req, res) => {
@@ -832,6 +850,7 @@ function createApp(overrides = {}) {
       identity: req.roomSession.identity,
       displayName: req.roomSession.displayName,
       consents: req.roomSession.consents || null,
+      seriesId: req.roomSession.seriesId || null,
       seriesPrepared: req.roomSession.seriesPrepared === true,
       csrfToken: req.roomSession.csrf,
       meeting: {

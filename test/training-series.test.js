@@ -252,10 +252,13 @@ test('waiting and dashboard contracts keep LiveKit behind explicit live entry', 
   assert.match(style, /\.series-simple-shell/);
   assert.match(style, /@media \(max-width: 760px\)/);
   assert.match(serverApp, /seriesPrepared: true/);
+  assert.match(serverApp, /seriesPrepared: false/);
+  assert.match(serverApp, /seriesId: req\.roomSession\.seriesId \|\| null/);
   assert.match(serverApp, /seriesPrepared: req\.roomSession\.seriesPrepared === true/);
   assert.match(roomSession, /seriesPrepared: seriesPrepared === true/);
   assert.match(roomUi, /ui\.session\.seriesPrepared === true/);
   assert.match(roomUi, /joinCamera: false, joinMicrophone: false/);
+  assert.match(roomUi, /else \{\s*await enumerateDevices\(\); await setupPreflight\(\);/);
   assert.match(roomUi, /syncSpeakerRequests/);
   assert.match(roomUi, /temporarySpeaker/);
   assert.match(roomUi, /function showWordGrantNotice\(\)/);
