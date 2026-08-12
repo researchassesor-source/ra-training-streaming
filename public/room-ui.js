@@ -1695,7 +1695,12 @@ async function initializeRoom() {
     floatingModel.update({ title: ui.session.meeting.title, connection: 'waiting_for_room', role: ui.session.role, meetingRole: ui.session.meetingRole, mode: ui.session.meeting.type, locked: ui.session.meeting.roomLocked === true });
     renderRoomLock(ui.session.meeting.roomLocked === true);
     statusMachine.set('waiting_for_room');
-    await enumerateDevices(); await setupPreflight();
+    if (ui.session.seriesPrepared === true && ui.session.seriesId && ui.session.meetingRole === 'ATTENDEE' && ui.session.consents?.privacy === true) {
+      try { await connectRoom({ joinCamera: false, joinMicrophone: false }); }
+      catch (directError) { throw directError; }
+    } else {
+      await enumerateDevices(); await setupPreflight();
+    }
   } catch (error) {
     statusMachine.set(error.code === 'ROOM_ENDED' ? 'room_ended' : 'access_denied', error.message);
     document.querySelector('.room-layout').innerHTML = `<div class="access-denied branded-empty"><img src="assets/streaming-app-logo.png" alt="Logo oficial de R.A. Training Streaming"><h1>Acceso no disponible</h1><p></p><a class="button primary" href="/index.html">Volver al inicio</a></div>`;

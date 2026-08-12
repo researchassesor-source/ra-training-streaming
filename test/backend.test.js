@@ -923,6 +923,7 @@ test('stable series access waits without LiveKit, enters only when live and adva
   const roomCookies = entered.cookies.join('; ');
   const roomSession = await request('/api/room-session', { cookie: roomCookies, roomSessionId });
   assert.equal(roomSession.response.status, 200, JSON.stringify(roomSession.data));
+  assert.equal(roomSession.data.seriesPrepared, true);
   const cancelledSeries = await request(`/api/series/${created.data.id}`, {
     method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'CANCELLED' },
   });
@@ -1020,6 +1021,7 @@ test('one general series URL resolves three sessions and creates separate attend
     const roomCookies = entered.cookies.join('; ');
     const roomSession = await request('/api/room-session', { cookie: roomCookies, roomSessionId });
     assert.equal(roomSession.response.status, 200, JSON.stringify(roomSession.data));
+    assert.equal(roomSession.data.seriesPrepared, true);
     const token = await request('/api/token', { cookie: roomCookies, roomSessionId });
     assert.equal(token.response.status, 200, JSON.stringify(token.data));
     mockRoomService.participants.push({ identity: roomSession.data.identity, name: displayName, metadata: '{}' });

@@ -7,83 +7,38 @@
   <title>Acceso a capacitación | R.A. Training Streaming</title>
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
-  <link rel="stylesheet" href="style.css?v=series-checkbox-explicit" />
+  <link rel="stylesheet" href="style.css?v=series-simple-access-final" />
 </head>
-<body class="series-access-body">
-  <header class="topbar series-access-topbar">
-    <div id="brand"></div>
-    <span id="seriesRole" class="badge">Acceso individual</span>
-  </header>
-  <main class="series-access-shell" aria-live="polite">
-    <section class="series-hero">
-      <p class="eyebrow">Tu capacitación</p>
-      <h1 id="seriesTitle">Validando acceso…</h1>
-      <p id="seriesDescription" class="muted"></p>
-      <div class="series-meta">
-        <span id="seriesTrainer"></span>
-        <span id="seriesProgress"></span>
-      </div>
-    </section>
+<body class="series-access-body simple-series-access">
+  <main class="series-simple-shell" aria-live="polite">
+    <section id="phaseCard" class="series-simple-card" aria-labelledby="seriesTitle">
+      <div id="brand" class="series-simple-brand"></div>
+      <span id="seriesSessionBadge" class="series-session-badge">Sesión</span>
+      <h1 id="seriesTitle">Validando acceso...</h1>
+      <p id="seriesTrainer" class="series-trainer"></p>
+      <p id="seriesSchedule" class="series-simple-meta"></p>
+      <p id="phaseEyebrow" class="eyebrow">Comenzamos en</p>
+      <h2 id="phaseTitle" class="series-live-title">Cargando...</h2>
+      <p id="phaseCountdown" class="series-countdown"></p>
+      <p id="phaseMessage" class="muted"></p>
 
-    <section id="phaseCard" class="series-phase-card" aria-labelledby="phaseTitle">
-      <div class="series-phase-copy">
-        <p id="phaseEyebrow" class="eyebrow">Próxima sesión</p>
-        <h2 id="phaseTitle">Cargando…</h2>
-        <p id="phaseMessage" class="muted"></p>
-        <p id="phaseCountdown" class="series-countdown"></p>
-      </div>
-      <button id="enterButton" class="primary" type="button" hidden>Entrar ahora</button>
-    </section>
-
-    <div class="series-access-grid">
-      <section id="preparationCard" class="card series-preparation" hidden>
-        <div class="card-heading">
-          <div>
-            <p class="eyebrow">Preparación</p>
-            <h2>Configura tu acceso</h2>
-          </div>
-          <span class="badge">No conectado</span>
-        </div>
-        <p class="muted">La plataforma no entra a LiveKit ni activa cámara o micrófono desde esta pantalla.</p>
+      <form id="seriesAccessForm" class="series-simple-form">
         <label for="participantName">Nombre visible</label>
-        <input id="participantName" maxlength="80" autocomplete="name" />
-        <div class="form-grid">
-          <label>Micrófono
-            <select id="seriesMicrophone"><option value="">Predeterminado</option></select>
-          </label>
-          <label>Cámara
-            <select id="seriesCamera"><option value="">Predeterminada</option></select>
-          </label>
-          <label>Altavoz
-            <select id="seriesSpeaker"><option value="">Predeterminado</option></select>
-          </label>
-        </div>
-        <div class="series-device-actions">
-          <button id="previewButton" class="secondary" type="button">Probar cámara y micrófono</button>
-          <button id="speakerButton" class="secondary" type="button">Probar altavoz</button>
-        </div>
-        <video id="seriesPreview" class="series-preview" autoplay muted playsinline hidden></video>
-        <div id="audioMeter" class="series-audio-meter" role="meter" aria-label="Nivel de micrófono"><span></span></div>
-        <fieldset class="series-consents">
-          <legend>Avisos y consentimiento</legend>
-          <label class="privacy-consent-option"><input id="privacyConsent" type="checkbox" required aria-describedby="seriesFeedback" /> He leído el aviso de privacidad y acepto participar.</label>
-          <label><input id="recordingConsent" type="checkbox" /> Entiendo que una sesión puede ser grabada cuando el organizador lo indique.</label>
-          <label><input id="transcriptionConsent" type="checkbox" /> Entiendo que una sesión puede ser transcrita cuando el organizador lo indique.</label>
-        </fieldset>
-        <button id="savePreparation" class="primary" type="button">Guardar preparación</button>
-        <p id="seriesFeedback" class="muted" role="status"></p>
-      </section>
+        <input id="participantName" maxlength="80" autocomplete="name" required />
+        <p class="series-privacy-line">Al continuar, aceptas el <span>aviso de privacidad</span> y participar en la capacitación.</p>
+        <button id="confirmAccessButton" class="primary" type="submit">CONFIRMAR ACCESO</button>
+      </form>
 
-      <section class="card series-agenda" aria-labelledby="agendaTitle">
-        <div class="card-heading">
-          <div>
-            <p class="eyebrow">Calendario</p>
-            <h2 id="agendaTitle">Todas las sesiones</h2>
-          </div>
-        </div>
-        <ol id="seriesSessions" class="series-session-list"></ol>
-      </section>
-    </div>
+      <div id="preparedState" class="series-prepared-state" hidden>
+        <div class="series-ready-mark" aria-hidden="true">✓</div>
+        <strong id="preparedTitle">Todo listo</strong>
+        <p id="preparedMessage" class="muted">Tu acceso está preparado.</p>
+        <button id="changeNameButton" class="text-button" type="button">Cambiar nombre</button>
+      </div>
+
+      <button id="enterButton" class="primary series-enter-button" type="button" hidden>ENTRAR A LA REUNIÓN</button>
+      <p id="seriesFeedback" class="muted" role="status"></p>
+    </section>
   </main>
   <script src="brand.js"></script>
   <script src="app-core.js"></script>

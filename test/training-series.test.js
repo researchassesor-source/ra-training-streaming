@@ -211,18 +211,20 @@ test('speaker requests and attendance survive refreshes without inventing presen
 });
 
 test('waiting and dashboard contracts keep LiveKit behind explicit live entry', async () => {
-  const [html, script, dashboard, dashboardHtml, roomUi, style] = await Promise.all([
+  const [html, script, dashboard, dashboardHtml, roomUi, style, serverApp, roomSession] = await Promise.all([
     fs.readFile(path.join(__dirname, '..', 'public', 'series-access.html'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'series-access.js'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'dashboard.js'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'dashboard.html'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'room-ui.js'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', 'public', 'style.css'), 'utf8'),
+    fs.readFile(path.join(__dirname, '..', 'server', 'app.js'), 'utf8'),
+    fs.readFile(path.join(__dirname, '..', 'server', 'room-session.js'), 'utf8'),
   ]);
   assert.doesNotMatch(html, /livekit-client(?:\.umd)?\.js/i);
   assert.doesNotMatch(script, /LivekitClient|\/api\/token/);
   assert.match(script, /\/api\/series-access\/enter/);
-  assert.match(html, /No conectado/);
+  assert.match(html, /Nombre visible/);
   assert.match(dashboard, /Compartir acceso/);
   assert.match(dashboardHtml, /data-copy-series="reminder2h"/);
   assert.match(dashboardHtml, /ACCESO GENERAL/);
@@ -238,14 +240,22 @@ test('waiting and dashboard contracts keep LiveKit behind explicit live entry', 
   assert.match(dashboard, /showGeneralSeriesShare\(result\.access, \{ reveal: true \}\)/);
   assert.match(dashboard, /scrollIntoView\(\{ behavior: 'smooth', block: 'nearest' \}\)/);
   assert.match(dashboard, /showSeriesShareError\(requestError\.message\)/);
-  assert.match(html, /privacy-consent-option[^>]*>[\s\S]*?type="checkbox" required[^>]*>[\s\S]*?He leído el aviso de privacidad y acepto participar\./);
-  assert.match(script, /button\.disabled = !document\.getElementById\('privacyConsent'\)\.checked \|\| !validName/);
-  assert.match(style, /\.privacy-consent-option input[^}]*appearance: auto[^}]*width: 24px[^}]*height: 24px[^}]*opacity: 1[^}]*visibility: visible[^}]*accent-color: var\(--brand-orange\)/);
-  assert.doesNotMatch(style, /\.privacy-consent-option input:checked::after/);
-  assert.match(style, /\.series-consents input\[type="checkbox"\][^}]*position: absolute[^}]*width: 1px[^}]*height: 1px[^}]*opacity: 0/);
-  assert.match(style, /\.series-consents label::before[^}]*width: 22px[^}]*height: 22px[^}]*border: 2px solid #8fb1ff/);
-  assert.match(style, /\.series-consents label:has\(input\[type="checkbox"\]:checked\)::before[^}]*content: "✓"[^}]*background: var\(--brand-orange\)/);
-  assert.match(html, /style\.css\?v=series-checkbox-explicit/);
+  assert.doesNotMatch(html, /type="checkbox"|Cámara|Micrófono|Altavoz|Google Calendar|Outlook Calendar|Guardar preparación/);
+  assert.match(html, /Al continuar, aceptas el[\s\S]*aviso de privacidad/);
+  assert.match(html, /id="confirmAccessButton"[^>]*>CONFIRMAR ACCESO/);
+  assert.match(script, /\/api\/series-access\/profile/);
+  assert.match(script, /\/api\/series-access\/consent/);
+  assert.match(script, /privacy: true/);
+  assert.doesNotMatch(script, /autoEnterAttempted|enterSeriesRoom\(\{ automatic: true \}\)/);
+  assert.match(script, /window\.location\.assign\(result\.redirect\)/);
+  assert.doesNotMatch(script, /getUserMedia|AudioContext|enumerateDevices|LivekitClient|Google Calendar|Outlook/);
+  assert.match(style, /\.series-simple-shell/);
+  assert.match(style, /@media \(max-width: 760px\)/);
+  assert.match(serverApp, /seriesPrepared: true/);
+  assert.match(serverApp, /seriesPrepared: req\.roomSession\.seriesPrepared === true/);
+  assert.match(roomSession, /seriesPrepared: seriesPrepared === true/);
+  assert.match(roomUi, /ui\.session\.seriesPrepared === true/);
+  assert.match(roomUi, /joinCamera: false, joinMicrophone: false/);
   assert.match(roomUi, /syncSpeakerRequests/);
   assert.match(roomUi, /temporarySpeaker/);
   assert.match(roomUi, /function showWordGrantNotice\(\)/);

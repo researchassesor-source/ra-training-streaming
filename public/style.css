@@ -1867,3 +1867,37 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
   .preflight-footer .dialog-actions { gap: 6px; }
   .preflight-footer .dialog-actions > * { padding-left: 8px; padding-right: 8px; font-size: 13px; }
 }
+
+/* --- Simple TrainingSeries waiting room --- */
+.series-access-body { min-height: 100vh; background: radial-gradient(circle at 18% 22%, rgba(30,79,209,.25) 0, transparent 32%), radial-gradient(circle at 4% 62%, rgba(245,166,35,.14) 0, transparent 20%), var(--bg); }
+.simple-series-access { display: grid; min-height: 100vh; }
+.series-simple-shell { display: grid; place-items: center; width: min(100% - 32px, 560px); margin: 0 auto; padding: 32px 0; }
+.series-simple-card { position: relative; width: 100%; min-height: min(760px, calc(100vh - 64px)); padding: 34px 40px; display: grid; align-content: center; justify-items: center; gap: 16px; overflow: hidden; border: 1px solid #3d568e; border-radius: 16px; background: radial-gradient(circle at 3% 52%, rgba(245,106,0,.22) 0, transparent 30%), linear-gradient(145deg, rgba(7,22,55,.96), rgba(8,15,36,.98)); box-shadow: 0 28px 80px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.05); text-align: center; }
+.series-simple-brand .brand { justify-content: center; }
+.series-session-badge { display: inline-flex; width: fit-content; margin-bottom: 16px; padding: 6px 10px; border: 1px solid rgba(245,166,35,.72); border-radius: 7px; color: var(--brand-orange); background: rgba(56,35,10,.34); font-weight: 750; }
+.series-simple-card h1 { max-width: 430px; margin: 0; font-size: clamp(30px, 5vw, 42px); line-height: 1.14; }
+.series-trainer, .series-simple-meta { margin: 0; color: var(--text-dim); }
+.series-simple-meta:empty { display: none; }
+.series-live-title { margin: 0; color: var(--brand-orange); font-size: 18px; }
+.series-countdown { color: #f7f9ff; font-size: clamp(54px, 10vw, 88px); font-variant-numeric: tabular-nums; font-weight: 900; letter-spacing: 0; line-height: 1; text-shadow: 0 10px 28px rgba(0,0,0,.35); }
+.series-simple-form { width: min(100%, 360px); margin-top: 10px; padding: 18px; display: grid; gap: 12px; border: 1px solid #2f477d; border-radius: 10px; background: rgba(10,25,59,.7); text-align: left; }
+.series-simple-form input { width: 100%; }
+.series-privacy-line { margin: 0; color: var(--text-dim); font-size: 14px; line-height: 1.45; }
+.series-privacy-line span {
+  color: #bcd0ff;
+}
+.series-simple-form .primary, .series-enter-button { width: 100%; min-height: 50px; text-transform: uppercase; }
+.series-prepared-state { display: grid; justify-items: center; gap: 10px; margin-top: 8px; }
+.series-ready-mark { display: grid; place-items: center; width: 112px; height: 112px; border: 2px solid #2e6dda; border-radius: 50%; color: var(--brand-orange); box-shadow: 0 0 38px rgba(30,79,209,.35); font-size: 60px; font-weight: 800; }
+.series-prepared-state strong { font-size: 24px; }
+.series-enter-button { width: min(100%, 360px); margin-top: 10px; }
+.series-simple-card[data-phase="LIVE"] .series-countdown, .series-simple-card[data-phase="COMPLETED"] .series-countdown { display: none; }
+.series-simple-card[data-phase="LIVE"] .series-ready-mark { border-color: var(--brand-orange); box-shadow: 0 0 42px rgba(245,166,35,.22); }
+@media (max-width: 760px) {
+  .series-simple-shell { width: min(100% - 20px, 430px); padding: 18px 0; }
+  .series-simple-card { min-height: calc(100vh - 36px); padding: 24px 18px; border-radius: 14px; }
+  .series-simple-card h1 { font-size: 30px; }
+  .series-trainer { font-size: 18px; }
+  .series-countdown { font-size: clamp(42px, 15vw, 62px); }
+  .series-ready-mark { width: 90px; height: 90px; font-size: 48px; }
+}

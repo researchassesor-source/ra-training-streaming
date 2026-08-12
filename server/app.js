@@ -766,7 +766,7 @@ function createApp(overrides = {}) {
       legacyAccess: false, displayName,
       identity: req.seriesSession.roomIdentity || `series-${access.id}`, seriesId: series.id, seriesAccessId: access.id,
       seriesAccessMode: access.mode || 'INDIVIDUAL', participantKey: req.seriesSession.participantKey || access.participantKey,
-      consents: req.seriesSession.consents,
+      consents: req.seriesSession.consents, seriesPrepared: true,
     });
     res.setHeader('Set-Cookie', [roomCookie(created.token), roomCookie(created.token, created.session.sid)]);
     await safeAudit({ actor: created.session.identity, action: 'SERIES_SESSION_ENTERED', target: meeting.id, room: meeting.room, metadata: { seriesId: series.id, sessionNumber: meeting.sessionNumber, accessId: access.id, accessMode: access.mode || 'INDIVIDUAL' }, ...auditContext(req) });
@@ -832,6 +832,7 @@ function createApp(overrides = {}) {
       identity: req.roomSession.identity,
       displayName: req.roomSession.displayName,
       consents: req.roomSession.consents || null,
+      seriesPrepared: req.roomSession.seriesPrepared === true,
       csrfToken: req.roomSession.csrf,
       meeting: {
         id: meeting.id,
