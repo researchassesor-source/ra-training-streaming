@@ -187,3 +187,32 @@ test('room requests bind the tab selector and failed chat or Q&A restores the dr
   const room = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
   assert.doesNotMatch(room, /__roomCompactQa|Temporary local-only browser QA harness/);
 });
+
+test('chat linkification and pinned messages stay safe, persistent and mobile compact', () => {
+  const chat = fs.readFileSync(path.join(publicDir, 'chat.js'), 'utf8');
+  const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'server', 'app.js'), 'utf8');
+  const pins = fs.readFileSync(path.join(__dirname, '..', 'server', 'pinned-messages.js'), 'utf8');
+  assert.match(chat, /function appendLinkifiedText\(container, text\)/);
+  assert.match(chat, /RATCore\.safeHttpUrl\(normalized, location\.origin\)/);
+  assert.match(chat, /link\.target = '_blank'/);
+  assert.match(chat, /link\.rel = 'noopener noreferrer'/);
+  assert.doesNotMatch(chat, /innerHTML/);
+  assert.match(chat, /chat-pins-changed/);
+  assert.match(chat, /roomRequest\('\/api\/chat\/pins'/);
+  assert.match(chat, /roomRequest\(`\/api\/chat\/pins\/\$\{encodeURIComponent\(pin\.id\)\}`/);
+  assert.match(chat, /pinnedRoot\.hidden = count === 0/);
+  assert.match(chat, /pins\.expanded = !pins\.expanded/);
+  assert.match(chat, /new Set\(\['HOST', 'TEACHER', 'COHOST'\]\)/);
+  assert.match(css, /\.chat-pinned-summary/);
+  assert.match(css, /\.chat-pinned-panel[^}]*max-height: 220px/);
+  assert.match(css, /\.chat-pin-badge/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*?\.chat-pinned-panel[^}]*max-height: 34dvh/);
+  assert.match(app, /function canPinChat\(meetingRole\)[\s\S]*HOST[\s\S]*TEACHER[\s\S]*COHOST/);
+  assert.match(app, /app\.get\('\/api\/chat\/pins'/);
+  assert.match(app, /app\.post\('\/api\/chat\/pins'/);
+  assert.match(app, /app\.delete\('\/api\/chat\/pins\/:id'/);
+  assert.match(app, /relayRoomData\(req, \{ kind: 'chat-pins-changed'/);
+  assert.match(pins, /storageConfigured/);
+  assert.match(pins, /localStore\.writeJson\('chat-pins'/);
+});

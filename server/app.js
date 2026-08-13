@@ -15,6 +15,7 @@ const meetings = require('./meetings');
 const invitations = require('./invitations');
 const audit = require('./audit');
 const questions = require('./questions');
+const pinnedMessages = require('./pinned-messages');
 const transcriptions = require('./transcriptions');
 const trainingSeries = require('./training-series');
 const seriesAccesses = require('./series-accesses');
@@ -1412,6 +1413,41 @@ function createApp(overrides = {}) {
     await roomService.mutePublishedTrack(req.roomSession.room, targetIdentity, microphoneTrack.sid, true);
     await safeAudit({ actor: req.roomSession.identity, action: 'MICROPHONE_MUTED', target: targetIdentity, room: req.roomSession.room, ...auditContext(req) });
     res.json({ muted: true });
+  }));
+
+  function canPinChat(meetingRole) {
+    return ['HOST', 'TEACHER', 'COHOST'].includes(String(meetingRole || '').toUpperCase());
+  }
+
+  app.get('/api/chat/pins', requireRoomSession, roomMeeting, asyncHandler(async (req, res) => {
+    const records = await pinnedMessages.list(req.roomSession.room);
+    res.json({ pins: records.filter((pin) => pin.meetingId === req.meeting.id).map(pinnedMessages.publicPin) });
+  }));
+
+  app.post('/api/chat/pins', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (!canPinChat(req.meetingRole)) throw new AppError(403, 'No puedes fijar mensajes del chat', 'ROOM_FORBIDDEN');
+    await assertCallerPresent(req);
+    const record = await pinnedMessages.create({
+      room: req.roomSession.room,
+      meetingId: req.meeting.id,
+      text: req.body?.text,
+      authorName: req.body?.authorName || req.roomSession.displayName,
+      authorRole: req.body?.authorRole || req.meetingRole,
+      sourceSentAt: req.body?.sentAt,
+      pinnedBy: req.roomSession.displayName || req.roomSession.identity,
+    });
+    await relayRoomData(req, { kind: 'chat-pins-changed', sentAt: record.pinnedAt });
+    res.status(201).json({ pin: pinnedMessages.publicPin(record) });
+  }));
+
+  app.delete('/api/chat/pins/:id', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {
+    if (!canPinChat(req.meetingRole)) throw new AppError(403, 'No puedes desfijar mensajes del chat', 'ROOM_FORBIDDEN');
+    await assertCallerPresent(req);
+    const record = await pinnedMessages.get(req.roomSession.room, req.params.id);
+    if (!record || record.meetingId !== req.meeting.id) throw new AppError(404, 'Mensaje fijado no encontrado', 'NOT_FOUND');
+    await pinnedMessages.remove(req.roomSession.room, record.id);
+    await relayRoomData(req, { kind: 'chat-pins-changed', sentAt: new Date().toISOString() });
+    res.json({ removed: true });
   }));
 
   app.post('/api/chat/message', requireRoomSession, requireRoomCsrf, chatLimiter, roomMeeting, (req, res, next) => {

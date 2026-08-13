@@ -448,6 +448,78 @@ test('persistent Q&A enforces ownership, supports voting and moderator answers',
   mockRoomService.participants = [];
 });
 
+test('chat pins are persistent, room-scoped and restricted to host teacher or cohost', async () => {
+  const meeting = await meetings.createMeeting({
+    title: 'Chat fijado', room: 'chat-fijado', trainerName: 'Trainer', scheduledAt: '2031-05-01T10:00:00.000Z',
+    durationMinutes: 60, status: 'LIVE', allowChat: true, createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const host = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingType: 'WEBINAR', meetingRole: 'HOST', displayName: 'Host' });
+  const cohost = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'PANELIST', meetingType: 'WEBINAR', meetingRole: 'COHOST', displayName: 'Cohost' });
+  const panelist = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'PANELIST', meetingType: 'WEBINAR', meetingRole: 'PANELIST', displayName: 'Panelista' });
+  const attendee = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'VIEWER', meetingType: 'WEBINAR', meetingRole: 'ATTENDEE', displayName: 'Asistente' });
+  const hostCookie = roomCookie(host.token).split(';')[0];
+  const cohostCookie = roomCookie(cohost.token).split(';')[0];
+  const panelistCookie = roomCookie(panelist.token).split(';')[0];
+  const attendeeCookie = roomCookie(attendee.token).split(';')[0];
+  mockRoomService.participants = [host, cohost, panelist, attendee].map(({ session }) => ({ identity: session.identity }));
+
+  const hostPin = await request('/api/chat/pins', {
+    method: 'POST', cookie: hostCookie, roomCsrf: host.session.csrf,
+    body: { text: 'Registra tu asistencia en https://forms.example.com/a.', authorName: 'Host', authorRole: 'HOST', sentAt: '2031-05-01T10:05:00.000Z' },
+  });
+  assert.equal(hostPin.response.status, 201, JSON.stringify(hostPin.data));
+  assert.equal(hostPin.data.pin.authorName, 'Host');
+  assert.match(hostPin.data.pin.text, /https:\/\/forms\.example\.com\/a/);
+
+  const cohostPin = await request('/api/chat/pins', {
+    method: 'POST', cookie: cohostCookie, roomCsrf: cohost.session.csrf,
+    body: { text: 'Material: www.example.com/guia', authorName: 'Cohost', authorRole: 'COHOST' },
+  });
+  assert.equal(cohostPin.response.status, 201, JSON.stringify(cohostPin.data));
+
+  const attendeeForbidden = await request('/api/chat/pins', {
+    method: 'POST', cookie: attendeeCookie, roomCsrf: attendee.session.csrf,
+    body: { text: 'No autorizado' },
+  });
+  assert.equal(attendeeForbidden.response.status, 403);
+  const panelistForbidden = await request('/api/chat/pins', {
+    method: 'POST', cookie: panelistCookie, roomCsrf: panelist.session.csrf,
+    body: { text: 'Panelista normal' },
+  });
+  assert.equal(panelistForbidden.response.status, 403);
+
+  const attendeeList = await request('/api/chat/pins', { cookie: attendeeCookie });
+  assert.equal(attendeeList.response.status, 200, JSON.stringify(attendeeList.data));
+  assert.equal(attendeeList.data.pins.length, 2);
+
+  const otherMeeting = await meetings.createMeeting({
+    title: 'Otra sala', room: 'chat-fijado-otra', trainerName: 'Trainer', scheduledAt: '2031-05-01T11:00:00.000Z',
+    durationMinutes: 60, status: 'LIVE', allowChat: true, createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(otherMeeting.room, { meetingId: otherMeeting.id });
+  const otherViewer = createRoomSession({ room: otherMeeting.room, meetingId: otherMeeting.id, role: 'VIEWER', meetingType: 'WEBINAR', meetingRole: 'ATTENDEE', displayName: 'Otro' });
+  const otherList = await request('/api/chat/pins', { cookie: roomCookie(otherViewer.token).split(';')[0] });
+  assert.deepEqual(otherList.data.pins, []);
+
+  const removed = await request(`/api/chat/pins/${hostPin.data.pin.id}`, { method: 'DELETE', cookie: cohostCookie, roomCsrf: cohost.session.csrf });
+  assert.equal(removed.response.status, 200, JSON.stringify(removed.data));
+  const lateJoin = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'VIEWER', meetingType: 'WEBINAR', meetingRole: 'ATTENDEE', displayName: 'Tarde' });
+  const lateList = await request('/api/chat/pins', { cookie: roomCookie(lateJoin.token).split(';')[0] });
+  assert.deepEqual(lateList.data.pins.map((pin) => pin.id), [cohostPin.data.pin.id]);
+
+  const classMeeting = await meetings.createMeeting({
+    title: 'Clase con pin', room: 'clase-pin', trainerName: 'Teacher', scheduledAt: '2031-05-01T12:00:00.000Z',
+    durationMinutes: 60, status: 'LIVE', type: 'CLASS', allowChat: true, createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(classMeeting.room, { meetingId: classMeeting.id });
+  const teacher = createRoomSession({ room: classMeeting.room, meetingId: classMeeting.id, role: 'ORGANIZER', meetingType: 'CLASS', meetingRole: 'TEACHER', displayName: 'Docente' });
+  mockRoomService.participants = [{ identity: teacher.session.identity }];
+  const teacherPin = await request('/api/chat/pins', { method: 'POST', cookie: roomCookie(teacher.token).split(';')[0], roomCsrf: teacher.session.csrf, body: { text: 'Pin de clase' } });
+  assert.equal(teacherPin.response.status, 201, JSON.stringify(teacherPin.data));
+  mockRoomService.participants = [];
+});
+
 test('viewer room sessions cannot promote participants or control recording', async () => {
   const meeting = await meetings.createMeeting({
     title: 'Sala viewer', room: 'sala-viewer', trainerName: 'Trainer', scheduledAt: '2031-01-01T10:00:00.000Z',

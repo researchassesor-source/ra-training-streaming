@@ -21,6 +21,9 @@ function setupChat(room, myIdentity, options = {}) {
   const mountedRows = [];
   const drafts = { chat: '', question: '' };
   const history = [];
+  const pinRoles = new Set(['HOST', 'TEACHER', 'COHOST']);
+  const pins = { items: [], expanded: false };
+  const canManagePins = pinRoles.has(String(options.role || '').toUpperCase());
   let sending = false;
   let uploadController = null;
   let historySequence = 0;
@@ -96,6 +99,137 @@ function setupChat(room, myIdentity, options = {}) {
     while (mountedRows.length > 300) mountedRows.shift().remove();
   }
 
+  function appendLinkifiedText(container, text) {
+    const source = String(text || '');
+    const pattern = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+    let cursor = 0;
+    for (const match of source.matchAll(pattern)) {
+      const raw = match[0];
+      const index = match.index || 0;
+      if (index > cursor) container.appendChild(document.createTextNode(source.slice(cursor, index)));
+      const trimmed = raw.replace(/[.,;:!?)]*$/g, '');
+      const suffix = raw.slice(trimmed.length);
+      const normalized = trimmed.startsWith('www.') ? `https://${trimmed}` : trimmed;
+      const safeUrl = RATCore.safeHttpUrl(normalized, location.origin);
+      if (safeUrl) {
+        const link = document.createElement('a');
+        link.href = safeUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = trimmed;
+        container.appendChild(link);
+      } else {
+        container.appendChild(document.createTextNode(trimmed));
+      }
+      if (suffix) container.appendChild(document.createTextNode(suffix));
+      cursor = index + raw.length;
+    }
+    if (cursor < source.length) container.appendChild(document.createTextNode(source.slice(cursor)));
+  }
+
+  function updatePinBadges() {
+    const count = pins.items.length;
+    const text = count ? `📌${count}` : '';
+    for (const [id, hostId] of [['chatPinBadge', 'btnChat'], ['chatTabPinBadge', null]]) {
+      let badge = document.getElementById(id);
+      const host = hostId ? document.getElementById(hostId) : document.querySelector('[data-room-tab="chat"]');
+      if (!host) continue;
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.id = id;
+        badge.className = 'chat-pin-badge';
+        badge.setAttribute('aria-label', 'Mensajes fijados');
+        host.appendChild(badge);
+      }
+      badge.hidden = count === 0;
+      badge.textContent = text;
+    }
+  }
+
+  const pinnedRoot = document.createElement('section');
+  pinnedRoot.className = 'chat-pinned-root';
+  pinnedRoot.hidden = true;
+  const pinnedSummary = document.createElement('button');
+  pinnedSummary.type = 'button';
+  pinnedSummary.className = 'chat-pinned-summary';
+  const pinnedPanel = document.createElement('div');
+  pinnedPanel.className = 'chat-pinned-panel';
+  pinnedPanel.hidden = true;
+  pinnedRoot.append(pinnedSummary, pinnedPanel);
+  messagesEl.parentNode?.insertBefore(pinnedRoot, messagesEl);
+
+  function renderPins() {
+    const count = pins.items.length;
+    pinnedRoot.hidden = count === 0;
+    pinnedSummary.textContent = count === 1 ? '📌 1 mensaje fijado · Ver' : `📌 ${count} mensajes fijados · Ver`;
+    pinnedSummary.setAttribute('aria-expanded', String(pins.expanded));
+    pinnedPanel.hidden = !pins.expanded || count === 0;
+    pinnedPanel.replaceChildren();
+    if (count) {
+      const header = document.createElement('div');
+      header.className = 'chat-pinned-panel-header';
+      const title = document.createElement('strong'); title.textContent = '📌 Mensajes fijados';
+      const close = document.createElement('button'); close.type = 'button'; close.className = 'text-button'; close.textContent = '×'; close.setAttribute('aria-label', 'Contraer mensajes fijados');
+      listen(close, 'click', () => { pins.expanded = false; renderPins(); });
+      header.append(title, close); pinnedPanel.appendChild(header);
+      for (const pin of pins.items) {
+        const item = document.createElement('article');
+        item.className = 'chat-pinned-item';
+        const meta = document.createElement('small');
+        meta.textContent = pin.authorName ? `${pin.authorName} · ${RATCore.roleLabel(pin.authorRole)}` : 'Mensaje fijado';
+        const text = document.createElement('p');
+        appendLinkifiedText(text, pin.text);
+        item.append(meta, text);
+        if (canManagePins) {
+          const unpin = document.createElement('button');
+          unpin.type = 'button';
+          unpin.className = 'text-button chat-pin-action';
+          unpin.textContent = 'Desfijar';
+          listen(unpin, 'click', async () => {
+            unpin.disabled = true;
+            try { await roomRequest(`/api/chat/pins/${encodeURIComponent(pin.id)}`, { method: 'DELETE' }, options.csrfToken); await loadPins(); }
+            catch (error) { if (errorEl) errorEl.textContent = error.message || 'No fue posible desfijar el mensaje.'; unpin.disabled = false; }
+          });
+          item.appendChild(unpin);
+        }
+        pinnedPanel.appendChild(item);
+      }
+    }
+    updatePinBadges();
+  }
+
+  async function loadPins() {
+    const result = await roomRequest('/api/chat/pins', { method: 'GET' }, options.csrfToken);
+    pins.items = Array.isArray(result.pins) ? result.pins : [];
+    if (!pins.items.length) pins.expanded = false;
+    renderPins();
+  }
+
+  function appendPinAction(row, from, message) {
+    if (!canManagePins || message.kind !== 'chat' || message.type === 'file') return;
+    const text = String(message.text || '').trim();
+    if (!text) return;
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'text-button chat-pin-action';
+    action.textContent = '📌 Fijar';
+    listen(action, 'click', async () => {
+      action.disabled = true;
+      try {
+        await roomRequest('/api/chat/pins', {
+          method: 'POST',
+          body: { text, authorName: from || 'Participante', authorRole: message.role || 'ATTENDEE', sentAt: message.sentAt },
+        }, options.csrfToken);
+        pins.expanded = true;
+        await loadPins();
+      } catch (error) {
+        if (errorEl) errorEl.textContent = error.message || 'No fue posible fijar el mensaje.';
+        action.disabled = false;
+      }
+    });
+    row.appendChild(action);
+  }
+
   function render(from, message, isMe, delivery = 'sent') {
     const container = message.kind === 'question' && questionsEl ? questionsEl : messagesEl;
     const row = document.createElement('article');
@@ -116,8 +250,9 @@ function setupChat(room, myIdentity, options = {}) {
         const link = document.createElement('a'); link.className = 'file-link'; link.href = safeUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${message.filename || 'Archivo'} (${formatSize(message.size || 0)})`; row.appendChild(link);
       } else row.appendChild(document.createTextNode('Archivo no disponible'));
     } else {
-      const body = document.createElement('p'); body.textContent = String(message.text || ''); row.appendChild(body);
+      const body = document.createElement('p'); appendLinkifiedText(body, message.text); row.appendChild(body);
     }
+    if (delivery !== 'sending') appendPinAction(row, from, message);
 
     if (isMe) {
       const status = document.createElement('span'); status.className = `delivery-status ${delivery}`; status.textContent = delivery === 'failed' ? 'Falló' : delivery === 'sending' ? 'Enviando…' : 'Enviado'; row.appendChild(status);
@@ -148,6 +283,7 @@ function setupChat(room, myIdentity, options = {}) {
       row.querySelector('.delivery-status').className = 'delivery-status sent';
       row.querySelector('.delivery-status').textContent = 'Enviado';
       updateHistory(row.dataset.historyId, { delivery: 'sent', sentAt: message.sentAt || pending.sentAt });
+      appendPinAction(row, options.displayName || myIdentity, message);
       return true;
     } catch (error) {
       row.querySelector('.delivery-status').className = 'delivery-status failed';
@@ -164,6 +300,7 @@ function setupChat(room, myIdentity, options = {}) {
   function dataReceived(payload, participant) {
     try {
       const message = JSON.parse(decoder.decode(payload));
+      if (message.kind === 'chat-pins-changed') { loadPins().catch(() => {}); return; }
       if (!['chat', 'question'].includes(message.kind)) return;
       if (typeof message.text === 'string' && message.text.length > 2_000) return;
       render(message.from || participant?.name || participant?.identity || 'Participante', message, false);
@@ -173,6 +310,8 @@ function setupChat(room, myIdentity, options = {}) {
     } catch (error) { console.warn('Mensaje de datos descartado', error); }
   }
   room.on(LivekitClient.RoomEvent.DataReceived, dataReceived);
+  listen(pinnedSummary, 'click', () => { pins.expanded = !pins.expanded; renderPins(); });
+  loadPins().catch(() => {});
 
   async function submit(event) {
     event.preventDefault();
@@ -265,6 +404,7 @@ function setupChat(room, myIdentity, options = {}) {
       listenerController.abort();
       room.off(LivekitClient.RoomEvent.DataReceived, dataReceived);
       emojiPicker?.replaceChildren();
+      pinnedRoot.remove();
     },
     getDraft(kind = 'chat') { return drafts[kind === 'question' ? 'question' : 'chat'] || ''; },
     setDraft,
