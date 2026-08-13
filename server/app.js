@@ -228,7 +228,7 @@ function createApp(overrides = {}) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), display-capture=(self), picture-in-picture=(self)');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-    res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ${LIVEKIT_WS_URL || ''}`.trim());
+    res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ${LIVEKIT_WS_URL || ''} ${LIVEKIT_HTTP_URL || ''}`.trim());
     if (config.isProductionLike) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     if (config.noIndex) res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
     if (req.path.startsWith('/api/') || req.path.startsWith('/i/') || req.path.startsWith('/s/')) res.setHeader('Cache-Control', 'no-store');
