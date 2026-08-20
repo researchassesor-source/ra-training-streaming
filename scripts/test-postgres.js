@@ -12,6 +12,8 @@ const env = {
   DATA_BACKEND: 'postgres',
   DATABASE_URL: process.env.TEST_DATABASE_URL,
   DATABASE_URL_DIRECT: process.env.TEST_DATABASE_URL_DIRECT || process.env.TEST_DATABASE_URL,
+  REDIS_URL: '',
+  TEST_REDIS_URL: '',
   SESSION_SECRET: process.env.SESSION_SECRET || 'test-session-secret-with-more-than-32-characters',
   INVITATION_HASH_SECRET: process.env.INVITATION_HASH_SECRET || 'test-invitation-secret-with-more-than-32-characters',
 };

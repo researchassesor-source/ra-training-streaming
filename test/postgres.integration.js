@@ -17,6 +17,7 @@ const transcriptions = require('../server/transcriptions');
 const postgresStore = require('../server/db/postgres-store');
 const liveKitWebhooks = require('../server/livekit-webhooks');
 const backgroundJobs = require('../server/background-jobs');
+const redis = require('../server/redis');
 
 const runId = `pg-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -38,6 +39,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
+  await redis.disconnect();
   await db.closePool();
 });
 
