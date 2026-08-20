@@ -20,6 +20,16 @@ const backgroundJobs = require('../server/background-jobs');
 
 const runId = `pg-${crypto.randomUUID().slice(0, 8)}`;
 
+async function cleanupBackgroundJobFixtures() {
+  await db.query(
+    `DELETE FROM background_jobs
+     WHERE type IN ('PG_TEST_JOB', 'PG_TEST_RESIDUE')
+        OR dedupe_key LIKE 'pg-%:job%'
+        OR dedupe_key LIKE 'pg-%:residue%'
+        OR payload->>'safeId' LIKE 'pg-%'`
+  );
+}
+
 if (!process.env.DATABASE_URL) {
   test('PostgreSQL integration tests require TEST_DATABASE_URL', { skip: 'no PostgreSQL test connection available' }, () => {});
 } else {
@@ -174,21 +184,37 @@ test('LiveKit webhook deduplication and attendance effects are durable in Postgr
 });
 
 test('background jobs use PostgreSQL dedupe, SKIP LOCKED claims, heartbeat and lease recovery', async () => {
-  const first = await backgroundJobs.enqueue({ type: 'PG_TEST_JOB', dedupeKey: `${runId}:job`, payload: { safeId: runId }, maxAttempts: 3 });
-  const second = await backgroundJobs.enqueue({ type: 'PG_TEST_JOB', dedupeKey: `${runId}:job`, payload: { safeId: runId }, maxAttempts: 3 });
-  assert.equal(first.job.id, second.job.id);
+  await cleanupBackgroundJobFixtures();
+  try {
+    const residue = await backgroundJobs.enqueue({
+      type: 'PG_TEST_RESIDUE',
+      dedupeKey: `${runId}:residue`,
+      payload: { safeId: runId, residue: true },
+      priority: 100,
+      maxAttempts: 3,
+    });
+    const first = await backgroundJobs.enqueue({ type: 'PG_TEST_JOB', dedupeKey: `${runId}:job`, payload: { safeId: runId }, maxAttempts: 3 });
+    const second = await backgroundJobs.enqueue({ type: 'PG_TEST_JOB', dedupeKey: `${runId}:job`, payload: { safeId: runId }, maxAttempts: 3 });
+    assert.equal(first.job.id, second.job.id);
 
-  const claimed = await backgroundJobs.claimNext({ worker: `${runId}-worker-a`, leaseMs: 5_000 });
-  assert.equal(claimed.id, first.job.id);
-  assert.equal(await backgroundJobs.claimNext({ worker: `${runId}-worker-b`, leaseMs: 5_000 }), null);
+    const claimed = await backgroundJobs.claimNext({ worker: `${runId}-worker-a`, leaseMs: 5_000, types: ['PG_TEST_JOB'] });
+    assert.equal(claimed.id, first.job.id);
+    assert.equal(await backgroundJobs.claimNext({ worker: `${runId}-worker-b`, leaseMs: 5_000, types: ['PG_TEST_JOB'] }), null);
 
-  assert.equal(await backgroundJobs.heartbeat(claimed.id, `${runId}-worker-a`, { leaseMs: 5_000 }), true);
-  await db.query("UPDATE background_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1", [claimed.id]);
-  const recovered = await backgroundJobs.claimNext({ worker: `${runId}-worker-b`, leaseMs: 5_000 });
-  assert.equal(recovered.id, claimed.id);
-  assert.equal(recovered.attempts, 2);
-  assert.equal(await backgroundJobs.complete(recovered.id, `${runId}-worker-b`), true);
-  assert.equal((await backgroundJobs.getJob(recovered.id)).status, 'SUCCEEDED');
+    const residueClaimed = await backgroundJobs.claimNext({ worker: `${runId}-worker-residue`, leaseMs: 5_000, types: ['PG_TEST_RESIDUE'] });
+    assert.equal(residueClaimed.id, residue.job.id);
+    assert.equal(await backgroundJobs.complete(residueClaimed.id, `${runId}-worker-residue`), true);
+
+    assert.equal(await backgroundJobs.heartbeat(claimed.id, `${runId}-worker-a`, { leaseMs: 5_000 }), true);
+    await db.query("UPDATE background_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1", [claimed.id]);
+    const recovered = await backgroundJobs.claimNext({ worker: `${runId}-worker-b`, leaseMs: 5_000, types: ['PG_TEST_JOB'] });
+    assert.equal(recovered.id, claimed.id);
+    assert.equal(recovered.attempts, 2);
+    assert.equal(await backgroundJobs.complete(recovered.id, `${runId}-worker-b`), true);
+    assert.equal((await backgroundJobs.getJob(recovered.id)).status, 'SUCCEEDED');
+  } finally {
+    await cleanupBackgroundJobFixtures();
+  }
 });
 
 test('rooms, attendance, questions, audit and transcriptions round-trip structured state', async () => {

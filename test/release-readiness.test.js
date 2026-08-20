@@ -309,5 +309,8 @@ test('frontend E2E smoke suite runs against an isolated local server and mobile 
   assert.match(serverSource, /LOCAL_DATA_DIR/);
   assert.match(serverSource, /rat-streaming-e2e/);
   assert.match(serverSource, /livekit-e2e\.invalid/);
-  assert.doesNotMatch(serverSource, /DATABASE_URL|REDIS_URL|TRANSCRIPTION_API_KEY/);
+  assert.match(serverSource, /DATA_BACKEND = 'local'/);
+  assert.match(serverSource, /REDIS_URL = ''/);
+  assert.match(serverSource, /DATABASE_URL = ''/);
+  assert.doesNotMatch(serverSource, /TRANSCRIPTION_API_KEY/);
 });

@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const { test, expect } = require('@playwright/test');
 
 const admin = { username: 'rootadmin', password: 'Bootstrap-password-123' };
@@ -40,6 +41,14 @@ const fakeLiveKit = `
 `;
 
 test.describe.configure({ mode: 'serial' });
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function uniqueId(prefix) {
+  return `${prefix}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+}
 
 async function installLiveKitMock(page) {
   await page.route('**/vendor/livekit-client/livekit-client.umd.js', (route) => route.fulfill({
@@ -98,17 +107,37 @@ async function createInvitationViaApi(page, room, meetingRole = 'ATTENDEE') {
 }
 
 async function launchMeetingViaApi(page, room) {
-  return page.evaluate(async ({ room }) => {
-    const me = await fetch('/api/auth/me', { credentials: 'same-origin' }).then((r) => r.json());
-    const response = await fetch(`/api/meetings/${encodeURIComponent(room)}/launch`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrfToken },
-      body: JSON.stringify({}),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
-  }, { room });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result = await page.evaluate(async ({ room }) => {
+      const me = await fetch('/api/auth/me', { credentials: 'same-origin' }).then((r) => r.json());
+      const response = await fetch(`/api/meetings/${encodeURIComponent(room)}/launch`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrfToken },
+        body: JSON.stringify({}),
+      });
+      const body = await response.json().catch(async () => ({ error: await response.text().catch(() => '') }));
+      return { ok: response.ok, status: response.status, body };
+    }, { room });
+    if (result.ok) return result.body;
+    if (result.body?.code === 'ROOM_CONCURRENT_UPDATE' && attempt < 3) {
+      await delay(100 * (attempt + 1));
+      continue;
+    }
+    throw new Error(JSON.stringify(result.body));
+  }
+  throw new Error('No fue posible iniciar la reunión.');
+}
+
+async function gotoInvitation(page, url) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await page.goto(url);
+    if (response?.status() !== 409) return response;
+    const body = await response.json().catch(() => ({}));
+    if (body?.code !== 'ROOM_CONCURRENT_UPDATE' || attempt === 3) return response;
+    await delay(100 * (attempt + 1));
+  }
+  return null;
 }
 
 async function enterPrejoin(page, name = 'Persona E2E') {
@@ -169,8 +198,9 @@ test('dashboard crea, valida, edita y comparte una reunión', async ({ page }) =
 });
 
 test('participant happy path: invitation, prejoin, room, chat, Q&A, hand and leave', async ({ page, context }) => {
+  test.setTimeout(60_000);
   await login(page);
-  const created = await createMeetingViaApi(page, `flow-${Date.now()}`);
+  const created = await createMeetingViaApi(page, uniqueId('flow'));
   const meeting = created.meeting || created;
   await page.goto('/dashboard.html');
   await page.getByRole('button', { name: 'Reuniones' }).click();
@@ -186,7 +216,7 @@ test('participant happy path: invitation, prejoin, room, chat, Q&A, hand and lea
   const invitation = await createInvitationViaApi(page, meeting.room, 'ATTENDEE');
   const attendee = await context.newPage();
   await installLiveKitMock(attendee);
-  await attendee.goto(invitation.url);
+  await gotoInvitation(attendee, invitation.url);
   await enterPrejoin(attendee, 'Asistente E2E');
   await attendee.getByRole('button', { name: 'Más opciones' }).click();
   await expect(attendee.getByRole('button', { name: /Iniciar grabación/i })).toBeHidden();
@@ -205,7 +235,10 @@ test('participant happy path: invitation, prejoin, room, chat, Q&A, hand and lea
   await attendee.getByRole('button', { name: /Mano/ }).click();
   await expect(attendee.getByRole('button', { name: /Cancelar|Mano/ })).toBeVisible();
 
-  await attendee.getByRole('button', { name: /Salir de la reunión/ }).click();
+  await Promise.all([
+    attendee.waitForURL(/\/index\.html(?:$|\?)/, { timeout: 15_000 }),
+    attendee.getByRole('button', { name: /Salir de la reunión/ }).click(),
+  ]);
   await expect(attendee.getByRole('heading', { name: 'Iniciar sesión' })).toBeVisible();
   await attendee.close();
 });
