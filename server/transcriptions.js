@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
+const backgroundJobs = require('./background-jobs');
 const { config } = require('./config');
 const { AppError, sanitizeText } = require('./http-utils');
 
@@ -235,6 +236,10 @@ function publicTranscript(record) {
   return publicRecord;
 }
 
+function transcriptionDedupeKey(recordingId, language) {
+  return `transcription:${String(recordingId || '').slice(0, 180)}:${safeLanguage(language)}`;
+}
+
 async function withCreationLock(key, action) {
   const previous = creationLocks.get(key) || Promise.resolve();
   let release;
@@ -270,6 +275,58 @@ async function createTranscript({ meeting, recording, requestedBy, language, pro
     const id = crypto.randomUUID();
     const retentionDays = Math.max(1, Math.min(3_650, Number(meeting.transcriptionRetentionDays) || config.transcriptionRetentionDays));
     const safeTranscriptLanguage = safeLanguage(language, meeting.transcriptionLanguage || config.transcriptionLanguage);
+    if (localStore.usesPostgres()) {
+      return localStore.withTransaction(async () => {
+        const providerName = sanitizeText(provider.providerName || provider.constructor.name.replace(/TranscriptionProvider$/, '').toLowerCase() || 'unknown', { field: 'provider', max: 60 });
+        const transcript = await writeTranscript({
+          schemaVersion: 2,
+          id,
+          meetingId: meeting.id,
+          meetingRoom: meeting.room || null,
+          meetingTitle: sanitizeText(meeting.title || 'Reuni\u00f3n sin t\u00edtulo', { field: 'meetingTitle', max: 160 }),
+          meetingScheduledAt: meeting.scheduledAt || null,
+          recordingId: recording.id,
+          status: 'QUEUED',
+          language: safeTranscriptLanguage,
+          provider: providerName,
+          providerJobId: `durable-${id}`,
+          providerRequestId: null,
+          providerMetadata: {},
+          requestedBy: sanitizeText(requestedBy, { field: 'requestedBy', max: 80 }),
+          requestedAt: now,
+          retentionUntil: new Date(new Date(now).getTime() + retentionDays * 86_400_000).toISOString(),
+          startedAt: null,
+          providerSubmittedAt: null,
+          completedAt: null,
+          failedAt: null,
+          cancelledAt: null,
+          retainedDeletedAt: null,
+          errorCode: null,
+          errorMessageSafe: null,
+          durationSeconds: 0,
+          confidence: null,
+          text: '',
+          progress: 0,
+          speakers: [],
+          segments: [],
+          words: [],
+          warnings: [],
+          revision: 1,
+          editedBy: null,
+          editedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await backgroundJobs.enqueue({
+          type: 'TRANSCRIPTION_PROCESS',
+          dedupeKey: transcriptionDedupeKey(recording.id, safeTranscriptLanguage),
+          priority: 50,
+          maxAttempts: Math.max(1, config.transcriptionRetryMax + 2),
+          payload: { transcriptionId: id, meetingId: meeting.id, meetingRoom: meeting.room, recordingId: recording.id },
+        });
+        return transcript;
+      });
+    }
     const providerJob = await provider.createJob({ recording, meeting, language: safeTranscriptLanguage });
     return writeTranscript({
       schemaVersion: 2,
@@ -313,6 +370,7 @@ async function createTranscript({ meeting, recording, requestedBy, language, pro
 
 async function refreshTranscript(record, provider, recording) {
   if (!record || TERMINAL_STATUSES.has(record.status)) return record;
+  if (localStore.usesPostgres() && String(record.providerJobId || '').startsWith('durable-')) return record;
   let providerState;
   try {
     providerState = await provider.getJobStatus(record.providerJobId);
@@ -368,6 +426,12 @@ async function refreshTranscript(record, provider, recording) {
 
 async function cancelTranscript(record, provider, recording = {}) {
   if (TERMINAL_STATUSES.has(record.status)) throw new AppError(409, 'La transcripci\u00f3n ya termin\u00f3 y no puede cancelarse', 'TRANSCRIPTION_ALREADY_COMPLETED');
+  if (localStore.usesPostgres() && String(record.providerJobId || '').startsWith('durable-')) {
+    return localStore.withTransaction(async () => {
+      await backgroundJobs.cancelByDedupe(transcriptionDedupeKey(record.recordingId, record.language));
+      return writeTranscript({ ...record, status: 'CANCELLED', cancelledAt: new Date().toISOString(), errorCode: null, errorMessageSafe: null, progress: 0 });
+    });
+  }
   const result = await provider.cancelJob(record.providerJobId);
   if (COMPLETE_STATUSES.has(result?.status)) return refreshTranscript(record, provider, recording);
   if (result?.status === 'FAILED') return writeTranscript({
@@ -383,6 +447,44 @@ async function cancelTranscript(record, provider, recording = {}) {
 
 async function retryTranscript(record, { meeting, recording, requestedBy, provider }) {
   if (!['FAILED', 'CANCELLED', 'COMPLETED', 'COMPLETED_WITH_WARNINGS'].includes(record.status)) throw new AppError(409, 'La transcripci\u00f3n todav\u00eda est\u00e1 en proceso', 'TRANSCRIPTION_ALREADY_RUNNING');
+  if (localStore.usesPostgres() && String(record.providerJobId || '').startsWith('durable-')) {
+    return localStore.withTransaction(async () => {
+      const updated = await writeTranscript({
+        ...record,
+        status: 'QUEUED',
+        providerRequestId: null,
+        providerMetadata: {},
+        requestedBy,
+        requestedAt: new Date().toISOString(),
+        startedAt: null,
+        providerSubmittedAt: null,
+        completedAt: null,
+        failedAt: null,
+        cancelledAt: null,
+        retainedDeletedAt: null,
+        errorCode: null,
+        errorMessageSafe: null,
+        progress: 0,
+        confidence: null,
+        text: '',
+        speakers: [],
+        segments: [],
+        words: [],
+        warnings: [],
+        revision: Number(record.revision || 0) + 1,
+        editedBy: null,
+        editedAt: null,
+      });
+      await backgroundJobs.enqueue({
+        type: 'TRANSCRIPTION_PROCESS',
+        dedupeKey: transcriptionDedupeKey(recording.id, record.language),
+        priority: 50,
+        maxAttempts: Math.max(1, config.transcriptionRetryMax + 2),
+        payload: { transcriptionId: record.id, meetingId: meeting.id, meetingRoom: meeting.room, recordingId: recording.id },
+      });
+      return updated;
+    });
+  }
   const providerJob = await provider.createJob({ recording, meeting, language: record.language });
   return writeTranscript({
     ...record,
@@ -458,6 +560,87 @@ async function renameSpeaker(record, { speakerId, participantName, revision, edi
 async function deleteTranscript(record) {
   if (stateInS3()) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: keyFor(record.id) }));
   else await localStore.deleteJson('transcriptions', record.id);
+}
+
+async function processTranscriptionJob({ transcriptionId, provider, recordingResolver, meetings }) {
+  const record = await getTranscript(transcriptionId);
+  if (!record) throw new AppError(404, 'Transcripci\u00f3n no encontrada.', 'TRANSCRIPTION_NOT_FOUND');
+  if (record.status === 'CANCELLED') return { skipped: true, status: 'CANCELLED' };
+  if (COMPLETE_STATUSES.has(record.status)) return { skipped: true, status: record.status };
+  if (!provider?.isConfigured()) throw new AppError(503, 'La transcripci\u00f3n no est\u00e1 configurada en este entorno', 'TRANSCRIPTION_PROVIDER_NOT_CONFIGURED');
+  const meetingRoom = record.meetingRoom || record.room;
+  const meeting = meetingRoom && meetings?.getMeeting ? await meetings.getMeeting(meetingRoom) : null;
+  if (!meeting) throw new AppError(404, 'Reuni\u00f3n no encontrada.', 'MEETING_NOT_FOUND');
+  const recording = await recordingResolver(record.recordingId, meeting);
+  if (!recording) throw new AppError(404, 'La reuni\u00f3n no tiene una grabaci\u00f3n disponible', 'TRANSCRIPTION_RECORDING_NOT_FOUND');
+  const now = new Date().toISOString();
+  let current = await writeTranscript({
+    ...record,
+    status: 'PROCESSING',
+    progress: Math.max(Number(record.progress || 0), 5),
+    startedAt: record.startedAt || now,
+    providerSubmittedAt: record.providerSubmittedAt || now,
+    errorCode: null,
+    errorMessageSafe: null,
+  });
+  const isCancelled = async () => (await getTranscript(record.id))?.status === 'CANCELLED';
+  const result = await provider.transcribe({
+    recording,
+    meeting,
+    language: record.language,
+    isCancelled,
+    onStage: async (status, providerJob) => {
+      if (await isCancelled()) throw new AppError(409, 'La transcripci\u00f3n fue cancelada.', 'TRANSCRIPTION_CANCELLED');
+      const progress = Math.max(0, Math.min(100, Number(providerJob?.progress) || Number(current.progress) || 0));
+      current = await writeTranscript({ ...current, status: STATUSES.includes(status) ? status : 'PROCESSING', progress, providerSubmittedAt: current.providerSubmittedAt || new Date().toISOString() });
+    },
+  });
+  if (await isCancelled()) return { skipped: true, status: 'CANCELLED' };
+  const sanitized = sanitizeTranscriptResult(result, recording);
+  if (!sanitized.segments.length) throw new AppError(502, 'El proveedor termin\u00f3 sin devolver texto utilizable.', 'TRANSCRIPTION_DEEPGRAM_INVALID_RESPONSE');
+  const completedAt = new Date().toISOString();
+  const stored = await writeTranscript({
+    ...current,
+    ...sanitized,
+    status: sanitized.warnings.length || result.status === 'COMPLETED_WITH_WARNINGS' ? 'COMPLETED_WITH_WARNINGS' : 'COMPLETED',
+    providerJobId: result.providerJobId || current.providerJobId,
+    providerRequestId: result.providerRequestId || sanitized.providerRequestId || current.providerRequestId || null,
+    providerSubmittedAt: current.providerSubmittedAt || completedAt,
+    completedAt,
+    failedAt: null,
+    cancelledAt: null,
+    errorCode: null,
+    errorMessageSafe: null,
+    progress: 100,
+  });
+  if (stored.retentionUntil) {
+    await backgroundJobs.enqueue({
+      type: 'TRANSCRIPTION_RETENTION_DELETE',
+      dedupeKey: `retention:${stored.id}`,
+      priority: -50,
+      maxAttempts: 3,
+      availableAt: stored.retentionUntil,
+      payload: { transcriptionId: stored.id },
+    });
+  }
+  return stored;
+}
+
+async function applyRetention(record) {
+  if (!record) throw new AppError(404, 'Transcripci\u00f3n no encontrada.', 'TRANSCRIPTION_NOT_FOUND');
+  if (!record.retentionUntil || new Date(record.retentionUntil).getTime() > Date.now()) return { skipped: true, status: record.status };
+  if (record.retainedDeletedAt) return record;
+  return writeTranscript({
+    ...record,
+    text: '',
+    segments: [],
+    words: [],
+    speakers: [],
+    providerMetadata: {},
+    providerRequestId: null,
+    retainedDeletedAt: new Date().toISOString(),
+    retentionStatus: 'DELETED',
+  });
 }
 
 function timestamp(ms, separator = '.') {
@@ -538,6 +721,7 @@ module.exports = {
   EXPORT_FORMATS,
   STATUSES,
   TERMINAL_STATUSES,
+  applyRetention,
   cancelTranscript,
   createTranscript,
   deleteTranscript,
@@ -546,6 +730,7 @@ module.exports = {
   getTranscript,
   listTranscripts,
   normalizeStoredTranscript,
+  processTranscriptionJob,
   publicTranscript,
   refreshTranscript,
   renameSpeaker,

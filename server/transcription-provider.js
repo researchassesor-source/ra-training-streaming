@@ -10,6 +10,26 @@ class TranscriptionProvider {
   async getJobStatus() { throw new Error('getJobStatus no implementado'); }
   async cancelJob() { throw new Error('cancelJob no implementado'); }
   async getTranscript() { throw new Error('getTranscript no implementado'); }
+  async transcribe({ recording, meeting, language, isCancelled } = {}) {
+    const providerJob = await this.createJob({ recording, meeting, language });
+    for (let poll = 0; poll < 120; poll += 1) {
+      if (typeof isCancelled === 'function' && await isCancelled()) {
+        await this.cancelJob(providerJob.providerJobId).catch(() => null);
+        throw new AppError(409, 'La transcripción fue cancelada.', 'TRANSCRIPTION_CANCELLED');
+      }
+      const state = await this.getJobStatus(providerJob.providerJobId);
+      if (state.status === 'FAILED') {
+        throw new AppError(502, state.errorMessageSafe || 'El proveedor no pudo completar la transcripción.', state.errorCode || 'TRANSCRIPTION_PROVIDER_ERROR');
+      }
+      if (state.status === 'CANCELLED') throw new AppError(409, 'La transcripción fue cancelada.', 'TRANSCRIPTION_CANCELLED');
+      if (['COMPLETED', 'COMPLETED_WITH_WARNINGS'].includes(state.status)) {
+        const result = await this.getTranscript(providerJob.providerJobId);
+        return { ...result, providerJobId: providerJob.providerJobId, providerRequestId: state.providerRequestId || result.providerRequestId || null, status: state.status };
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(2_000, 100 * (poll + 1))));
+    }
+    throw new AppError(504, 'El proveedor tardó más de lo permitido.', 'TRANSCRIPTION_PROVIDER_TIMEOUT');
+  }
 }
 
 class UnsupportedTranscriptionProvider extends TranscriptionProvider {
@@ -92,6 +112,24 @@ class MockTranscriptionProvider extends TranscriptionProvider {
       warnings: job.fixture.warnings || [],
       rawMetadata: job.fixture.rawMetadata || {},
     };
+  }
+
+  async transcribe({ recording, language, isCancelled } = {}) {
+    const providerJob = await this.createJob({ recording, language });
+    for (let poll = 0; poll < 10; poll += 1) {
+      if (typeof isCancelled === 'function' && await isCancelled()) {
+        await this.cancelJob(providerJob.providerJobId).catch(() => null);
+        throw new AppError(409, 'La transcripción fue cancelada.', 'TRANSCRIPTION_CANCELLED');
+      }
+      const state = await this.getJobStatus(providerJob.providerJobId);
+      if (state.status === 'FAILED') throw new AppError(502, state.errorMessageSafe || 'El proveedor de prueba falló.', state.errorCode || 'MOCK_FAILURE');
+      if (state.status === 'CANCELLED') throw new AppError(409, 'La transcripción fue cancelada.', 'TRANSCRIPTION_CANCELLED');
+      if (['COMPLETED', 'COMPLETED_WITH_WARNINGS'].includes(state.status)) {
+        const result = await this.getTranscript(providerJob.providerJobId);
+        return { ...result, providerJobId: providerJob.providerJobId, providerRequestId: state.providerRequestId || result.providerRequestId || null, status: state.status };
+      }
+    }
+    throw new AppError(504, 'El proveedor de prueba no completó la transcripción.', 'MOCK_TIMEOUT');
   }
 }
 

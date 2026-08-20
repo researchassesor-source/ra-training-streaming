@@ -122,6 +122,32 @@ test('failed jobs can retry and active jobs can be cancelled without fake comple
   assert.equal(record.progress, 0);
 });
 
+test('retention cleanup removes transcript content after retentionUntil and is idempotent', async () => {
+  const expired = {
+    id: 'retention-unit',
+    meetingId: completedMeeting.id,
+    recordingId: readyRecording.id,
+    status: 'COMPLETED',
+    language: 'es',
+    provider: 'mock',
+    retentionUntil: new Date(Date.now() - 1_000).toISOString(),
+    text: 'Contenido sensible retenido',
+    segments: [{ id: 'seg-1', startMs: 0, endMs: 1000, text: 'Contenido sensible retenido', speakerId: 's1' }],
+    words: [{ word: 'Contenido' }],
+    speakers: [{ speakerId: 's1', speakerLabel: 'Hablante 1' }],
+    providerMetadata: { requestId: 'request-safe' },
+    createdAt: new Date().toISOString(),
+  };
+  const cleaned = await transcriptions.applyRetention(expired);
+  assert.equal(cleaned.text, '');
+  assert.equal(cleaned.segments.length, 0);
+  assert.equal(cleaned.words.length, 0);
+  assert.equal(cleaned.speakers.length, 0);
+  assert.equal(cleaned.retentionStatus, 'DELETED');
+  const again = await transcriptions.applyRetention(cleaned);
+  assert.equal(again.retainedDeletedAt, cleaned.retainedDeletedAt);
+});
+
 test('an unknown configured provider fails closed with an unsupported-provider error', async () => {
   const previousProvider = config.transcriptionProvider;
   const previousEnabled = config.transcriptionEnabled;

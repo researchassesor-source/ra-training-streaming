@@ -24,6 +24,10 @@ const attendance = require('./attendance');
 const liveKitWebhooks = require('./livekit-webhooks');
 const idempotency = require('./idempotency');
 const redis = require('./redis');
+const db = require('./db');
+const backgroundJobs = require('./background-jobs');
+const externalSessions = require('./external-sessions');
+const { classifyProviderError } = require('./provider-errors');
 const { createTranscriptionProvider } = require('./transcription-provider');
 const {
   clearRoomCookie,
@@ -1587,6 +1591,7 @@ function createApp(overrides = {}) {
   }));
 
   app.post('/api/recording/start', requireRoomSession, requireRoomCsrf, roomMeeting, requireRoomCapability('canManageRecording'), asyncHandler(async (req, res) => {
+    let durableSession = null;
     try {
       if (!recordingConfigured) throw new AppError(400, 'La grabación no está configurada', 'RECORDING_NOT_CONFIGURED');
       if (!req.meeting.allowRecording || req.meeting.status !== 'LIVE') throw new AppError(409, 'La grabación no está permitida en esta reunión', 'RECORDING_DISABLED');
@@ -1594,6 +1599,12 @@ function createApp(overrides = {}) {
       const existing = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
       const currentRecording = existing.find(isRecordingEgress);
       if (currentRecording) return res.json({ ...recordingStateFromEgress(currentRecording), alreadyRunning: true });
+      if (db.usingPostgres()) {
+        const begun = await externalSessions.beginRecording({ meetingId: req.meeting.id, room: req.roomSession.room });
+        durableSession = begun.session;
+        if (!begun.created) return res.json({ state: 'PROCESSING', active: false, egressId: durableSession.egressId, alreadyRunning: true });
+        await externalSessions.updateRecording(durableSession.id, { status: 'STARTING', startedAt: new Date().toISOString() });
+      }
       const filepath = `recordings/${req.roomSession.room}/${Date.now()}`;
       const info = await egressClient.startRoomCompositeEgress(
         req.roomSession.room,
@@ -1628,10 +1639,31 @@ function createApp(overrides = {}) {
         await s3.send(new PutObjectCommand({ Bucket: bucket, Key: `${filepath}.metadata.json`, Body: JSON.stringify(metadata), ContentType: 'application/json' })).catch(() => null);
       }
       const state = recordingStateFromEgress(info);
+      if (durableSession) {
+        await externalSessions.updateRecording(durableSession.id, {
+          egressId: info.egressId,
+          status: state.active ? 'RECORDING' : state.state === 'FAILED' ? 'FAILED' : 'PROCESSING',
+          providerStatus: typeof info.status === 'string' ? info.status : EgressStatus[info.status] || null,
+          outputObjectKey: `${filepath}.mp4`,
+          metadata: { source: 'ROOM_COMPOSITE' },
+        });
+        await backgroundJobs.enqueue({ type: 'RECORDING_RECONCILE', dedupeKey: `recording-reconcile:${info.egressId}`, priority: 20, maxAttempts: 5, payload: { sessionId: durableSession.id, room: req.roomSession.room, egressId: info.egressId } });
+      }
       await relayRoomData(req, { kind: 'recording-status', ...state, sentAt: new Date().toISOString() });
       await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_STARTED', target: info.egressId, room: req.roomSession.room, metadata: { state: state.state }, ...auditContext(req) });
       res.json({ ...state, alreadyRunning: false });
     } catch (error) {
+      if (durableSession) {
+        const classified = classifyProviderError(error, { provider: 'livekit', operation: 'startRecording', creatingSideEffect: true });
+        await externalSessions.updateRecording(durableSession.id, {
+          status: classified.unknownSideEffect ? 'PENDING_RECONCILIATION' : 'FAILED',
+          lastErrorCode: classified.code,
+          lastErrorMessage: classified.safeMessage,
+        }).catch(() => null);
+        if (classified.unknownSideEffect) {
+          await backgroundJobs.enqueue({ type: 'RECORDING_RECONCILE', dedupeKey: `recording-reconcile:${durableSession.id}`, priority: 20, maxAttempts: 5, payload: { sessionId: durableSession.id, room: req.roomSession.room } }).catch(() => null);
+        }
+      }
       await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_FAILED', target: req.meeting.id, room: req.roomSession.room, metadata: { operation: 'start', code: error.code || 'EGRESS_ERROR' }, ...auditContext(req) });
       throw error;
     }
@@ -1645,6 +1677,7 @@ function createApp(overrides = {}) {
       if (!active.some((egress) => egress.egressId === egressId && isRecordingEgress(egress))) throw new AppError(404, 'Grabación activa no encontrada en esta sala', 'NOT_FOUND');
       const info = await egressClient.stopEgress(egressId);
       const state = recordingStateFromEgress(info);
+      await backgroundJobs.enqueue({ type: 'RECORDING_RECONCILE', dedupeKey: `recording-reconcile:${egressId}`, priority: 20, maxAttempts: 5, payload: { room: req.roomSession.room, egressId } }).catch(() => null);
       const responseState = state.active ? state : { state: state.state === 'FAILED' ? 'FAILED' : 'PROCESSING', active: false, egressId: null };
       await relayRoomData(req, { kind: 'recording-status', ...responseState, sentAt: new Date().toISOString() });
       await safeAudit({ actor: req.roomSession.identity, action: 'RECORDING_STOPPED', target: egressId, room: req.roomSession.room, ...auditContext(req) });
@@ -1668,18 +1701,40 @@ function createApp(overrides = {}) {
     if (config.isProductionLike && !req.secure) throw new AppError(400, 'Facebook Live requiere una conexión HTTPS', 'HTTPS_REQUIRED');
     await assertCallerPresent(req);
     const { output } = validateFacebookDestination(req.body?.serverUrl, req.body?.streamKey);
+    let durableSession = null;
     try {
       const current = await facebookEgress(req.roomSession.room);
       const currentState = publicFacebookState(req.roomSession.room, current);
       if (currentState.active) return res.json({ ...currentState, alreadyRunning: true });
+      if (db.usingPostgres()) {
+        const begun = await externalSessions.beginFacebook({ meetingId: req.meeting.id, room: req.roomSession.room });
+        durableSession = begun.session;
+        if (!begun.created) return res.json({ provider: 'facebook', state: 'CONNECTING', active: false, egressId: durableSession.egressId, startedAt: durableSession.startedAt, stoppedAt: null, alreadyRunning: true });
+        await externalSessions.updateFacebook(durableSession.id, { status: 'STARTING', startedAt: new Date().toISOString() });
+      }
       const info = await egressClient.startRoomCompositeEgress(req.roomSession.room, output, { layout: 'speaker' });
       facebookEgressByRoom.set(req.roomSession.room, {
         provider: 'facebook', egressId: info.egressId, status: 'SENDING', startedAt: new Date().toISOString(), stoppedAt: null,
       });
+      if (durableSession) {
+        await externalSessions.updateFacebook(durableSession.id, { egressId: info.egressId, status: 'LIVE', metadata: { source: 'livekit-rtmp-egress' } });
+        await backgroundJobs.enqueue({ type: 'FACEBOOK_RECONCILE', dedupeKey: `facebook-reconcile:${info.egressId}`, priority: 20, maxAttempts: 5, payload: { sessionId: durableSession.id, room: req.roomSession.room, egressId: info.egressId } });
+      }
       const state = publicFacebookState(req.roomSession.room, info);
       await relayRoomData(req, { kind: 'external-stream-status', ...state, sentAt: new Date().toISOString() });
       res.status(201).json({ ...state, alreadyRunning: false });
     } catch (error) {
+      if (durableSession) {
+        const classified = classifyProviderError(error, { provider: 'livekit', operation: 'startFacebookLive', creatingSideEffect: true });
+        await externalSessions.updateFacebook(durableSession.id, {
+          status: classified.unknownSideEffect ? 'PENDING_RECONCILIATION' : 'FAILED',
+          lastErrorCode: classified.code,
+          lastErrorMessage: classified.safeMessage,
+        }).catch(() => null);
+        if (classified.unknownSideEffect) {
+          await backgroundJobs.enqueue({ type: 'FACEBOOK_RECONCILE', dedupeKey: `facebook-reconcile:${durableSession.id}`, priority: 20, maxAttempts: 5, payload: { sessionId: durableSession.id, room: req.roomSession.room } }).catch(() => null);
+        }
+      }
       if (error instanceof AppError) throw error;
       throw new AppError(502, 'No fue posible iniciar la señal hacia Facebook', 'FACEBOOK_EGRESS_FAILED');
     } finally {
@@ -1701,6 +1756,7 @@ function createApp(overrides = {}) {
       const info = await egressClient.stopEgress(requestedId);
       const metadata = facebookEgressByRoom.get(req.roomSession.room) || {};
       facebookEgressByRoom.set(req.roomSession.room, { ...metadata, status: 'IDLE', stoppedAt: new Date().toISOString() });
+      await backgroundJobs.enqueue({ type: 'FACEBOOK_RECONCILE', dedupeKey: `facebook-reconcile:${requestedId}`, priority: 20, maxAttempts: 5, payload: { room: req.roomSession.room, egressId: requestedId } }).catch(() => null);
       const state = publicFacebookState(req.roomSession.room, info);
       await relayRoomData(req, { kind: 'external-stream-status', ...state, sentAt: new Date().toISOString() });
       res.json({ stopped: true, ...state });
@@ -1934,7 +1990,7 @@ function createApp(overrides = {}) {
   }));
 
   async function healthResponse(_req, res) {
-    const [livekit, storage, transcription] = await Promise.all([livekitProbe(), storageProbe(), transcriptionStatus()]);
+    const [livekit, storage, transcription, jobs] = await Promise.all([livekitProbe(), storageProbe(), transcriptionStatus(), backgroundJobs.diagnostics()]);
     const servicesStatus = {
       livekit: { configured: livekit.configured === true, available: livekit.available === true },
       storage: { configured: storage.configured === true, available: storage.available === true, mode: storage.mode },
@@ -1942,6 +1998,7 @@ function createApp(overrides = {}) {
       transcription: { configured: transcription.configured === true, available: transcription.available === true, status: transcription.status || (transcription.available ? 'healthy' : transcription.configured ? 'degraded' : 'disabled') },
       redis: redis.diagnostics(),
       livekitWebhooks: liveKitWebhooks.diagnostics(),
+      backgroundJobs: jobs,
     };
     const requiredConfigured = !config.isProductionLike || (servicesStatus.livekit.configured && servicesStatus.storage.configured && recordingConfigured && (!config.transcriptionEnabled || servicesStatus.transcription.configured));
     const requiredAvailable = !config.isProductionLike || (servicesStatus.livekit.available && servicesStatus.storage.available && servicesStatus.recording.available && (!config.transcriptionEnabled || servicesStatus.transcription.available));

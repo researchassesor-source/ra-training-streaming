@@ -16,6 +16,7 @@ const audit = require('../server/audit');
 const transcriptions = require('../server/transcriptions');
 const postgresStore = require('../server/db/postgres-store');
 const liveKitWebhooks = require('../server/livekit-webhooks');
+const backgroundJobs = require('../server/background-jobs');
 
 const runId = `pg-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -172,6 +173,24 @@ test('LiveKit webhook deduplication and attendance effects are durable in Postgr
   assert.equal(record.activeSince, '2035-04-03T10:00:00.000Z');
 });
 
+test('background jobs use PostgreSQL dedupe, SKIP LOCKED claims, heartbeat and lease recovery', async () => {
+  const first = await backgroundJobs.enqueue({ type: 'PG_TEST_JOB', dedupeKey: `${runId}:job`, payload: { safeId: runId }, maxAttempts: 3 });
+  const second = await backgroundJobs.enqueue({ type: 'PG_TEST_JOB', dedupeKey: `${runId}:job`, payload: { safeId: runId }, maxAttempts: 3 });
+  assert.equal(first.job.id, second.job.id);
+
+  const claimed = await backgroundJobs.claimNext({ worker: `${runId}-worker-a`, leaseMs: 5_000 });
+  assert.equal(claimed.id, first.job.id);
+  assert.equal(await backgroundJobs.claimNext({ worker: `${runId}-worker-b`, leaseMs: 5_000 }), null);
+
+  assert.equal(await backgroundJobs.heartbeat(claimed.id, `${runId}-worker-a`, { leaseMs: 5_000 }), true);
+  await db.query("UPDATE background_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1", [claimed.id]);
+  const recovered = await backgroundJobs.claimNext({ worker: `${runId}-worker-b`, leaseMs: 5_000 });
+  assert.equal(recovered.id, claimed.id);
+  assert.equal(recovered.attempts, 2);
+  assert.equal(await backgroundJobs.complete(recovered.id, `${runId}-worker-b`), true);
+  assert.equal((await backgroundJobs.getJob(recovered.id)).status, 'SUCCEEDED');
+});
+
 test('rooms, attendance, questions, audit and transcriptions round-trip structured state', async () => {
   const meeting = await meetings.createMeeting({ title: `${runId} State`, room: `${runId}-state`, trainerName: 'Trainer', scheduledAt: '2035-05-01T10:00:00.000Z', durationMinutes: 60, status: 'COMPLETED', allowTranscription: true, createdBy: runId });
   await rooms.createRoom(meeting.room, { meetingId: meeting.id });
@@ -208,10 +227,24 @@ test('rooms, attendance, questions, audit and transcriptions round-trip structur
       warnings: [],
       text: 'Hola',
     }),
+    transcribe: async () => ({
+      providerJobId: `${runId}-job`,
+      status: 'COMPLETED',
+      segments: [{ startMs: 0, endMs: 1000, text: 'Hola', speakerId: 's1' }],
+      speakers: [{ speakerId: 's1', speakerLabel: 'Hablante 1' }],
+      words: [],
+      warnings: [],
+      text: 'Hola',
+    }),
   };
   const recording = { id: `${runId}-recording`, status: 'READY', available: true, durationSeconds: 60, size: 1024 };
   const transcript = await transcriptions.createTranscript({ meeting, recording, requestedBy: runId, language: 'es', provider });
-  await transcriptions.refreshTranscript(transcript, provider, recording);
+  await transcriptions.processTranscriptionJob({
+    transcriptionId: transcript.id,
+    provider,
+    meetings,
+    recordingResolver: async () => recording,
+  });
   assert.equal((await transcriptions.getTranscript(transcript.id)).segments[0].text, 'Hola');
 });
 }

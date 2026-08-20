@@ -5,6 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server/index.js",
+    "worker": "node server/worker.js",
+    "worker:once": "node server/worker.js --once",
     "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
     "livekit:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/livekit-install.ps1",
     "livekit:up": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/livekit-local.ps1 up",

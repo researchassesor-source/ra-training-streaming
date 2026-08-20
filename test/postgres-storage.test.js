@@ -56,6 +56,18 @@ test('distributed resilience migration defines durable webhook and idempotency s
   assert.match(sql, /ADD COLUMN IF NOT EXISTS last_presence_event_type/);
 });
 
+test('durable jobs migration defines worker queue and external session state', () => {
+  const migration = fs.readFileSync(path.join(__dirname, '..', 'server', 'db', 'migrations', '003_durable_jobs_and_external_services.sql'), 'utf8');
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS background_jobs/);
+  assert.match(migration, /FOR UPDATE SKIP LOCKED|background_jobs_claim_idx/);
+  assert.match(migration, /background_jobs_active_dedupe_idx/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS worker_heartbeats/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS recording_egress_sessions/);
+  assert.match(migration, /recording_egress_one_active_per_room_idx/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS facebook_live_sessions/);
+  assert.match(migration, /facebook_live_one_active_per_room_idx/);
+});
+
 test('legacy importer maps stable keys without exposing plaintext secrets', () => {
   assert.equal(importer.keyFor('users', { username: 'admin' }), 'admin');
   assert.equal(importer.keyFor('meetings', { room: 'sala-uno' }), 'sala-uno');

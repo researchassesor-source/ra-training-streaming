@@ -531,6 +531,43 @@ class DeepgramTranscriptionProvider {
     if (!job?.result || job.status !== 'COMPLETED') throw new AppError(502, 'El proveedor no devolvi\u00f3 una transcripci\u00f3n utilizable.', 'TRANSCRIPTION_DEEPGRAM_INVALID_RESPONSE');
     return job.result;
   }
+
+  async transcribe({ recording, language = 'es', onStage, isCancelled } = {}) {
+    if (!this.isConfigured()) throw new AppError(503, 'El proveedor de transcripci\u00f3n no est\u00e1 configurado.', 'TRANSCRIPTION_PROVIDER_NOT_CONFIGURED');
+    this.validateRecording(recording);
+    const providerJobId = `deepgram-${crypto.randomUUID()}`;
+    const job = {
+      id: providerJobId,
+      status: 'PENDING',
+      progress: 0,
+      cancelled: false,
+      controller: null,
+      result: null,
+      errorCode: null,
+      errorMessageSafe: null,
+      createdAt: Date.now(),
+    };
+    const previousHook = this.stageHook;
+    this.stageHook = async (status, currentJob) => {
+      if (typeof isCancelled === 'function' && await isCancelled()) {
+        currentJob.cancelled = true;
+        currentJob.controller?.abort();
+        throw new AppError(409, 'La transcripci\u00f3n fue cancelada.', 'TRANSCRIPTION_CANCELLED');
+      }
+      if (typeof onStage === 'function') await onStage(status, currentJob);
+      if (typeof previousHook === 'function') await previousHook(status, currentJob);
+    };
+    try {
+      await this.runJob(job, { recording, language });
+    } catch (error) {
+      this.failJob(job, error);
+      throw error;
+    } finally {
+      this.stageHook = previousHook;
+    }
+    if (!job.result || job.status !== 'COMPLETED') throw new AppError(502, 'El proveedor no devolvi\u00f3 una transcripci\u00f3n utilizable.', 'TRANSCRIPTION_DEEPGRAM_INVALID_RESPONSE');
+    return { ...job.result, providerJobId, providerRequestId: job.providerRequestId || job.result.providerRequestId || null, status: job.status };
+  }
 }
 
 module.exports = {
