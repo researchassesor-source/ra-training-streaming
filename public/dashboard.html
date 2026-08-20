@@ -29,7 +29,8 @@
     <aside id="dashboardSidebar" class="dashboard-sidebar" aria-label="Navegación principal">
       <nav id="dashboardNav">
         <button class="nav-item active" data-section="summary" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>Resumen</button>
-        <button class="nav-item" data-section="calendar" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M7 14h2M12 14h2M17 14h1M7 18h2M12 18h2"/></svg></span>Calendario</button>
+        <button class="nav-item" data-section="agenda" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M7 14h2M12 14h2M17 14h1M7 18h2M12 18h2"/></svg></span>Agenda</button>
+        <button class="nav-item" data-section="trainings" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v13H4z"/><path d="M8 21h8M12 18v3M8 9h8M8 13h5"/></svg></span>Capacitaciones</button>
         <button class="nav-item" data-section="meetings" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg></span>Reuniones</button>
         <button class="nav-item" data-section="recordings" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 9 5 3-5 3zM7 4v16M17 4v16"/></svg></span>Grabaciones</button>
         <button class="nav-item admin-only" data-section="users" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c.4-4 2.3-6 6-6s5.6 2 6 6M16 6a3 3 0 0 1 0 6M17 14c2.5.4 3.7 2.4 4 5"/></svg></span>Usuarios</button>
@@ -63,9 +64,9 @@
         </div>
       </section>
 
-      <section class="dashboard-section" data-section-panel="calendar" aria-labelledby="calendarTitle">
+      <section class="dashboard-section" data-section-panel="agenda" aria-labelledby="calendarTitle">
         <div class="section-heading">
-          <div><p class="eyebrow">Programación</p><h1 id="calendarTitle">Calendario</h1></div>
+          <div><p class="eyebrow">Programación inteligente</p><h1 id="calendarTitle">Agenda</h1></div>
           <button class="primary" type="button" data-open-meeting>Nueva reunión</button>
         </div>
         <div class="toolbar calendar-toolbar">
@@ -88,9 +89,26 @@
         <div id="calendarGrid" class="calendar-grid"></div>
       </section>
 
+      <section class="dashboard-section" data-section-panel="trainings" aria-labelledby="trainingsTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Ciclos formativos</p>
+            <h1 id="trainingsTitle">Capacitaciones</h1>
+            <p class="muted settings-intro">Gestiona ciclos con varias sesiones, enlaces estables, participantes y progreso sin mezclar reuniones simples.</p>
+          </div>
+          <button class="primary" type="button" data-open-series>Nueva capacitación</button>
+        </div>
+        <div class="toolbar premium-toolbar">
+          <input id="seriesSearch" type="search" placeholder="Buscar capacitación, capacitador o sala" aria-label="Buscar capacitaciones" />
+          <select id="seriesStatusFilter" aria-label="Filtrar capacitaciones por estado"><option value="">Todos los estados</option></select>
+          <label class="check-row admin-only"><input id="includeArchivedSeries" type="checkbox" /> Ver archivadas</label>
+        </div>
+        <div id="trainingSeriesList" class="training-series-list" aria-live="polite"></div>
+      </section>
+
       <section class="dashboard-section" data-section-panel="meetings" aria-labelledby="meetingsTitle">
         <div class="section-heading">
-          <div><p class="eyebrow">Ciclo de vida completo</p><h1 id="meetingsTitle">Reuniones</h1></div>
+          <div><p class="eyebrow">Reuniones independientes</p><h1 id="meetingsTitle">Reuniones</h1><p class="muted settings-intro">Sesiones simples fuera de un ciclo de capacitación.</p></div>
           <button class="primary" type="button" data-open-meeting>Nueva reunión</button>
         </div>
         <div class="toolbar">
@@ -98,7 +116,6 @@
           <select id="meetingStatusFilter" aria-label="Filtrar reuniones por estado"><option value="">Todos los estados</option></select>
           <label class="check-row admin-only"><input id="includeDeleted" type="checkbox" /> Incluir eliminadas</label>
         </div>
-        <div class="series-dashboard-actions"><button class="primary" type="button" data-open-series>Nueva capacitación</button><span class="muted">Crea un ciclo con varias sesiones y un enlace estable por participante.</span></div>
         <div id="meetingsList" class="meeting-list"></div>
       </section>
 
@@ -151,6 +168,20 @@
             <p class="settings-kicker">Diagnóstico</p>
             <h2>Estado del entorno e integraciones</h2>
             <div id="settingsIntegrations" class="service-list settings-diagnostics" aria-live="polite"><p class="muted">Cargando estado…</p></div>
+          </article>
+          <article class="dashboard-card settings-card">
+            <p class="settings-kicker">Grabación y almacenamiento</p>
+            <h2>Contenido de sesiones</h2>
+            <ul class="settings-checklist">
+              <li>LiveKit y RECORDING_S3 permanecen separados de la transcripción.</li>
+              <li>Las grabaciones se gestionan desde el módulo Grabaciones.</li>
+              <li>La eliminación de contenido requiere confirmación explícita.</li>
+            </ul>
+          </article>
+          <article class="dashboard-card settings-card">
+            <p class="settings-kicker">Transcripción</p>
+            <h2>Automatización temporal</h2>
+            <p class="muted">La transcripción automática puede permanecer deshabilitada en despliegues gratuitos sin afectar clases, reuniones ni grabaciones.</p>
           </article>
         </div>
       </section>
@@ -214,7 +245,8 @@
 
   <dialog id="seriesDialog" class="app-dialog">
     <form id="seriesForm" method="dialog">
-      <div class="dialog-heading"><div><p class="eyebrow">Ciclo de capacitación</p><h2>Nueva capacitación</h2><p class="muted">Cada fecha crea una sala independiente. Los participantes conservarán un único enlace personal.</p></div><button class="icon-action" type="button" data-close-series aria-label="Cerrar">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow">Ciclo de capacitación</p><h2 id="seriesDialogTitle">Nueva capacitación</h2><p id="seriesDialogIntro" class="muted">Cada fecha crea una sala independiente. Los participantes conservarán un único enlace personal.</p></div><button class="icon-action" type="button" data-close-series aria-label="Cerrar">×</button></div>
+      <input id="seriesOriginalId" type="hidden" />
       <fieldset class="meeting-form-section">
         <legend>Información general</legend>
         <div class="form-grid">
@@ -226,12 +258,12 @@
           <label>Sala de espera (minutos)<input id="seriesEarlyAccess" type="number" min="0" max="10080" value="120" required /></label>
         </div>
       </fieldset>
-      <fieldset class="meeting-form-section">
+      <fieldset id="seriesSessionsFieldset" class="meeting-form-section">
         <legend>Sesiones</legend>
         <div id="seriesSessionRows" class="series-form-sessions"></div>
         <button id="addSeriesSession" class="secondary compact" type="button">Agregar sesión</button>
       </fieldset>
-      <fieldset class="meeting-form-section options-fieldset"><legend>Funciones</legend><div class="option-grid">
+      <fieldset id="seriesFeaturesFieldset" class="meeting-form-section options-fieldset"><legend>Funciones</legend><div class="option-grid">
         <label><input id="seriesAllowChat" type="checkbox" checked /> Chat</label>
         <label><input id="seriesAllowFiles" type="checkbox" checked /> Archivos</label>
         <label><input id="seriesAllowReactions" type="checkbox" checked /> Reacciones</label>
@@ -240,7 +272,7 @@
         <label><input id="seriesAllowTranscription" type="checkbox" /> Transcripción</label>
       </div></fieldset>
       <p id="seriesFormError" class="form-error" role="alert"></p>
-      <div class="dialog-actions"><button class="secondary" type="button" data-close-series>Cancelar</button><button class="primary" type="submit">Crear capacitación</button></div>
+      <div class="dialog-actions"><button class="secondary" type="button" data-close-series>Cancelar</button><button id="saveSeries" class="primary" type="submit">Crear capacitación</button></div>
     </form>
   </dialog>
 

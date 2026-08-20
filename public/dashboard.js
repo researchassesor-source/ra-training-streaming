@@ -17,7 +17,7 @@ const state = {
 };
 
 const STATUS_LABELS = {
-  DRAFT: 'Borrador', SCHEDULED: 'Programada', LIVE: 'En vivo', COMPLETED: 'Finalizada',
+  DRAFT: 'Borrador', ACTIVE: 'Activa', SCHEDULED: 'Programada', LIVE: 'En vivo', COMPLETED: 'Finalizada',
   CANCELLED: 'Cancelada', ARCHIVED: 'Archivada',
 };
 const TYPE_LABELS = { WEBINAR: 'Webinar', SESSION: 'Sesión', CLASS: 'Clase' };
@@ -170,13 +170,14 @@ function showSection(name) {
   document.getElementById('sidebarOverlay').classList.remove('visible');
   document.getElementById('sidebarOverlay').setAttribute('aria-hidden', 'true');
   document.getElementById('menuToggle').setAttribute('aria-expanded', 'false');
-  const titles = { summary: 'Panel organizador', calendar: 'Calendario', meetings: 'Reuniones', recordings: 'Grabaciones', users: 'Usuarios', audit: 'Auditoría', settings: 'Configuración' };
+  const titles = { summary: 'Panel organizador', agenda: 'Agenda', trainings: 'Capacitaciones', meetings: 'Reuniones', recordings: 'Grabaciones', users: 'Usuarios', audit: 'Auditoría', settings: 'Configuración' };
   document.title = `${titles[name] || 'Panel organizador'} | R.A. Training Streaming`;
   history.replaceState(null, '', `#${name}`);
   if (name === 'recordings') loadRecordings();
   if (name === 'users' && state.user.role === 'ADMIN') loadUsers();
   if (name === 'audit' && state.user.role === 'ADMIN') loadAudit();
-  if (name === 'calendar') renderCalendar();
+  if (name === 'agenda') renderCalendar();
+  if (name === 'trainings') renderTrainingSeries();
 }
 
 function textElement(tag, text, className) {
@@ -207,23 +208,39 @@ function meetingAction(label, action, meeting, className = 'secondary compact') 
 }
 
 function seriesMatchesFilters(series) {
-  const query = document.getElementById('meetingSearch').value.trim().toLowerCase();
-  const status = document.getElementById('meetingStatusFilter').value;
+  const query = document.getElementById('seriesSearch')?.value.trim().toLowerCase() || '';
+  const status = document.getElementById('seriesStatusFilter')?.value || '';
   const haystack = `${series.title} ${series.trainerName} ${(series.sessions || []).map((session) => `${session.title} ${session.room}`).join(' ')}`.toLowerCase();
-  return (!query || haystack.includes(query)) && (!status || series.sessions.some((session) => session.status === status));
+  const seriesStatus = String(series.status || 'ACTIVE').toUpperCase();
+  return (!query || haystack.includes(query)) && (!status || seriesStatus === status || series.sessions.some((session) => session.status === status));
 }
 
 function renderSeriesCard(series) {
-  const card = document.createElement('article'); card.className = 'training-series-card';
-  const header = document.createElement('div'); header.className = 'training-series-heading';
-  const title = document.createElement('div');
-  title.append(textElement('p', 'Capacitación', 'eyebrow'), textElement('h2', series.title), textElement('p', `${series.trainerName} · ${TYPE_LABELS[series.type]} · ${series.sessions.length} sesiones`, 'muted'));
-  header.append(title, statusPill(series.resolution?.phase === 'LIVE' ? 'LIVE' : series.resolution?.phase === 'COMPLETED' || series.status === 'COMPLETED' ? 'COMPLETED' : 'SCHEDULED'));
+  const card = document.createElement('details'); card.className = 'training-series-card compact-series-card';
+  const summary = document.createElement('summary'); summary.className = 'training-series-summary';
+  const title = document.createElement('div'); title.className = 'training-series-title';
+  const nextSession = series.resolution?.meeting;
+  title.append(
+    textElement('p', 'Capacitación', 'eyebrow'),
+    textElement('h2', series.title),
+    textElement('p', `${series.trainerName} · ${TYPE_LABELS[series.type] || 'Webinar'} · ${series.sessions.length} sesiones`, 'muted')
+  );
   const progress = document.createElement('div'); progress.className = 'series-progress';
   const progressValue = series.sessions.length ? Math.round((Number(series.resolution?.completedCount || 0) / series.sessions.length) * 100) : 0;
   const progressFill = document.createElement('span'); progressFill.style.width = `${progressValue}%`; progress.appendChild(progressFill);
+  const stats = document.createElement('div'); stats.className = 'series-compact-stats';
+  stats.append(
+    statusPill(series.resolution?.phase === 'LIVE' ? 'LIVE' : series.resolution?.phase === 'COMPLETED' || series.status === 'COMPLETED' ? 'COMPLETED' : series.status || 'ACTIVE'),
+    textElement('span', nextSession ? `Próxima: ${formatDate(nextSession.scheduledAt)}` : 'Sin próxima sesión', 'muted small'),
+    textElement('span', `${progressValue}% completado`, 'muted small')
+  );
+  summary.append(title, stats, progress);
   const actions = document.createElement('div'); actions.className = 'meeting-actions series-primary-actions';
-  actions.append(meetingAction('Compartir acceso', openSeriesShare, series, 'primary compact'), meetingAction('Participantes', openSeriesAttendance, series));
+  actions.append(
+    meetingAction('Compartir acceso', openSeriesShare, series, 'primary compact'),
+    meetingAction('Participantes', openSeriesAttendance, series),
+    meetingAction('Editar capacitación', openSeriesDialog, series)
+  );
   if (series.resolution?.meeting && !['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(series.resolution.meeting.status)) {
     actions.append(meetingAction(series.resolution.meeting.status === 'LIVE' ? 'Abrir sesión actual' : 'Abrir próxima sesión', () => launchMeeting(series.resolution.meeting), series));
   }
@@ -235,6 +252,8 @@ function renderSeriesCard(series) {
     try { await copyText(calendar); notice('Calendario copiado.'); } catch (error) { notice(error.message, 'error'); }
   }, series));
   if (series.resolution?.meeting) moreItems.appendChild(meetingAction('Editar próxima sesión', () => openMeetingDialog(series.resolution.meeting), series));
+  if (series.status === 'ARCHIVED') moreItems.appendChild(meetingAction('Restaurar capacitación', (item) => seriesTransition(item, 'ACTIVE'), series, 'primary compact'));
+  else moreItems.appendChild(meetingAction('Archivar capacitación', (item) => seriesTransition(item, 'ARCHIVED'), series, 'danger compact'));
   more.append(moreSummary, moreItems); actions.appendChild(more);
   const sessionList = document.createElement('ol'); sessionList.className = 'series-dashboard-session-list';
   for (const session of series.sessions) {
@@ -245,21 +264,30 @@ function renderSeriesCard(series) {
     if (!['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(session.status)) rowActions.append(meetingAction(session.status === 'LIVE' ? 'Abrir' : 'Iniciar', launchMeeting, session, 'secondary compact'));
     row.append(info, rowActions); sessionList.appendChild(row);
   }
-  card.append(header, textElement('p', series.description || 'Sin descripción', 'muted clamp'), progress, textElement('p', `${series.resolution?.completedCount || 0} de ${series.sessions.length} sesiones completadas`, 'muted small'), actions, sessionList);
+  card.append(summary, textElement('p', series.description || 'Sin descripción', 'muted clamp'), textElement('p', `${series.resolution?.completedCount || 0} de ${series.sessions.length} sesiones completadas`, 'muted small'), actions, sessionList);
   return card;
+}
+
+function renderTrainingSeries() {
+  const list = document.getElementById('trainingSeriesList');
+  if (!list) return;
+  list.replaceChildren();
+  const filteredSeries = state.series.filter(seriesMatchesFilters);
+  if (!filteredSeries.length) {
+    list.appendChild(emptyState('No hay capacitaciones que coincidan con los filtros.', 'Crea un ciclo formativo o activa “Ver archivadas” para restaurar capacitaciones cerradas.'));
+    return;
+  }
+  for (const series of filteredSeries) list.appendChild(renderSeriesCard(series));
 }
 
 function renderMeetings() {
   const list = document.getElementById('meetingsList');
   list.replaceChildren();
-  const filteredSeries = state.series.filter(seriesMatchesFilters);
   const filtered = state.meetings.filter((meeting) => !meeting.seriesId && meetingMatchesFilters(meeting));
-  if (!filtered.length && !filteredSeries.length) {
+  if (!filtered.length) {
     list.appendChild(emptyState('No hay reuniones que coincidan con los filtros.', 'Ajusta los filtros o crea una nueva reunión.'));
     return;
   }
-  for (const series of filteredSeries) list.appendChild(renderSeriesCard(series));
-  if (filteredSeries.length && filtered.length) list.appendChild(textElement('h2', 'Reuniones independientes', 'meeting-list-divider'));
   for (const meeting of filtered) {
     const card = document.createElement('article');
     card.className = 'meeting-card';
@@ -342,18 +370,36 @@ function addSeriesSession(value = {}) {
   dateLabel.appendChild(date); durationLabel.appendChild(duration); row.append(dateLabel, durationLabel, remove); container.appendChild(row);
 }
 
-function openSeriesDialog() {
+function openSeriesDialog(series = null) {
   document.getElementById('seriesForm').reset();
+  document.getElementById('seriesOriginalId').value = series?.id || '';
+  document.getElementById('seriesDialogTitle').textContent = series ? 'Editar capacitación' : 'Nueva capacitación';
+  document.getElementById('seriesDialogIntro').textContent = series
+    ? 'Actualiza los datos principales del ciclo. Las fechas de cada sesión se editan desde la sesión correspondiente.'
+    : 'Cada fecha crea una sala independiente. Los participantes conservarán un único enlace personal.';
   document.getElementById('seriesFormTimezone').value = 'America/Guayaquil';
   document.getElementById('seriesEarlyAccess').value = '120';
   const rows = document.getElementById('seriesSessionRows'); rows.replaceChildren();
-  addSeriesSession({ scheduledAt: defaultSeriesDate(1) }); addSeriesSession({ scheduledAt: defaultSeriesDate(8) });
+  document.getElementById('seriesSessionsFieldset').hidden = Boolean(series);
+  document.getElementById('seriesFeaturesFieldset').hidden = Boolean(series);
+  if (series) {
+    document.getElementById('seriesFormTitle').value = series.title || '';
+    document.getElementById('seriesFormDescription').value = series.description || '';
+    document.getElementById('seriesFormTrainer').value = series.trainerName || '';
+    document.getElementById('seriesFormType').value = series.type || 'WEBINAR';
+    document.getElementById('seriesFormTimezone').value = series.timezone || 'America/Guayaquil';
+    document.getElementById('seriesEarlyAccess').value = String(series.earlyAccessMinutes ?? 120);
+  } else {
+    addSeriesSession({ scheduledAt: defaultSeriesDate(1) }); addSeriesSession({ scheduledAt: defaultSeriesDate(8) });
+  }
+  document.getElementById('saveSeries').textContent = series ? 'Guardar capacitación' : 'Crear capacitación';
   document.getElementById('seriesFormError').textContent = '';
   document.getElementById('seriesDialog').showModal();
 }
 
 async function saveSeries(event) {
   event.preventDefault();
+  const original = document.getElementById('seriesOriginalId').value;
   const sessions = [...document.querySelectorAll('.series-form-session-row')].map((row) => ({
     scheduledLocal: row.querySelector('[data-series-date]').value,
     durationMinutes: Number(row.querySelector('[data-series-duration]').value),
@@ -367,8 +413,44 @@ async function saveSeries(event) {
     allowRecording: document.getElementById('seriesAllowRecording').checked, allowTranscription: document.getElementById('seriesAllowTranscription').checked,
   };
   const error = document.getElementById('seriesFormError'); error.textContent = '';
-  try { await api('/api/series', { method: 'POST', body: payload }); document.getElementById('seriesDialog').close(); notice('Capacitación y sesiones creadas.'); await loadMeetings(); }
+  try {
+    if (original) {
+      await api(`/api/series/${encodeURIComponent(original)}`, {
+        method: 'PATCH',
+        body: {
+          title: payload.title,
+          description: payload.description,
+          trainerName: payload.trainerName,
+          type: payload.type,
+          timezone: payload.timezone,
+          earlyAccessMinutes: payload.earlyAccessMinutes,
+        },
+      });
+      notice('Capacitación actualizada.');
+    } else {
+      await api('/api/series', { method: 'POST', body: payload });
+      notice('Capacitación y sesiones creadas.');
+    }
+    document.getElementById('seriesDialog').close(); await loadMeetings();
+  }
   catch (requestError) { error.textContent = requestError.message; }
+}
+
+async function seriesTransition(series, status) {
+  const archived = status === 'ARCHIVED';
+  if (!await askConfirmation({
+    title: archived ? 'Archivar capacitación' : 'Restaurar capacitación',
+    message: archived
+      ? `“${series.title}” saldrá del listado normal, pero sus datos y sesiones se conservarán.`
+      : `“${series.title}” volverá al listado principal de capacitaciones.`,
+    confirmLabel: archived ? 'Archivar' : 'Restaurar',
+    danger: archived,
+  })) return;
+  try {
+    await api(`/api/series/${encodeURIComponent(series.id)}`, { method: 'PATCH', body: { status } });
+    notice(archived ? 'Capacitación archivada.' : 'Capacitación restaurada.');
+    await loadMeetings();
+  } catch (error) { notice(error.message, 'error'); }
 }
 
 function showSeriesShare(access) {
@@ -660,13 +742,15 @@ async function launchMeeting(meeting) {
 
 async function loadMeetings() {
   const includeDeleted = state.user?.role === 'ADMIN' && document.getElementById('includeDeleted').checked;
+  const includeArchivedSeries = state.user?.role === 'ADMIN' && document.getElementById('includeArchivedSeries')?.checked;
   const [data, seriesData] = await Promise.all([
     api(`/api/meetings${includeDeleted ? '?includeDeleted=true' : ''}`),
-    api('/api/series'),
+    api(`/api/series${includeArchivedSeries ? '?includeArchived=true' : ''}`),
   ]);
   state.meetings = data.items.map(RATCore.normalizeMeeting);
   state.series = (seriesData.items || []).map((series) => ({ ...series, sessions: (series.sessions || []).map(RATCore.normalizeMeeting) }));
   renderMeetings();
+  renderTrainingSeries();
   renderCalendar();
   renderUpcoming();
 }
@@ -715,11 +799,12 @@ function renderCalendar() {
     for (const meeting of visibleMeetings) {
       const event = document.createElement('button');
       event.type = 'button';
-      event.className = `calendar-event status-${meeting.status.toLowerCase()}`;
+      event.className = `calendar-event status-${meeting.status.toLowerCase()} ${meeting.seriesId ? 'calendar-event-series' : 'calendar-event-meeting'}`;
       const meetingDate = RATCore.validDate(meeting.scheduledAt);
       event.setAttribute('aria-label', `${meeting.title}, ${STATUS_LABELS[meeting.status] || 'Programada'}, ${meetingDate ? meetingDate.toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' }) : 'hora por definir'}`);
       const time = meetingDate ? meetingDate.toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' }) : 'Sin hora';
-      event.append(textElement('strong', state.calendarView === 'month' ? `${time} — ${meeting.title}` : meeting.title), textElement('span', state.calendarView === 'month' ? STATUS_LABELS[meeting.status] : `${time} · ${meeting.trainerName} · ${STATUS_LABELS[meeting.status]}`));
+      const kind = meeting.seriesId ? 'Sesión de capacitación' : 'Reunión';
+      event.append(textElement('strong', state.calendarView === 'month' ? `${time} — ${meeting.title}` : meeting.title), textElement('span', state.calendarView === 'month' ? `${kind} · ${STATUS_LABELS[meeting.status]}` : `${time} · ${kind} · ${meeting.trainerName} · ${STATUS_LABELS[meeting.status]}`));
       event.addEventListener('click', () => openMeetingDialog(meeting));
       cell.appendChild(event);
     }
@@ -871,6 +956,7 @@ async function loadRecordings() {
     if (!data.items.length) return container.appendChild(emptyState('No hay grabaciones disponibles.', 'Cuando una grabación termine de procesarse aparecerá aquí.'));
     for (const item of data.items) {
       const row = document.createElement('article'); row.className = 'recording-card';
+      const thumbnail = document.createElement('div'); thumbnail.className = 'recording-thumb'; thumbnail.setAttribute('aria-hidden', 'true'); thumbnail.textContent = '▶';
       const info = document.createElement('div'); info.append(textElement('h2', item.title || 'Reunión sin título'), textElement('p', `${item.trainerName || 'Capacitador por definir'} · ${formatDate(item.lastModified)}`, 'muted'), textElement('p', `${(Number(item.size || 0) / 1024 / 1024).toFixed(1)} MB · Lista`, 'small'));
       if (item.transcript) info.appendChild(textElement('p', TRANSCRIPT_STATUS_LABELS[item.transcript.status] || 'Estado de transcripción no disponible', 'small transcript-recording-state'));
       const actions = document.createElement('div'); actions.className = 'meeting-actions';
@@ -889,7 +975,7 @@ async function loadRecordings() {
         if (!await askConfirmation({ title: 'Eliminar grabación', message: `La grabación de “${item.title}” se eliminará permanentemente.`, confirmLabel: 'Eliminar', danger: true })) return;
         try { await api('/api/recordings', { method: 'DELETE', body: { key: item.key } }); notice('Grabación eliminada.'); await loadRecordings(); } catch (error) { notice(error.message, 'error'); }
       }, item, 'danger compact'));
-      row.append(info, actions); container.appendChild(row);
+      row.append(thumbnail, info, actions); container.appendChild(row);
     }
   } catch (error) {
     state.recordings = [];
@@ -969,13 +1055,16 @@ async function initialize() {
     document.getElementById('currentRole').textContent = ROLE_LABELS[me.user.role] || 'Usuario';
     document.querySelectorAll('.admin-only').forEach((element) => { element.hidden = me.user.role !== 'ADMIN'; });
     for (const status of Object.keys(STATUS_LABELS)) {
-      document.getElementById('meetingStatusFilter').appendChild(new Option(STATUS_LABELS[status], status));
-      document.getElementById('filterStatus').appendChild(new Option(STATUS_LABELS[status], status));
+      if (status !== 'ACTIVE') {
+        document.getElementById('meetingStatusFilter').appendChild(new Option(STATUS_LABELS[status], status));
+        document.getElementById('filterStatus').appendChild(new Option(STATUS_LABELS[status], status));
+      }
+      document.getElementById('seriesStatusFilter').appendChild(new Option(STATUS_LABELS[status], status));
     }
     for (const type of Object.keys(TYPE_LABELS)) document.getElementById('filterType').appendChild(new Option(TYPE_LABELS[type], type));
     await Promise.all([loadMeetings(), loadSummary()]);
     await loadRecordings();
-    const requestedSection = location.hash.slice(1);
+    const requestedSection = location.hash.slice(1) === 'calendar' ? 'agenda' : location.hash.slice(1);
     if (document.querySelector(`[data-section="${CSS.escape(requestedSection)}"]`)) showSection(requestedSection);
   } catch (error) { notice(error.message, 'error'); }
 }
@@ -983,7 +1072,7 @@ async function initialize() {
 document.getElementById('dashboardNav').addEventListener('click', (event) => { const button = event.target.closest('[data-section]'); if (button) showSection(button.dataset.section); });
 document.querySelectorAll('[data-go]').forEach((button) => button.addEventListener('click', () => showSection(button.dataset.go)));
 document.querySelectorAll('[data-open-meeting]').forEach((button) => button.addEventListener('click', () => openMeetingDialog()));
-document.querySelectorAll('[data-open-series]').forEach((button) => button.addEventListener('click', openSeriesDialog));
+document.querySelectorAll('[data-open-series]').forEach((button) => button.addEventListener('click', () => openSeriesDialog()));
 document.getElementById('meetingForm').addEventListener('submit', saveMeeting);
 document.getElementById('seriesForm').addEventListener('submit', saveSeries);
 document.getElementById('seriesShareForm').addEventListener('submit', createSeriesAccess);
@@ -1015,6 +1104,9 @@ for (const id of ['auditDateFilter', 'auditActorFilter', 'auditActionFilter', 'a
 document.getElementById('meetingSearch').addEventListener('input', renderMeetings);
 document.getElementById('meetingStatusFilter').addEventListener('change', renderMeetings);
 document.getElementById('includeDeleted').addEventListener('change', loadMeetings);
+document.getElementById('seriesSearch').addEventListener('input', renderTrainingSeries);
+document.getElementById('seriesStatusFilter').addEventListener('change', renderTrainingSeries);
+document.getElementById('includeArchivedSeries').addEventListener('change', loadMeetings);
 for (const id of ['filterTrainer', 'filterStatus', 'filterType', 'filterDate']) document.getElementById(id).addEventListener('input', renderCalendar);
 document.querySelectorAll('[data-calendar-view]').forEach((button) => button.addEventListener('click', () => { state.calendarView = button.dataset.calendarView; document.querySelectorAll('[data-calendar-view]').forEach((item) => item.classList.toggle('active', item === button)); renderCalendar(); }));
 document.getElementById('calendarPrev').addEventListener('click', () => { const amount = state.calendarView === 'month' ? -1 : state.calendarView === 'week' ? -7 : -1; if (state.calendarView === 'month') state.calendarDate.setMonth(state.calendarDate.getMonth() + amount); else state.calendarDate.setDate(state.calendarDate.getDate() + amount); renderCalendar(); });

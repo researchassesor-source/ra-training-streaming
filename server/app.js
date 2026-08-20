@@ -511,7 +511,7 @@ function createApp(overrides = {}) {
   }
 
   app.get('/api/series', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
-    const visible = (await trainingSeries.listSeries()).filter((series) => canManageSeries(req.auth, series));
+    const visible = (await trainingSeries.listSeries({ includeArchived: req.query.includeArchived === 'true' })).filter((series) => canManageSeries(req.auth, series));
     res.json({ items: await Promise.all(visible.map((series) => seriesPayload(series))) });
   }));
 

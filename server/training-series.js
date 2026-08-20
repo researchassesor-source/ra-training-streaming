@@ -128,7 +128,7 @@ async function getSeries(id) {
   }
 }
 
-async function listSeries() {
+async function listSeries({ includeArchived = false } = {}) {
   let items;
   if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'training-series/' }));
@@ -137,7 +137,10 @@ async function listSeries() {
       return JSON.parse(await response.Body.transformToString());
     }));
   } else items = await localStore.listJson('training-series');
-  return items.map(normalizeStoredSeries).filter((item) => item.status !== 'ARCHIVED').sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return items
+    .map(normalizeStoredSeries)
+    .filter((item) => includeArchived || item.status !== 'ARCHIVED')
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
 async function seriesSessions(seriesId, { includeDeleted = false } = {}) {

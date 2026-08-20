@@ -196,6 +196,18 @@ test('authentication UI does not persist credentials in localStorage', () => {
   assert.match(files, /credentials: 'same-origin'/);
 });
 
+test('dashboard information architecture separates trainings from independent meetings', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'dashboard.html'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '..', 'public', 'dashboard.js'), 'utf8');
+  assert.match(html, /data-section="trainings"[\s\S]*>Capacitaciones</);
+  assert.match(html, /data-section-panel="trainings"/);
+  assert.match(html, /id="trainingSeriesList"/);
+  assert.match(html, /id="includeArchivedSeries"/);
+  assert.match(script, /renderTrainingSeries/);
+  assert.match(script, /includeArchived=true/);
+  assert.doesNotMatch(html, /data-section-panel="meetings"[\s\S]*data-open-series/);
+});
+
 test('visible roles and room connection failures are translated safely', () => {
   assert.equal(roleLabel('ADMIN'), 'Administrador');
   assert.equal(roleLabel('VIEWER'), 'Asistente');

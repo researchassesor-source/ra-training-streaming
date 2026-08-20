@@ -48,6 +48,21 @@ test('a training series creates independent ordered meetings without changing le
   assert.equal(zoned.sessions[0].scheduledAt, '2026-08-11T14:00:00.000Z');
 });
 
+test('training series archive softly hides and restores cycles without physical deletion', async () => {
+  const created = await trainingSeries.createSeries({
+    title: `Archivado visible ${Date.now()}`,
+    trainerName: 'Andrea Ruiz',
+    type: 'SESSION',
+    timezone: 'America/Guayaquil',
+    sessions: [{ scheduledAt: new Date(Date.now() + 86_400_000).toISOString(), durationMinutes: 50 }],
+  });
+  await trainingSeries.updateSeries(created.series.id, { status: 'ARCHIVED' });
+  assert.equal((await trainingSeries.listSeries()).some((series) => series.id === created.series.id), false);
+  assert.equal((await trainingSeries.listSeries({ includeArchived: true })).some((series) => series.id === created.series.id && series.status === 'ARCHIVED'), true);
+  await trainingSeries.updateSeries(created.series.id, { status: 'ACTIVE' });
+  assert.equal((await trainingSeries.listSeries()).some((series) => series.id === created.series.id), true);
+});
+
 test('authoritative series resolution implements 2-hour waiting, live priority, cancellation and completion', () => {
   const now = new Date('2026-08-11T15:00:00.000Z');
   const series = { earlyAccessMinutes: 120, status: 'ACTIVE' };
