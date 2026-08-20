@@ -61,8 +61,12 @@ async function readRemoteUser(username) {
   }
 }
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 async function writeUser(record) {
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({
       Bucket: bucket,
       Key: userKey(record.username),
@@ -93,7 +97,7 @@ async function getUser(username, { includeBootstrap = true } = {}) {
   const normalized = String(username || '').toLowerCase();
   const bootstrap = bootstrapUser();
   if (includeBootstrap && bootstrap && bootstrap.username === normalized) return bootstrap;
-  const user = storageConfigured
+  const user = stateInS3()
     ? await readRemoteUser(normalized)
     : await localStore.readJson('users', normalized);
   if (!user) return undefined;
@@ -107,7 +111,7 @@ async function getUser(username, { includeBootstrap = true } = {}) {
 }
 
 async function listStoredUsers() {
-  if (!storageConfigured) return localStore.listJson('users');
+  if (!stateInS3()) return localStore.listJson('users');
   const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'users/' }));
   return Promise.all((listing.Contents || []).map(async (object) => {
     const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));
@@ -226,7 +230,7 @@ async function deleteUser(username) {
   if (!existing) throw new AppError(404, 'Usuario no encontrado', 'NOT_FOUND');
   if (existing.bootstrap) throw new AppError(400, 'No se puede eliminar el administrador bootstrap', 'BOOTSTRAP_USER');
   await ensureAdminRemains(existing, { ...existing, active: false, role: 'VIEWER' });
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: userKey(normalized) }));
   } else {
     await localStore.deleteJson('users', normalized);

@@ -11,6 +11,10 @@ const creationLocks = new Map();
 
 function keyFor(id) { return `training-series/${encodeURIComponent(id)}.json`; }
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 function validDate(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -102,7 +106,7 @@ function normalizeSeriesInput(input, { partial = false } = {}) {
 }
 
 async function writeSeries(record) {
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
   } else await localStore.writeJson('training-series', record.id, record);
   return record;
@@ -111,7 +115,7 @@ async function writeSeries(record) {
 async function getSeries(id) {
   const normalized = String(id || '');
   if (!normalized) return undefined;
-  if (!storageConfigured) {
+  if (!stateInS3()) {
     const stored = await localStore.readJson('training-series', normalized);
     return stored ? normalizeStoredSeries(stored) : undefined;
   }
@@ -126,7 +130,7 @@ async function getSeries(id) {
 
 async function listSeries() {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'training-series/' }));
     items = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));
@@ -215,10 +219,13 @@ async function createSeries(input) {
     sessionNumber: index + 1,
   }));
   if (new Set(prepared.map((session) => session.room)).size !== prepared.length) throw new AppError(409, 'Cada sesi\u00f3n debe tener una sala \u00fanica', 'DUPLICATE_ROOM');
-  return withCreationLock(baseSlug, async () => {
+  const createAll = async () => {
     for (const session of prepared) if (await meetings.getMeeting(session.room)) throw new AppError(409, `La sala ${session.room} ya existe`, 'DUPLICATE_ROOM');
     const createdMeetings = [];
+    const now = new Date().toISOString();
+    let record = null;
     try {
+      if (localStore.usesPostgres()) record = await writeSeries({ id, ...clean, createdBy: String(input.createdBy || '').slice(0, 80), createdAt: now, updatedAt: now });
       for (const session of prepared) {
         createdMeetings.push(await meetings.createMeeting({
           title: `${clean.title} \u00b7 Sesi\u00f3n ${session.sessionNumber}`,
@@ -246,14 +253,14 @@ async function createSeries(input) {
           createdBy: input.createdBy,
         }));
       }
-      const now = new Date().toISOString();
-      const record = await writeSeries({ id, ...clean, createdBy: String(input.createdBy || '').slice(0, 80), createdAt: now, updatedAt: now });
+      if (!record) record = await writeSeries({ id, ...clean, createdBy: String(input.createdBy || '').slice(0, 80), createdAt: now, updatedAt: now });
       return { series: record, sessions: createdMeetings };
     } catch (error) {
       await Promise.all(createdMeetings.map((meeting) => meetings.deleteMeeting(meeting.room).catch(() => null)));
       throw error;
     }
-  });
+  };
+  return withCreationLock(baseSlug, () => localStore.withTransaction(createAll));
 }
 
 async function updateSeries(id, input) {

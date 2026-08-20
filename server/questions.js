@@ -15,8 +15,12 @@ function s3Key(room, id) {
   return `questions/${encodeURIComponent(room)}/${id}.json`;
 }
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 async function write(record) {
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({ Bucket: bucket, Key: s3Key(record.room, record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
   } else {
     await localStore.writeJson('questions', storageId(record.room, record.id), record);
@@ -25,7 +29,7 @@ async function write(record) {
 }
 
 async function get(room, id) {
-  if (!storageConfigured) return localStore.readJson('questions', storageId(room, id));
+  if (!stateInS3()) return localStore.readJson('questions', storageId(room, id));
   try {
     const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: s3Key(room, id) }));
     return JSON.parse(await response.Body.transformToString());
@@ -37,7 +41,7 @@ async function get(room, id) {
 
 async function list(room) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const response = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `questions/${encodeURIComponent(room)}/` }));
     items = await Promise.all((response.Contents || []).map(async ({ Key }) => {
       const result = await s3.send(new GetObjectCommand({ Bucket: bucket, Key }));
@@ -84,7 +88,7 @@ async function withLock(key, operation) {
   const current = new Promise((resolve) => { release = resolve; });
   locks.set(key, current);
   await previous;
-  try { return await operation(); } finally {
+  try { return await localStore.withTransaction(operation); } finally {
     release();
     if (locks.get(key) === current) locks.delete(key);
   }
@@ -141,7 +145,7 @@ async function remove(room, id, actor) {
   if (!moderator && !(record.authorIdentity === actor.identity && record.status === 'PENDING')) {
     throw new AppError(403, 'No puedes eliminar esta pregunta', 'ROOM_FORBIDDEN');
   }
-  if (storageConfigured) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: s3Key(room, id) }));
+  if (stateInS3()) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: s3Key(room, id) }));
   else await localStore.deleteJson('questions', storageId(room, id));
   return record;
 }

@@ -49,7 +49,7 @@ function keyFor(room) {
 }
 
 async function writeMeeting(record) {
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({
       Bucket: bucket,
       Key: keyFor(record.room),
@@ -62,10 +62,14 @@ async function writeMeeting(record) {
   return record;
 }
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 async function getMeeting(room) {
   const normalized = String(room || '');
   if (!normalized) return undefined;
-  if (!storageConfigured) {
+  if (!stateInS3()) {
     const stored = await localStore.readJson('meetings', normalized);
     return stored ? normalizeStoredMeeting(stored) : undefined;
   }
@@ -80,7 +84,7 @@ async function getMeeting(room) {
 
 async function listMeetings({ includeDeleted = false } = {}) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'meetings/' }));
     items = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));

@@ -49,6 +49,7 @@ const renderGitCommit = String(process.env.RENDER_GIT_COMMIT || '').trim();
 const configuredAppVersion = appEnv === 'preview'
   ? (renderGitCommit || process.env.APP_VERSION)
   : (process.env.APP_VERSION || renderGitCommit);
+const dataBackend = String(process.env.DATA_BACKEND || 'legacy').trim().toLowerCase();
 
 const config = {
   nodeEnv,
@@ -57,6 +58,11 @@ const config = {
   appName: String(process.env.APP_NAME || 'R.A. Training Streaming').trim(),
   appPublicUrl,
   appVersion: String(configuredAppVersion || (appEnv === 'development' ? 'desarrollo' : 'sin-versión')).trim().slice(0, 64),
+  dataBackend,
+  databaseUrlConfigured: Boolean(process.env.DATABASE_URL),
+  databaseDirectUrlConfigured: Boolean(process.env.DATABASE_URL_DIRECT),
+  databasePoolMax: intFromEnv('DATABASE_POOL_MAX', 10, { min: 1, max: 50 }),
+  databaseStatementTimeoutMs: intFromEnv('DATABASE_STATEMENT_TIMEOUT_MS', 15_000, { min: 1_000, max: 120_000 }),
   appTimeZone: String(process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
   appTimeZoneLabel: String(process.env.APP_TIME_ZONE_LABEL || process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
   noIndex: appEnv === 'preview',
@@ -111,6 +117,8 @@ const config = {
 function validateRuntimeConfig(candidate = config) {
   const errors = [];
   if (!APP_ENVIRONMENTS.has(candidate.appEnv)) errors.push('APP_ENV debe ser development, test, preview o production.');
+  if (!['legacy', 'postgres'].includes(candidate.dataBackend)) errors.push('DATA_BACKEND debe ser legacy o postgres.');
+  if (candidate.dataBackend === 'postgres' && !candidate.databaseUrlConfigured) errors.push('DATABASE_URL is required when DATA_BACKEND=postgres.');
   if (!candidate.appName) errors.push('APP_NAME no puede estar vacío.');
   try { new Intl.DateTimeFormat('es-EC', { timeZone: candidate.appTimeZone }).format(new Date()); }
   catch { errors.push('APP_TIME_ZONE no es una zona horaria válida.'); }

@@ -10,6 +10,7 @@ const SECTION = 'series-accesses';
 const locks = new Map();
 
 function keyFor(id) { return `series-accesses/${encodeURIComponent(id)}.json`; }
+function stateInS3() { return storageConfigured && !localStore.usesPostgres(); }
 function signatureFor(id) { return crypto.createHmac('sha256', config.invitationHashSecret || config.sessionSecret).update(`series-access:${id}`).digest('base64url'); }
 function tokenFor(id) { return `${id}.${signatureFor(id)}`; }
 function tokenHash(token) { return crypto.createHash('sha256').update(String(token)).digest('hex'); }
@@ -20,14 +21,14 @@ function safeEqual(left, right) {
 function publicRole(type) { return ({ WEBINAR: 'ATTENDEE', SESSION: 'PARTICIPANT', CLASS: 'STUDENT' })[normalizeMeetingType(type)]; }
 
 async function writeAccess(record) {
-  if (storageConfigured) await s3.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
+  if (stateInS3()) await s3.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
   else await localStore.writeJson(SECTION, record.id, record);
   return record;
 }
 
 async function getAccess(id) {
   if (!id) return undefined;
-  if (!storageConfigured) return localStore.readJson(SECTION, id);
+  if (!stateInS3()) return localStore.readJson(SECTION, id);
   try {
     const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(id) }));
     return JSON.parse(await response.Body.transformToString());
@@ -39,7 +40,7 @@ async function getAccess(id) {
 
 async function listAccesses({ seriesId } = {}) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'series-accesses/' }));
     items = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));
@@ -52,7 +53,7 @@ async function listAccesses({ seriesId } = {}) {
 async function withLock(key, operation) {
   const previous = locks.get(key) || Promise.resolve(); let release;
   const current = new Promise((resolve) => { release = resolve; }); locks.set(key, current); await previous;
-  try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
+  try { return await localStore.withTransaction(operation); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
 }
 
 function accessLockKey(id) { return `access:${id}`; }

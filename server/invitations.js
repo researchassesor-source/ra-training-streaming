@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
+const db = require('./db');
+const postgresStore = require('./db/postgres-store');
 const { config } = require('./config');
 const { AppError } = require('./http-utils');
 const {
@@ -31,8 +33,12 @@ function keyForHash(hash) {
   return `invitations/${hash}.json`;
 }
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 async function writeInvitation(record) {
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({
       Bucket: bucket,
       Key: keyForHash(record.tokenHash),
@@ -47,7 +53,7 @@ async function writeInvitation(record) {
 
 async function getByToken(token) {
   for (const hash of tokenHashes(token)) {
-    if (!storageConfigured) {
+    if (!stateInS3()) {
       const record = await localStore.readJson('invitations', hash);
       if (record) return record;
       continue;
@@ -64,7 +70,7 @@ async function getByToken(token) {
 
 async function listInvitations({ room } = {}) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'invitations/' }));
     items = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));
@@ -170,6 +176,7 @@ async function consumeInvitation(token) {
   if (typeof token !== 'string' || token.length < 40 || token.length > 100) {
     throw new AppError(404, 'Invitación no válida', 'INVITATION_INVALID');
   }
+  if (localStore.usesPostgres()) return consumeInvitationPostgres(token);
   const hash = tokenHash(token);
   const previous = consumeLocks.get(hash) || Promise.resolve();
   let release;
@@ -203,6 +210,29 @@ async function consumeInvitation(token) {
   }
 }
 
+async function consumeInvitationPostgres(token) {
+  const hashes = tokenHashes(token);
+  return db.transaction(async (client) => {
+    const result = await client.query('SELECT data FROM invitations WHERE token_hash = ANY($1::text[]) FOR UPDATE', [hashes]);
+    const record = result.rows[0]?.data;
+    if (!record) throw new AppError(404, 'Invitación no válida', 'INVITATION_INVALID');
+    const status = deriveStatus(record);
+    if (status !== 'ACTIVE') {
+      const messages = {
+        EXPIRED: 'La invitación expiró',
+        REVOKED: 'La invitación fue revocada',
+        USED: 'La invitación ya fue utilizada',
+      };
+      throw new AppError(410, messages[status] || 'La invitación no está activa', `INVITATION_${status}`);
+    }
+    const now = new Date().toISOString();
+    const updated = { ...record, uses: record.uses + 1, lastUsedAt: now };
+    if (updated.maxUses !== null && updated.uses >= updated.maxUses) updated.status = 'USED';
+    await postgresStore.writeJson('invitations', updated.tokenHash, updated, client);
+    return publicInvitation(updated);
+  });
+}
+
 async function peekInvitation(token) {
   if (typeof token !== 'string' || token.length < 40 || token.length > 100) {
     throw new AppError(404, 'Invitación no válida', 'INVITATION_INVALID');
@@ -219,7 +249,7 @@ async function peekInvitation(token) {
 
 async function revokeInvitation(id, room) {
   let records;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'invitations/' }));
     records = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));

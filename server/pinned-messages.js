@@ -12,8 +12,12 @@ function s3Key(room, id) {
   return `chat-pins/${encodeURIComponent(room)}/${id}.json`;
 }
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 async function write(record) {
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({ Bucket: bucket, Key: s3Key(record.room, record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
   } else {
     await localStore.writeJson('chat-pins', storageId(record.room, record.id), record);
@@ -22,7 +26,7 @@ async function write(record) {
 }
 
 async function get(room, id) {
-  if (!storageConfigured) return localStore.readJson('chat-pins', storageId(room, id));
+  if (!stateInS3()) return localStore.readJson('chat-pins', storageId(room, id));
   try {
     const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: s3Key(room, id) }));
     return JSON.parse(await response.Body.transformToString());
@@ -34,7 +38,7 @@ async function get(room, id) {
 
 async function list(room) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const response = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `chat-pins/${encodeURIComponent(room)}/` }));
     items = await Promise.all((response.Contents || []).map(async ({ Key }) => {
       const result = await s3.send(new GetObjectCommand({ Bucket: bucket, Key }));
@@ -83,7 +87,7 @@ async function create({ room, meetingId, text, authorName, authorRole, sourceSen
 async function remove(room, id) {
   const record = await get(room, id);
   if (!record) throw new AppError(404, 'Mensaje fijado no encontrado', 'NOT_FOUND');
-  if (storageConfigured) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: s3Key(room, id) }));
+  if (stateInS3()) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: s3Key(room, id) }));
   else await localStore.deleteJson('chat-pins', storageId(room, id));
   return record;
 }

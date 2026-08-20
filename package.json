@@ -10,8 +10,13 @@
     "livekit:up": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/livekit-local.ps1 up",
     "livekit:down": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/livekit-local.ps1 down",
     "livekit:logs": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/livekit-local.ps1 logs",
-    "test": "node --test --test-concurrency=1",
-    "test:watch": "node --test --watch --test-concurrency=1",
+    "build": "npm run build:track-processors",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
+    "test:postgres": "node scripts/test-postgres.js",
+    "test:watch": "node --test --watch --test-concurrency=1 \"test/*.test.js\"",
+    "db:migrate": "node server/db/migrate.js migrate",
+    "db:status": "node server/db/migrate.js status",
+    "db:import:legacy": "node scripts/db-import-legacy.js",
     "build:track-processors": "esbuild node_modules/@livekit/track-processors/dist/index.mjs --bundle --format=iife --global-name=TrackProcessors --alias:livekit-client=./build-tools/livekit-client-shim.mjs --outfile=public/vendor/track-processors.bundle.js --minify",
     "package:source": "node scripts/package-source.js"
   },
@@ -23,7 +28,8 @@
     "express": "^4.19.2",
     "livekit-client": "^2.21.0",
     "livekit-server-sdk": "^2.9.4",
-    "multer": "^2.2.0"
+    "multer": "^2.2.0",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"

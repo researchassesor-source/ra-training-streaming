@@ -31,6 +31,10 @@ const ALLOWED_ACTIONS = new Set([
   'SERIES_SESSION_ENTERED',
 ]);
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 function safeMetadata(metadata) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
   const clean = {};
@@ -59,7 +63,7 @@ async function logEvent({ actor = 'system', action, target = null, room = null, 
     ip: String(ip || '').slice(0, 80),
     userAgent: String(userAgent || '').slice(0, 300),
   };
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({
       Bucket: bucket,
       Key: `audit/${id}.json`,
@@ -74,7 +78,7 @@ async function logEvent({ actor = 'system', action, target = null, room = null, 
 
 async function listEvents({ limit = 200, action, actor, room } = {}) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'audit/', MaxKeys: Math.min(1_000, limit * 3) }));
     items = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));

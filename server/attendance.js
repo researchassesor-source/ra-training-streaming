@@ -5,20 +5,21 @@ const locks = new Map();
 
 function idFor(seriesId, meetingId, participantKey) { return `${seriesId}--${meetingId}--${participantKey}`; }
 function keyFor(id) { return `attendance/${encodeURIComponent(id)}.json`; }
+function stateInS3() { return storageConfigured && !localStore.usesPostgres(); }
 async function write(record) {
-  if (storageConfigured) await s3.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
+  if (stateInS3()) await s3.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
   else await localStore.writeJson('attendance', record.id, record);
   return record;
 }
 async function read(id) {
-  if (!storageConfigured) return localStore.readJson('attendance', id);
+  if (!stateInS3()) return localStore.readJson('attendance', id);
   try { const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(id) })); return JSON.parse(await response.Body.transformToString()); }
   catch (error) { if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) return undefined; throw error; }
 }
 async function withLock(key, operation) {
   const previous = locks.get(key) || Promise.resolve(); let release;
   const current = new Promise((resolve) => { release = resolve; }); locks.set(key, current); await previous;
-  try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
+  try { return await localStore.withTransaction(operation); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
 }
 async function joined({ seriesId, meetingId, sessionNumber, participantKey, participantIdentity, participantName }) {
   if (!seriesId || !meetingId || !participantKey) return null;
@@ -44,7 +45,7 @@ async function left({ seriesId, meetingId, participantKey }) {
 }
 async function listSeriesAttendance(seriesId) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'attendance/' }));
     items = await Promise.all((listing.Contents || []).map(async (object) => { const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key })); return JSON.parse(await response.Body.transformToString()); }));
   } else items = await localStore.listJson('attendance');

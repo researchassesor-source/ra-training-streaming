@@ -16,6 +16,7 @@ const EXPORT_FORMATS = new Set(['txt', 'json', 'vtt', 'srt']);
 const creationLocks = new Map();
 
 function keyFor(id) { return `transcriptions/${encodeURIComponent(id)}.json`; }
+function stateInS3() { return storageConfigured && !localStore.usesPostgres(); }
 
 function stableLegacySpeakerId(segment, index) {
   if (segment?.speakerId) return String(segment.speakerId);
@@ -65,7 +66,7 @@ function normalizeStoredTranscript(record) {
 
 async function writeTranscript(record) {
   const safe = normalizeStoredTranscript({ ...record, schemaVersion: 2, updatedAt: new Date().toISOString() });
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({ Bucket: bucket, Key: keyFor(safe.id), Body: JSON.stringify(safe), ContentType: 'application/json' }));
   } else await localStore.writeJson('transcriptions', safe.id, safe);
   return safe;
@@ -74,7 +75,7 @@ async function writeTranscript(record) {
 async function getTranscript(id) {
   const normalized = String(id || '');
   if (!normalized) return undefined;
-  if (!storageConfigured) return normalizeStoredTranscript(await localStore.readJson('transcriptions', normalized));
+  if (!stateInS3()) return normalizeStoredTranscript(await localStore.readJson('transcriptions', normalized));
   try {
     const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(normalized) }));
     return normalizeStoredTranscript(JSON.parse(await response.Body.transformToString()));
@@ -86,7 +87,7 @@ async function getTranscript(id) {
 
 async function listTranscripts({ meetingId } = {}) {
   let records;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'transcriptions/' }));
     records = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));
@@ -455,7 +456,7 @@ async function renameSpeaker(record, { speakerId, participantName, revision, edi
 }
 
 async function deleteTranscript(record) {
-  if (storageConfigured) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: keyFor(record.id) }));
+  if (stateInS3()) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: keyFor(record.id) }));
   else await localStore.deleteJson('transcriptions', record.id);
 }
 

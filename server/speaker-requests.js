@@ -8,16 +8,17 @@ const STATUSES = new Set(['PENDING', 'GRANTED', 'REJECTED', 'REVOKED']);
 const locks = new Map();
 function storageKey(room, id) { return `${encodeURIComponent(room)}--${id}`; }
 function s3Key(room, id) { return `speaker-requests/${encodeURIComponent(room)}/${id}.json`; }
+function stateInS3() { return storageConfigured && !localStore.usesPostgres(); }
 
 async function writeRequest(record) {
-  if (storageConfigured) await s3.send(new PutObjectCommand({ Bucket: bucket, Key: s3Key(record.room, record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
+  if (stateInS3()) await s3.send(new PutObjectCommand({ Bucket: bucket, Key: s3Key(record.room, record.id), Body: JSON.stringify(record), ContentType: 'application/json' }));
   else await localStore.writeJson('speaker-requests', storageKey(record.room, record.id), record);
   return record;
 }
 
 async function listRequests(room, { activeOnly = false } = {}) {
   let items;
-  if (storageConfigured) {
+  if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `speaker-requests/${encodeURIComponent(room)}/` }));
     items = await Promise.all((listing.Contents || []).map(async (object) => {
       const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: object.Key }));
@@ -30,7 +31,7 @@ async function listRequests(room, { activeOnly = false } = {}) {
 async function withLock(key, operation) {
   const previous = locks.get(key) || Promise.resolve(); let release;
   const current = new Promise((resolve) => { release = resolve; }); locks.set(key, current); await previous;
-  try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
+  try { return await localStore.withTransaction(operation); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
 }
 
 async function requestSpeaker({ meetingId, room, participantIdentity, participantName }) {

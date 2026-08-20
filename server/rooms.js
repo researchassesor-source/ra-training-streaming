@@ -12,8 +12,12 @@ function keyFor(room) {
   return `${KEY_PREFIX}${encodeURIComponent(room)}.json`;
 }
 
+function stateInS3() {
+  return storageConfigured && !localStore.usesPostgres();
+}
+
 async function persist(room, record) {
-  if (storageConfigured) {
+  if (stateInS3()) {
     await s3.send(new PutObjectCommand({
       Bucket: bucket,
       Key: keyFor(room),
@@ -23,7 +27,7 @@ async function persist(room, record) {
   } else {
     await localStore.writeJson('rooms', room, record);
   }
-  cache.set(room, { config: record, expiresAt: Date.now() + CACHE_TTL_MS });
+  if (!localStore.usesPostgres()) cache.set(room, { config: record, expiresAt: Date.now() + CACHE_TTL_MS });
   return record;
 }
 
@@ -46,13 +50,13 @@ async function createRoom(room, { meetingId = null, status = 'ACTIVE' } = {}) {
 }
 
 async function getRoom(room) {
-  const cached = cache.get(room);
+  const cached = localStore.usesPostgres() ? null : cache.get(room);
   if (cached && cached.expiresAt > Date.now()) return cached.config;
-  if (!storageConfigured) return localStore.readJson('rooms', room);
+  if (!stateInS3()) return localStore.readJson('rooms', room);
   try {
     const response = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: keyFor(room) }));
     const record = JSON.parse(await response.Body.transformToString());
-    cache.set(room, { config: record, expiresAt: Date.now() + CACHE_TTL_MS });
+    if (!localStore.usesPostgres()) cache.set(room, { config: record, expiresAt: Date.now() + CACHE_TTL_MS });
     return record;
   } catch (error) {
     if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) return undefined;
@@ -98,7 +102,7 @@ async function withAdmissionLock(room, operation) {
   const current = new Promise((resolve) => { release = resolve; });
   admissionLocks.set(key, current);
   await previous;
-  try { return await operation(); } finally {
+  try { return await localStore.withTransaction(operation); } finally {
     release();
     if (admissionLocks.get(key) === current) admissionLocks.delete(key);
   }
