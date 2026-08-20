@@ -23,7 +23,7 @@
       <button id="logoutButton" class="secondary compact" type="button">Cerrar sesión</button>
     </div>
   </header>
-  <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="Cerrar navegación" tabindex="-1"></button>
+  <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="Cerrar navegación" aria-hidden="true" tabindex="-1"></button>
 
   <div class="dashboard-layout">
     <aside id="dashboardSidebar" class="dashboard-sidebar" aria-label="Navegación principal">
@@ -104,7 +104,7 @@
 
       <section class="dashboard-section" data-section-panel="recordings" aria-labelledby="recordingsTitle">
         <div class="section-heading"><div><p class="eyebrow">Contenido almacenado</p><h1 id="recordingsTitle">Grabaciones</h1></div></div>
-        <div class="toolbar"><input id="recordingRoomFilter" placeholder="Filtrar por sala" /><button id="loadRecordings" class="secondary" type="button">Buscar</button></div>
+        <div class="toolbar"><label class="sr-only" for="recordingRoomFilter">Filtrar grabaciones por sala</label><input id="recordingRoomFilter" placeholder="Filtrar por sala" /><button id="loadRecordings" class="secondary" type="button">Buscar</button></div>
         <div id="recordingsList" class="recordings-list"></div>
       </section>
 
@@ -157,26 +157,26 @@
     </main>
   </div>
 
-  <dialog id="meetingDialog" class="app-dialog">
-    <form id="meetingForm" method="dialog">
+  <dialog id="meetingDialog" class="app-dialog" aria-labelledby="meetingDialogTitle">
+    <form id="meetingForm" method="dialog" novalidate>
       <div class="dialog-heading"><div><p class="eyebrow">Programación</p><h2 id="meetingDialogTitle">Nueva reunión</h2><p class="required-note"><span aria-hidden="true">*</span> Campos obligatorios</p></div><button class="icon-action dialog-close" type="button" data-close-dialog aria-label="Cerrar formulario de reunión">×</button></div>
       <input id="meetingOriginalRoom" type="hidden" />
       <fieldset class="meeting-form-section">
         <legend>Información general</legend>
         <div class="form-grid">
-          <label class="span-2">Título <span class="required-mark" aria-hidden="true">*</span><input id="meetingTitle" maxlength="140" placeholder="Ej. Capacitación de seguridad" required /></label>
+          <label class="span-2">Título <span class="required-mark" aria-hidden="true">*</span><input id="meetingTitle" maxlength="140" placeholder="Ej. Capacitación de seguridad" required aria-describedby="meetingFormError" /></label>
           <label class="span-2">Descripción<textarea id="meetingDescription" maxlength="2000" rows="3" placeholder="Resume el objetivo de la reunión"></textarea></label>
           <label>Identificador de sala (slug)<input id="meetingRoom" maxlength="80" placeholder="capacitacion-seguridad" aria-describedby="meetingRoomHelp" /><small id="meetingRoomHelp" class="field-help">Se genera automáticamente si lo dejas vacío.</small></label>
-          <label>Capacitador <span class="required-mark" aria-hidden="true">*</span><input id="meetingTrainer" maxlength="100" placeholder="Nombre del capacitador" required /></label>
+          <label>Capacitador <span class="required-mark" aria-hidden="true">*</span><input id="meetingTrainer" maxlength="100" placeholder="Nombre del capacitador" required aria-describedby="meetingFormError" /></label>
           <label>Tipo<select id="meetingType"><option value="WEBINAR">Webinar</option><option value="SESSION">Sesión</option><option value="CLASS">Clase</option></select></label>
-          <label>Capacidad<input id="meetingCapacity" type="number" min="0" max="100000" value="100" /></label>
+          <label>Capacidad<input id="meetingCapacity" type="number" min="0" max="100000" value="100" aria-describedby="meetingFormError" /></label>
         </div>
       </fieldset>
       <fieldset class="meeting-form-section">
         <legend>Fecha y programación</legend>
         <div class="form-grid">
           <label>Fecha y hora<input id="meetingScheduledAt" type="datetime-local" /><small class="field-help">Puede quedar pendiente mientras la reunión sea un borrador.</small></label>
-          <label>Duración (minutos) <span class="required-mark" aria-hidden="true">*</span><input id="meetingDuration" type="number" min="1" max="1440" value="60" required /></label>
+          <label>Duración (minutos) <span class="required-mark" aria-hidden="true">*</span><input id="meetingDuration" type="number" min="1" max="1440" value="60" required aria-describedby="meetingFormError" /></label>
         </div>
       </fieldset>
       <fieldset class="meeting-form-section">
@@ -203,11 +203,11 @@
         </div>
         <div class="form-grid transcription-options">
           <label>Idioma esperado<select id="meetingTranscriptionLanguage"><option value="es">Español</option><option value="en">Inglés</option><option value="pt">Portugués</option></select></label>
-          <label>Retención de transcripción (días)<input id="meetingTranscriptionRetention" type="number" min="1" max="3650" value="90" /></label>
+          <label>Retención de transcripción (días)<input id="meetingTranscriptionRetention" type="number" min="1" max="3650" value="90" aria-describedby="meetingFormError" /></label>
         </div>
         <p class="muted small">La transcripción no se inicia automáticamente. El texto generado puede contener errores y debe revisarse.</p>
       </fieldset>
-      <p id="meetingFormError" class="form-error" role="alert"></p>
+      <p id="meetingFormError" class="form-error" role="alert" tabindex="-1"></p>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancelar</button><button id="saveMeeting" class="primary" type="submit">Guardar reunión</button></div>
     </form>
   </dialog>
@@ -330,8 +330,8 @@
     </form>
   </dialog>
 
-  <dialog id="dashboardConfirmDialog" class="app-dialog confirmation-dialog">
-    <form method="dialog"><h2 data-confirm-title>Confirmar acción</h2><p data-confirm-message></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button data-confirm-accept class="primary" value="confirm">Confirmar</button></div></form>
+  <dialog id="dashboardConfirmDialog" class="app-dialog confirmation-dialog" aria-labelledby="dashboardConfirmTitle">
+    <form method="dialog"><h2 id="dashboardConfirmTitle" data-confirm-title>Confirmar acción</h2><p data-confirm-message></p><div class="dialog-actions"><button class="secondary" value="cancel">Cancelar</button><button data-confirm-accept class="primary" value="confirm">Confirmar</button></div></form>
   </dialog>
 
   <dialog id="passwordDialog" class="app-dialog small-dialog">

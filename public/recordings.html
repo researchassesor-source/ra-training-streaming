@@ -15,11 +15,12 @@
   <main class="dashboard-main">
     <section class="dashboard-section active">
       <div class="section-heading"><div><p class="eyebrow">Contenido almacenado</p><h1>Grabaciones</h1></div></div>
-      <div class="toolbar"><input id="roomFilter" placeholder="Filtrar por sala" /><button id="searchButton" class="secondary" type="button">Buscar</button></div>
+      <div class="toolbar"><label class="sr-only" for="roomFilter">Filtrar grabaciones por sala</label><input id="roomFilter" placeholder="Filtrar por sala" /><button id="searchButton" class="secondary" type="button">Buscar</button></div>
       <div id="recordingList" class="recordings-list" aria-live="polite"></div>
     </section>
   </main>
   <script src="brand.js"></script>
+  <script src="app-core.js"></script>
   <script src="recordings.js"></script>
 </body>
 </html>

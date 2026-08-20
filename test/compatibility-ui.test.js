@@ -177,3 +177,35 @@ test('titles, visible branding and preflight structure have no legacy naming reg
   assert.match(room, /preflight-footer/);
   assert.match(room, /id="livekitStatus"/);
 });
+
+test('frontend hardening exposes semantic errors, busy states and accessible form validation', () => {
+  const css = fs.readFileSync(path.join(publicDir, 'style.css'), 'utf8');
+  const login = fs.readFileSync(path.join(publicDir, 'login.js'), 'utf8');
+  const dashboardHtml = fs.readFileSync(path.join(publicDir, 'dashboard.html'), 'utf8');
+  const dashboardJs = fs.readFileSync(path.join(publicDir, 'dashboard.js'), 'utf8');
+  const roomUi = fs.readFileSync(path.join(publicDir, 'room-ui.js'), 'utf8');
+  const recordingsJs = fs.readFileSync(path.join(publicDir, 'recordings.js'), 'utf8');
+
+  for (const token of ['--color-bg', '--color-surface', '--color-primary', '--space-1', '--radius-md', '--focus-ring']) {
+    assert.match(css, new RegExp(token));
+  }
+  assert.match(css, /aria-invalid="true"/);
+  assert.match(css, /aria-busy="true"/);
+  assert.match(login, /RATCore\.apiErrorMessage/);
+  assert.match(login, /setLoginError/);
+  assert.match(dashboardHtml, /id="meetingForm"[\s\S]*novalidate/);
+  assert.match(dashboardHtml, /aria-describedby="meetingFormError"/);
+  assert.match(dashboardJs, /firstInvalidMeetingField/);
+  assert.match(dashboardJs, /RATCore\.apiErrorMessage/);
+  assert.match(roomUi, /RATCore\.mediaDeviceErrorMessage/);
+  assert.match(recordingsJs, /RATCore\.apiErrorMessage/);
+});
+
+test('recordings are opened through signed URLs instead of exposing storage keys directly', () => {
+  const dashboardJs = fs.readFileSync(path.join(publicDir, 'dashboard.js'), 'utf8');
+  const recordingsJs = fs.readFileSync(path.join(publicDir, 'recordings.js'), 'utf8');
+  assert.match(dashboardJs, /\/api\/recordings\/download\?key=/);
+  assert.match(recordingsJs, /\/api\/recordings\/download\?key=/);
+  assert.doesNotMatch(dashboardJs, /open\(item\.url|href\s*=\s*item\.url|writeText\(item\.url/);
+  assert.doesNotMatch(recordingsJs, /open\(item\.url|href\s*=\s*item\.url|writeText\(item\.url/);
+});

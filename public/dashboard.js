@@ -117,7 +117,8 @@ async function api(path, options = {}) {
   }
   if (!response.ok) {
     const error = new Error(data.error || 'No fue posible completar la solicitud');
-    error.code = data.code; error.status = response.status;
+    error.code = data.code; error.status = response.status; error.requestId = data.requestId || response.headers.get('x-request-id') || null;
+    error.message = RATCore.apiErrorMessage(error);
     throw error;
   }
   return data;
@@ -132,6 +133,31 @@ function notice(message, type = 'success') {
   notice.timer = setTimeout(() => { element.hidden = true; }, 5_000);
 }
 
+function markFieldError(input, active) {
+  if (!input) return;
+  input.setAttribute('aria-invalid', active ? 'true' : 'false');
+}
+
+function firstInvalidMeetingField() {
+  const checks = [
+    ['meetingTitle', 'El título es obligatorio.'],
+    ['meetingTrainer', 'El nombre del capacitador es obligatorio.'],
+    ['meetingDuration', 'La duración debe estar entre 1 y 1440 minutos.'],
+    ['meetingCapacity', 'La capacidad debe estar entre 0 y 100000.'],
+    ['meetingTranscriptionRetention', 'La retención debe estar entre 1 y 3650 días.'],
+  ];
+  for (const [id, message] of checks) {
+    const input = document.getElementById(id);
+    markFieldError(input, false);
+    const value = input.type === 'number' ? Number(input.value) : input.value.trim();
+    if (!input.checkValidity() || (input.type === 'number' && !Number.isFinite(value))) {
+      markFieldError(input, true);
+      return { input, message };
+    }
+  }
+  return null;
+}
+
 function showSection(name) {
   document.querySelectorAll('[data-section-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.sectionPanel === name));
   document.querySelectorAll('[data-section]').forEach((button) => {
@@ -142,6 +168,7 @@ function showSection(name) {
   });
   document.getElementById('dashboardSidebar').classList.remove('open');
   document.getElementById('sidebarOverlay').classList.remove('visible');
+  document.getElementById('sidebarOverlay').setAttribute('aria-hidden', 'true');
   document.getElementById('menuToggle').setAttribute('aria-expanded', 'false');
   const titles = { summary: 'Panel organizador', calendar: 'Calendario', meetings: 'Reuniones', recordings: 'Grabaciones', users: 'Usuarios', audit: 'Auditoría', settings: 'Configuración' };
   document.title = `${titles[name] || 'Panel organizador'} | R.A. Training Streaming`;
@@ -528,6 +555,13 @@ async function saveMeeting(event) {
   if (!originalRoom) payload.room = document.getElementById('meetingRoom').value.trim() || payload.title;
   const error = document.getElementById('meetingFormError');
   error.textContent = '';
+  const invalid = firstInvalidMeetingField();
+  if (invalid) {
+    error.textContent = invalid.message;
+    invalid.input.focus();
+    invalid.input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
   try {
     if (originalRoom) await api(`/api/meetings/${encodeURIComponent(originalRoom)}`, { method: 'PATCH', body: payload });
     else await api('/api/meetings', { method: 'POST', body: payload });
@@ -536,6 +570,7 @@ async function saveMeeting(event) {
     await loadMeetings();
   } catch (requestError) {
     error.textContent = requestError.message;
+    error.focus();
   }
 }
 
@@ -839,10 +874,11 @@ async function loadRecordings() {
       const info = document.createElement('div'); info.append(textElement('h2', item.title || 'Reunión sin título'), textElement('p', `${item.trainerName || 'Capacitador por definir'} · ${formatDate(item.lastModified)}`, 'muted'), textElement('p', `${(Number(item.size || 0) / 1024 / 1024).toFixed(1)} MB · Lista`, 'small'));
       if (item.transcript) info.appendChild(textElement('p', TRANSCRIPT_STATUS_LABELS[item.transcript.status] || 'Estado de transcripción no disponible', 'small transcript-recording-state'));
       const actions = document.createElement('div'); actions.className = 'meeting-actions';
-      if (item.url) {
-        const open = document.createElement('a'); open.href = item.url; open.target = '_blank'; open.rel = 'noopener noreferrer'; open.className = 'button secondary compact'; open.textContent = 'Abrir';
-        const download = document.createElement('a'); download.href = item.url; download.target = '_blank'; download.rel = 'noopener noreferrer'; download.className = 'button secondary compact'; download.textContent = 'Descargar'; download.setAttribute('download', '');
-        actions.append(open, download, meetingAction('Copiar enlace', async () => { await navigator.clipboard.writeText(item.url); notice('Enlace temporal copiado.'); }, item));
+      if (item.key) {
+        actions.append(
+          meetingAction('Abrir', () => openRecording(item, false), item, 'secondary compact'),
+          meetingAction('Descargar', () => openRecording(item, true), item, 'secondary compact')
+        );
       }
       const meeting = state.meetings.find((entry) => entry.id === item.meetingId);
       if (item.transcript) {
@@ -866,6 +902,20 @@ async function loadRecordings() {
       actions.append(settings, guide); empty.appendChild(actions); container.replaceChildren(empty);
     }
     else container.replaceChildren(textElement('p', error.message, 'form-error'));
+  }
+}
+
+async function openRecording(item, download = false) {
+  const popup = window.open('', '_blank', 'noopener,noreferrer');
+  try {
+    const data = await api(`/api/recordings/download?key=${encodeURIComponent(item.key)}`);
+    if (!data.url) throw new Error('No se recibió un enlace temporal de descarga.');
+    if (popup) popup.location.href = data.url;
+    else window.location.href = data.url;
+    notice(download ? 'Enlace temporal de descarga preparado.' : 'Grabación abierta en otra pestaña.');
+  } catch (error) {
+    if (popup) popup.close();
+    notice(error.message, 'error');
   }
 }
 
@@ -970,10 +1020,12 @@ document.querySelectorAll('[data-calendar-view]').forEach((button) => button.add
 document.getElementById('calendarPrev').addEventListener('click', () => { const amount = state.calendarView === 'month' ? -1 : state.calendarView === 'week' ? -7 : -1; if (state.calendarView === 'month') state.calendarDate.setMonth(state.calendarDate.getMonth() + amount); else state.calendarDate.setDate(state.calendarDate.getDate() + amount); renderCalendar(); });
 document.getElementById('calendarNext').addEventListener('click', () => { const amount = state.calendarView === 'month' ? 1 : state.calendarView === 'week' ? 7 : 1; if (state.calendarView === 'month') state.calendarDate.setMonth(state.calendarDate.getMonth() + amount); else state.calendarDate.setDate(state.calendarDate.getDate() + amount); renderCalendar(); });
 document.getElementById('calendarToday').addEventListener('click', () => { state.calendarDate = new Date(); renderCalendar(); });
-function closeSidebar() { document.getElementById('dashboardSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('visible'); document.getElementById('menuToggle').setAttribute('aria-expanded', 'false'); }
-document.getElementById('menuToggle').addEventListener('click', () => { const sidebar = document.getElementById('dashboardSidebar'); const open = sidebar.classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('visible', open); document.getElementById('menuToggle').setAttribute('aria-expanded', String(open)); if (open) sidebar.querySelector('button:not([hidden])')?.focus(); });
+function closeSidebar() { document.getElementById('dashboardSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('visible'); document.getElementById('sidebarOverlay').setAttribute('aria-hidden', 'true'); document.getElementById('menuToggle').setAttribute('aria-expanded', 'false'); }
+document.getElementById('menuToggle').addEventListener('click', () => { const sidebar = document.getElementById('dashboardSidebar'); const open = sidebar.classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('visible', open); document.getElementById('sidebarOverlay').setAttribute('aria-hidden', String(!open)); document.getElementById('menuToggle').setAttribute('aria-expanded', String(open)); if (open) sidebar.querySelector('button:not([hidden])')?.focus(); });
 document.getElementById('sidebarOverlay').addEventListener('click', closeSidebar);
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeSidebar(); document.getElementById('menuToggle').focus(); } });
+window.addEventListener('offline', () => notice('Parece que no tienes conexión. Algunas acciones pueden fallar hasta reconectarte.', 'error'));
+window.addEventListener('online', () => notice('Conexión restaurada.'));
 for (const id of ['userPassword', 'userPasswordConfirm']) document.getElementById(id).addEventListener('input', () => { const password = document.getElementById('userPassword').value; const confirmation = document.getElementById('userPasswordConfirm').value; const match = document.getElementById('userPasswordMatch'); match.textContent = confirmation ? (password === confirmation ? 'Las contraseñas coinciden.' : 'Las contraseñas no coinciden.') : ''; match.className = `password-match ${password === confirmation ? 'matches' : 'mismatch'}`; });
 document.getElementById('logoutButton').addEventListener('click', async () => { try { await api('/api/auth/logout', { method: 'POST', body: {} }); } finally { window.location.replace('/index.html'); } });
 bindDialog(document.getElementById('meetingDialog'), '[data-close-dialog]');

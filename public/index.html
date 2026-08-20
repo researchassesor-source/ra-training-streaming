@@ -32,10 +32,10 @@
       <p class="muted">Usa tus credenciales administrativas. La sesión se guarda en una cookie segura y no en el navegador.</p>
       <form id="loginForm" novalidate>
         <label for="username">Usuario</label>
-        <input id="username" name="username" autocomplete="username" minlength="3" maxlength="50" required />
+        <input id="username" name="username" autocomplete="username" minlength="3" maxlength="50" required aria-describedby="loginError" />
         <label for="password">Contraseña</label>
         <div class="password-field">
-          <input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required />
+          <input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required aria-describedby="loginError" />
           <button class="password-toggle" type="button" data-password-toggle="password" aria-label="Mostrar contraseña" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/><path class="password-hide-stroke" d="m4 4 16 16"/></svg>
           </button>
@@ -46,6 +46,7 @@
     </section>
   </main>
   <script src="brand.js"></script>
+  <script src="app-core.js"></script>
   <script src="password-toggle.js"></script>
   <script src="login.js"></script>
 </body>

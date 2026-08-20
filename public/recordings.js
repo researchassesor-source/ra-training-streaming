@@ -15,7 +15,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, credentials: 'same-origin', headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
   if (response.status === 401) { window.location.replace('/index.html'); throw new Error('La sesi\u00f3n expir\u00f3.'); }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) { const error = new Error(data.error || 'No fue posible completar la solicitud.'); error.code = data.code; throw error; }
+  if (!response.ok) { const error = new Error(data.error || 'No fue posible completar la solicitud.'); error.code = data.code; error.status = response.status; error.requestId = data.requestId || response.headers.get('x-request-id') || null; error.message = RATCore.apiErrorMessage(error); throw error; }
   return data;
 }
 
@@ -63,6 +63,8 @@ async function loadRecordings() {
         const open = document.createElement('button'); open.className = 'secondary'; open.type = 'button'; open.textContent = 'Abrir';
         open.addEventListener('click', async () => {
           open.disabled = true;
+          open.setAttribute('aria-busy', 'true');
+          open.textContent = 'Preparando…';
           const target = window.open('', '_blank', 'noopener,noreferrer');
           try {
             const signed = await api(`/api/recordings/download?key=${encodeURIComponent(item.key)}`);
@@ -72,7 +74,7 @@ async function loadRecordings() {
             if (target) target.close();
             open.textContent = 'Reintentar';
           }
-          finally { open.disabled = false; }
+          finally { open.disabled = false; open.setAttribute('aria-busy', 'false'); if (open.textContent === 'Preparando…') open.textContent = 'Abrir'; }
         });
         actions.appendChild(open);
       }

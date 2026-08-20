@@ -253,6 +253,33 @@
     return 'No se pudo conectar al servicio de videoconferencia. Verifica la disponibilidad del servidor LiveKit e inténtalo nuevamente.';
   }
 
+  function apiErrorMessage(error = {}) {
+    const status = Number(error.status || 0);
+    const code = String(error.code || '').toUpperCase();
+    if (status === 401) return 'Tu sesión expiró. Inicia sesión nuevamente para continuar.';
+    if (status === 403) return 'No tienes permisos para realizar esta acción.';
+    if (status === 429 || code === 'RATE_LIMITED') return 'Has realizado demasiados intentos. Espera un momento e inténtalo nuevamente.';
+    if (status >= 500) return 'El servicio no respondió correctamente. Intenta nuevamente en unos segundos.';
+    const message = typeof error.message === 'string' ? error.message.trim() : '';
+    return message || 'No fue posible completar la solicitud.';
+  }
+
+  function mediaDeviceErrorMessage(error = {}, kind = 'dispositivo') {
+    const name = String(error.name || error.code || '').trim();
+    const labels = {
+      NotAllowedError: 'El permiso está bloqueado. Habilita cámara o micrófono desde el icono de permisos del navegador y vuelve a intentar.',
+      PermissionDeniedError: 'El permiso está bloqueado. Habilita cámara o micrófono desde el icono de permisos del navegador y vuelve a intentar.',
+      NotFoundError: 'No se encontró una cámara o micrófono disponible. Conecta el dispositivo o elige otro.',
+      DevicesNotFoundError: 'No se encontró una cámara o micrófono disponible. Conecta el dispositivo o elige otro.',
+      NotReadableError: 'El dispositivo está ocupado por otra aplicación. Cierra la otra app y vuelve a intentar.',
+      TrackStartError: 'El dispositivo está ocupado por otra aplicación. Cierra la otra app y vuelve a intentar.',
+      OverconstrainedError: 'El dispositivo seleccionado no está disponible. Elige otro en la lista.',
+      SecurityError: 'El navegador bloqueó el acceso por seguridad. Usa HTTPS o revisa los permisos del sitio.',
+      AbortError: 'El navegador interrumpió el acceso al dispositivo. Vuelve a intentar.',
+    };
+    return labels[name] || `No fue posible usar el ${kind}. Revisa permisos, conexión del dispositivo y vuelve a intentar.`;
+  }
+
   class ConnectionStateMachine {
     constructor(onChange, initial = 'validating_invitation') {
       this.onChange = typeof onChange === 'function' ? onChange : () => {};
@@ -403,11 +430,13 @@
     ConnectionStateMachine,
     HandQueue,
     RecordingStateMachine,
+    apiErrorMessage,
     createFloatingModel,
     createUnreadCounter,
     calendarRange,
     defaultMeetingRole,
     localDateKey,
+    mediaDeviceErrorMessage,
     meetingsForLocalDay,
     meetingRoleCapabilities,
     meetingTiming,

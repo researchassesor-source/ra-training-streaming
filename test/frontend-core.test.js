@@ -5,10 +5,12 @@ const path = require('node:path');
 const {
   ConnectionStateMachine,
   HandQueue,
+  apiErrorMessage,
   createFloatingModel,
   createUnreadCounter,
   roleLabel,
   roomConnectionErrorMessage,
+  mediaDeviceErrorMessage,
   safeHttpUrl,
   calendarRange,
   meetingsForLocalDay,
@@ -200,6 +202,17 @@ test('visible roles and room connection failures are translated safely', () => {
   assert.equal(roleLabel('unexpected'), 'Participante');
   assert.match(roomConnectionErrorMessage(new Error('websocket failed')), /No se pudo conectar al servicio de videoconferencia/);
   assert.equal(roomConnectionErrorMessage({ status: 410, code: 'ROOM_ENDED', message: 'La reunión finalizó.' }), 'La reunión finalizó.');
+});
+
+test('frontend failures expose safe actionable messages without leaking internals', () => {
+  assert.match(apiErrorMessage({ status: 401 }), /sesión expiró/i);
+  assert.match(apiErrorMessage({ status: 403 }), /permisos/i);
+  assert.match(apiErrorMessage({ status: 429 }), /demasiados intentos/i);
+  assert.match(apiErrorMessage({ status: 503, message: 'stack trace connection refused' }), /servicio no respondió/i);
+  assert.equal(apiErrorMessage({ message: 'Campo requerido' }), 'Campo requerido');
+  assert.match(mediaDeviceErrorMessage({ name: 'NotAllowedError' }, 'cámara'), /permiso está bloqueado/i);
+  assert.match(mediaDeviceErrorMessage({ name: 'NotReadableError' }, 'micrófono'), /ocupado por otra aplicación/i);
+  assert.match(mediaDeviceErrorMessage({ name: 'UnknownError' }, 'selector de pantalla'), /selector de pantalla/i);
 });
 
 test('password visibility toggles between secure and readable input types', () => {

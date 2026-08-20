@@ -292,3 +292,22 @@ test('public release surfaces contain no synthetic QA labels and static links re
   const manifest = JSON.parse(fs.readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'));
   for (const icon of manifest.icons || []) assert.equal(fs.existsSync(path.join(publicDir, icon.src)), true, icon.src);
 });
+
+test('frontend E2E smoke suite runs against an isolated local server and mobile viewport', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.equal(manifest.scripts['test:e2e'], 'playwright test');
+  assert.match(manifest.scripts['test:e2e:smoke'], /chromium-desktop/);
+  assert.ok(manifest.devDependencies['@playwright/test']);
+
+  const configSource = fs.readFileSync(path.join(__dirname, '..', 'playwright.config.js'), 'utf8');
+  assert.match(configSource, /scripts\/e2e-server\.js/);
+  assert.match(configSource, /chromium-desktop/);
+  assert.match(configSource, /chromium-mobile/);
+  assert.match(configSource, /width: 390/);
+
+  const serverSource = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'e2e-server.js'), 'utf8');
+  assert.match(serverSource, /LOCAL_DATA_DIR/);
+  assert.match(serverSource, /rat-streaming-e2e/);
+  assert.match(serverSource, /livekit-e2e\.invalid/);
+  assert.doesNotMatch(serverSource, /DATABASE_URL|REDIS_URL|TRANSCRIPTION_API_KEY/);
+});

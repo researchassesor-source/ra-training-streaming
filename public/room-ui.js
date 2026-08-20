@@ -327,17 +327,12 @@ async function startPreview() {
     await enumerateDevices();
     statusMachine.set('waiting_for_room');
   } catch (mediaError) {
-    const messages = {
-      NotAllowedError: 'El permiso de cámara o micrófono está bloqueado. Revísalo en la configuración del navegador.',
-      NotFoundError: 'No se encontró una cámara o micrófono disponible.',
-      NotReadableError: 'La cámara o el micrófono están ocupados por otra aplicación.',
-    };
     statusMachine.set('waiting_for_room');
     const previewState = document.getElementById('previewState');
     if (previewState) previewState.textContent = mediaError.name === 'NotAllowedError'
       ? 'No permitiste el acceso a la cámara'
       : mediaError.name === 'NotFoundError' ? 'Cámara no disponible' : 'No se pudo iniciar la vista previa';
-    throw new Error(messages[mediaError.name] || 'No fue posible abrir la cámara o el micrófono.');
+    throw new Error(RATCore.mediaDeviceErrorMessage(mediaError, 'cámara o micrófono'));
   }
 }
 
@@ -978,7 +973,7 @@ async function toggleMicrophone() {
     ui.stage?.setParticipantState(ui.session.identity, `${ui.session.displayName} (tú)`, { microphone: ui.microphone, local: true, keepVisible: true });
     if (!ui.microphone) roomRequest('/api/room/media-state', { method: 'POST', body: { event: 'microphone-muted' } }, ui.session.csrfToken).catch(() => {});
     return ui.microphone === next;
-  } catch (error) { setButtonState(micButton, ui.microphone, 'Silenciar micrófono', 'Activar micrófono'); micButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; showMessage(`Micrófono: ${error.message}`, true); return false; }
+  } catch (error) { setButtonState(micButton, ui.microphone, 'Silenciar micrófono', 'Activar micrófono'); micButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; showMessage(`Micrófono: ${RATCore.mediaDeviceErrorMessage(error, 'micrófono')}`, true); return false; }
   finally { ui.microphoneBusy = false; document.getElementById('btnMic').disabled = !hasPublishPermission('MICROPHONE'); document.getElementById('btnMic').setAttribute('aria-busy', 'false'); }
 }
 
@@ -1001,7 +996,7 @@ async function toggleCamera() {
     else ui.stage.removeTrack(ui.session.identity, 'camera');
     ui.stage.setParticipantState(ui.session.identity, `${ui.session.displayName} (tú)`, { microphone: ui.microphone, local: true, keepVisible: true });
     return ui.camera === next;
-  } catch (error) { setButtonState(camButton, ui.camera, 'Apagar cámara', 'Encender cámara'); camButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; showMessage(`Cámara: ${error.message}`, true); return false; }
+  } catch (error) { setButtonState(camButton, ui.camera, 'Apagar cámara', 'Encender cámara'); camButton.title = 'Permiso bloqueado o dispositivo no disponible. Habilítalo desde el icono de permisos del sitio.'; showMessage(`Cámara: ${RATCore.mediaDeviceErrorMessage(error, 'cámara')}`, true); return false; }
   finally { ui.cameraBusy = false; document.getElementById('btnCam').disabled = !hasPublishPermission('CAMERA'); document.getElementById('btnCam').setAttribute('aria-busy', 'false'); }
 }
 
@@ -1045,7 +1040,7 @@ async function toggleScreen() {
       if (document.getElementById('autoFloatOnShare').checked) ui.companion?.open().catch((error) => showMessage(error.message, true));
       await roomRequest('/api/room/media-state', { method: 'POST', body: { event: 'screen-started' } }, ui.session.csrfToken).catch(() => {});
     } else await finishScreenShare(false);
-  } catch (error) { setButtonState(button, ui.screen, 'Detener', 'Pantalla'); showMessage(`Pantalla: ${error.message}`, true); }
+  } catch (error) { setButtonState(button, ui.screen, 'Detener', 'Pantalla'); showMessage(`Pantalla: ${RATCore.mediaDeviceErrorMessage(error, 'selector de pantalla')}`, true); }
   finally {
     ui.screenBusy = false;
     button.disabled = !hasPublishPermission('SCREENSHARE') || !navigator.mediaDevices?.getDisplayMedia;
