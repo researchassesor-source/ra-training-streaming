@@ -214,6 +214,49 @@ test('Preview responses enforce noindex, HSTS and Secure room cookies', () => {
   assert.match(data.cookie, /; SameSite=Lax(?:;|$)/);
 });
 
+test('/docs is unavailable in production app environment', () => {
+  const script = `
+    const { createApp } = require('./server/app');
+    const provider = { isConfigured: () => true };
+    const app = createApp({
+      services: { roomService: {}, egressClient: {}, transcriptionProvider: provider },
+      livekitProbe: async () => ({ configured: true, available: true, mode: 'remoto', checkedAt: new Date().toISOString() }),
+      storageProbe: async () => ({ configured: true, available: true, mode: 's3', checkedAt: new Date().toISOString() }),
+    });
+    const server = app.listen(0, '127.0.0.1', async () => {
+      try {
+        const response = await fetch('http://127.0.0.1:' + server.address().port + '/docs/LOCAL_DEVELOPMENT.md');
+        console.log(JSON.stringify({ status: response.status }));
+      } finally {
+        server.close();
+      }
+    });
+  `;
+  const output = execFileSync(process.execPath, ['-e', script], {
+    cwd: path.join(__dirname, '..'),
+    env: {
+      ...process.env,
+      NODE_ENV: 'production', APP_ENV: 'production', APP_DISPLAY_ENV: 'Producción',
+      APP_PUBLIC_URL: 'https://app.example',
+      COOKIE_SECURE: 'true', SESSION_SECRET: 's'.repeat(40), INVITATION_HASH_SECRET: 'i'.repeat(40),
+      LIVEKIT_WS_URL: 'wss://livekit.example', LIVEKIT_API_KEY: 'production-key', LIVEKIT_API_SECRET: 'production-secret',
+      RECORDING_S3_ACCESS_KEY: 'production-access', RECORDING_S3_SECRET_KEY: 'production-storage-secret', RECORDING_S3_BUCKET: 'production-bucket',
+      TRANSCRIPTION_ENABLED: 'true', TRANSCRIPTION_PROVIDER: 'deepgram', TRANSCRIPTION_API_URL: 'https://api.deepgram.com/v1/listen', TRANSCRIPTION_API_KEY: 'production-provider-key',
+      TRANSCRIPTION_ALLOWED_HOSTS: 'api.deepgram.com',
+    },
+    encoding: 'utf8',
+  });
+  const data = JSON.parse(output.trim().split(/\r?\n/).at(-1));
+  assert.equal(data.status, 404);
+});
+
+test('dashboard meeting form does not expose lifecycle status editing', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'dashboard.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'dashboard.js'), 'utf8');
+  assert.doesNotMatch(html, /id="meetingStatus"/);
+  assert.doesNotMatch(js, /getElementById\('meetingStatus'\)/);
+});
+
 test('public release surfaces contain no synthetic QA labels and static links resolve', () => {
   const publicDir = path.join(__dirname, '..', 'public');
   const publicFiles = fs.readdirSync(publicDir).filter((name) => /\.(?:html|js|webmanifest)$/.test(name));

@@ -12,7 +12,8 @@
     "livekit:logs": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/livekit-local.ps1 logs",
     "test": "node --test --test-concurrency=1",
     "test:watch": "node --test --watch --test-concurrency=1",
-    "build:track-processors": "esbuild node_modules/@livekit/track-processors/dist/index.mjs --bundle --format=iife --global-name=TrackProcessors --alias:livekit-client=./build-tools/livekit-client-shim.mjs --outfile=public/vendor/track-processors.bundle.js --minify"
+    "build:track-processors": "esbuild node_modules/@livekit/track-processors/dist/index.mjs --bundle --format=iife --global-name=TrackProcessors --alias:livekit-client=./build-tools/livekit-client-shim.mjs --outfile=public/vendor/track-processors.bundle.js --minify",
+    "package:source": "node scripts/package-source.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1094.0",

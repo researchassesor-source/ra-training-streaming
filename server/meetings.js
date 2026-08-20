@@ -151,6 +151,9 @@ function enumValue(value, allowed, field, fallback) {
 
 function normalizeMeetingInput(input, { partial = false } = {}) {
   const output = {};
+  if (partial && Object.prototype.hasOwnProperty.call(input, 'status')) {
+    throw new AppError(400, 'El estado de la reunión debe modificarse mediante una acción de lifecycle específica', 'MEETING_STATUS_IMMUTABLE');
+  }
   const setText = (name, options) => {
     if (!partial || input[name] !== undefined) output[name] = sanitizeText(input[name], { field: name, ...options });
   };

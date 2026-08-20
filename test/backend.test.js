@@ -23,6 +23,7 @@ const rooms = require('../server/rooms');
 const localStore = require('../server/local-store');
 const audit = require('../server/audit');
 const questions = require('../server/questions');
+const { assertValidFileContent, hasValidMagicBytes } = require('../server/file-validation');
 const { createRoomSession, roomCookie } = require('../server/room-session');
 const { createApp } = require('../server/app');
 
@@ -81,6 +82,7 @@ let mockLivekitAvailable = true;
 
 let server;
 let baseUrl;
+let app;
 
 async function request(route, { method = 'GET', body, cookie, csrf, roomCsrf, seriesCsrf, roomSessionId, redirect = 'follow' } = {}) {
   const headers = {};
@@ -114,7 +116,7 @@ async function login(username = 'rootadmin', password = 'Bootstrap-password-123'
 
 test.before(async () => {
   await fs.rm(testDataDir, { recursive: true, force: true });
-  const app = createApp({
+  app = createApp({
     services: { roomService: mockRoomService, egressClient: mockEgressClient },
     livekitProbe: async () => ({ configured: true, available: mockLivekitAvailable, state: mockLivekitAvailable ? 'AVAILABLE' : 'UNAVAILABLE', mode: 'local', checkedAt: new Date().toISOString(), errorCode: mockLivekitAvailable ? undefined : 'LIVEKIT_UNREACHABLE' }),
   });
@@ -126,6 +128,10 @@ test.before(async () => {
 test.after(async () => {
   await new Promise((resolve) => server.close(resolve));
   await fs.rm(testDataDir, { recursive: true, force: true });
+});
+
+test.afterEach(() => {
+  app?.locals?.rateLimiters?.loginLimiter?.reset?.();
 });
 
 test('scrypt hashes passwords with unique salts and verifies safely', () => {
@@ -168,6 +174,12 @@ test('login sets an HttpOnly SameSite cookie instead of returning a bearer token
   assert.equal(result.data.token, undefined);
 });
 
+test('/docs remains intentionally available in local test environment', async () => {
+  const docs = await request('/docs/LOCAL_DEVELOPMENT.md');
+  assert.equal(docs.response.status, 200);
+  assert.match(docs.response.headers.get('content-type') || '', /text\/markdown|text\/plain|application\/octet-stream/i);
+});
+
 test('ADMIN can manage users, roles and password resets without exposing hashes', async () => {
   const admin = await login();
   const created = await request('/api/auth/users', {
@@ -188,6 +200,52 @@ test('ADMIN can manage users, roles and password resets without exposing hashes'
     method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: { password: 'A-new-password-456' },
   });
   assert.equal(reset.response.status, 200);
+});
+
+test('role and active changes invalidate existing auth sessions safely', async () => {
+  const admin = await login();
+  await request('/api/auth/users', {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: { username: 'role-admin-old', password: 'Role-admin-password-123', role: 'ADMIN' },
+  });
+  const oldAdmin = await login('role-admin-old', 'Role-admin-password-123');
+  assert.equal((await request('/api/auth/users', { cookie: oldAdmin.cookie })).response.status, 200);
+  const demoted = await request('/api/auth/users/role-admin-old', {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { role: 'ORGANIZER' },
+  });
+  assert.equal(demoted.response.status, 200, JSON.stringify(demoted.data));
+  assert.equal(demoted.data.user.role, 'ORGANIZER');
+  assert.equal((await request('/api/auth/users', { cookie: oldAdmin.cookie })).response.status, 401);
+
+  await request('/api/auth/users', {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: { username: 'role-organizer-old', password: 'Role-organizer-password-123', role: 'ORGANIZER' },
+  });
+  const oldOrganizer = await login('role-organizer-old', 'Role-organizer-password-123');
+  const promoted = await request('/api/auth/users/role-organizer-old', {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { role: 'ADMIN' },
+  });
+  assert.equal(promoted.response.status, 200, JSON.stringify(promoted.data));
+  assert.equal((await request('/api/auth/users', { cookie: oldOrganizer.cookie })).response.status, 401);
+  const newAdmin = await login('role-organizer-old', 'Role-organizer-password-123');
+  assert.equal((await request('/api/auth/users', { cookie: newAdmin.cookie })).response.status, 200);
+
+  await request('/api/auth/users', {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: { username: 'same-role-user', password: 'Same-role-password-123', role: 'ORGANIZER' },
+  });
+  const sameRole = await login('same-role-user', 'Same-role-password-123');
+  const unchanged = await request('/api/auth/users/same-role-user', {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { role: 'ORGANIZER' },
+  });
+  assert.equal(unchanged.response.status, 200, JSON.stringify(unchanged.data));
+  assert.equal((await request('/api/auth/me', { cookie: sameRole.cookie })).response.status, 200);
+
+  const deactivated = await request('/api/auth/users/same-role-user', {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { active: false },
+  });
+  assert.equal(deactivated.response.status, 200, JSON.stringify(deactivated.data));
+  assert.equal((await request('/api/auth/me', { cookie: sameRole.cookie })).response.status, 401);
 });
 
 test('the bootstrap ADMIN cannot be deleted', async () => {
@@ -664,6 +722,20 @@ test('chat is server-relayed, session-bound and rate limited', async () => {
   mockRoomService.participants = [];
 });
 
+test('chat upload content validation accepts real signatures and rejects spoofed MIME', () => {
+  const validPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  assert.doesNotThrow(() => assertValidFileContent('image/png', validPng));
+  assert.equal(hasValidMagicBytes('image/png', validPng), true);
+  assert.equal(hasValidMagicBytes('image/jpeg', Buffer.from([0xff, 0xd8, 0xff, 0xdb])), true);
+  assert.equal(hasValidMagicBytes('image/webp', Buffer.from('RIFFxxxxWEBPVP8 ', 'ascii')), true);
+  assert.equal(hasValidMagicBytes('application/pdf', Buffer.from('%PDF-1.7\n', 'ascii')), true);
+  assert.equal(hasValidMagicBytes('text/plain', Buffer.from('Enlace seguro https://example.com\n', 'utf8')), true);
+  assert.equal(hasValidMagicBytes('image/png', Buffer.from('not really a png', 'utf8')), false);
+  assert.equal(hasValidMagicBytes('application/pdf', Buffer.from([0x00, 0x01, 0x02, 0x03])), false);
+  assert.equal(hasValidMagicBytes('text/plain', Buffer.from([0x48, 0x00, 0x49])), false);
+  assert.throws(() => assertValidFileContent('image/png', Buffer.from('not really a png', 'utf8')), /tipo declarado/);
+});
+
 test('meeting endpoints require both session and CSRF and preserve unique rooms', async () => {
   const admin = await login();
   const payload = {
@@ -680,6 +752,57 @@ test('meeting endpoints require both session and CSRF and preserve unique rooms'
   assert.equal(untrustedRoom.response.status, 401);
   const securedRoom = await request('/api/rooms', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: { room: 'api-meeting' } });
   assert.equal(securedRoom.response.status, 200);
+});
+
+test('meeting PATCH cannot change lifecycle while official actions keep side effects', async () => {
+  const admin = await login();
+  const payload = {
+    title: 'Lifecycle seguro', description: 'Test', room: 'lifecycle-seguro', trainerName: 'Trainer API',
+    scheduledAt: '2032-03-02T12:00:00.000Z', durationMinutes: 45, type: 'WEBINAR', capacity: 25,
+  };
+  const created = await request('/api/meetings', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: payload });
+  assert.equal(created.response.status, 201, JSON.stringify(created.data));
+  const completePatch = await request('/api/meetings/lifecycle-seguro', {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'COMPLETED' },
+  });
+  assert.equal(completePatch.response.status, 400);
+  assert.equal(completePatch.data.code, 'MEETING_STATUS_IMMUTABLE');
+  const cancelPatch = await request('/api/meetings/lifecycle-seguro', {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'CANCELLED' },
+  });
+  assert.equal(cancelPatch.response.status, 400);
+  assert.equal((await meetings.getMeeting('lifecycle-seguro')).status, 'SCHEDULED');
+
+  const edited = await request('/api/meetings/lifecycle-seguro', {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { title: 'Lifecycle seguro editado', capacity: 80 },
+  });
+  assert.equal(edited.response.status, 200, JSON.stringify(edited.data));
+  assert.equal(edited.data.title, 'Lifecycle seguro editado');
+  assert.equal(edited.data.capacity, 80);
+  assert.equal(edited.data.status, 'SCHEDULED');
+
+  const cancel = await request('/api/meetings/lifecycle-seguro/actions/cancel', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(cancel.response.status, 200, JSON.stringify(cancel.data));
+  assert.equal(cancel.data.status, 'CANCELLED');
+  assert.equal((await rooms.checkAccess('lifecycle-seguro')).allowed, false);
+
+  const restored = await request('/api/meetings/lifecycle-seguro/actions/restore', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(restored.response.status, 200, JSON.stringify(restored.data));
+  assert.equal(restored.data.status, 'SCHEDULED');
+  assert.equal((await rooms.checkAccess('lifecycle-seguro')).allowed, true);
+
+  const complete = await request('/api/meetings/lifecycle-seguro/actions/complete', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(complete.response.status, 200, JSON.stringify(complete.data));
+  assert.equal(complete.data.status, 'COMPLETED');
+  assert.equal((await rooms.checkAccess('lifecycle-seguro')).allowed, false);
+
+  const archivePayload = { ...payload, title: 'Lifecycle archivo', room: 'lifecycle-archivo' };
+  const archiveMeeting = await request('/api/meetings', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: archivePayload });
+  assert.equal(archiveMeeting.response.status, 201, JSON.stringify(archiveMeeting.data));
+  const archive = await request('/api/meetings/lifecycle-archivo/actions/archive', { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(archive.response.status, 200, JSON.stringify(archive.data));
+  assert.equal(archive.data.status, 'ARCHIVED');
+  assert.equal((await rooms.checkAccess('lifecycle-archivo')).allowed, false);
 });
 
 test('LiveKit unavailable never marks a scheduled meeting live or writes a real start event', async () => {

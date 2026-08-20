@@ -49,6 +49,7 @@ const {
 } = require('./meeting-permissions');
 const { createRateLimiter } = require('./rate-limit');
 const { createLiveKitStatusProbe } = require('./livekit-status');
+const { assertValidFileContent } = require('./file-validation');
 const {
   facebookStateFromEgress,
   isRecordingEgress,
@@ -248,7 +249,11 @@ function createApp(overrides = {}) {
     },
   }));
   app.use('/vendor/livekit-client', express.static(path.join(__dirname, '..', 'node_modules', 'livekit-client', 'dist')));
-  app.use('/docs', express.static(path.join(__dirname, '..', 'docs'), { etag: true, maxAge: 0 }));
+  if (config.appEnv === 'development' || config.appEnv === 'test') {
+    app.use('/docs', express.static(path.join(__dirname, '..', 'docs'), { etag: true, maxAge: 0 }));
+  } else {
+    app.use('/docs', (_req, res) => res.status(404).send('Not found'));
+  }
 
   const loginLimiter = createRateLimiter({
     windowMs: config.loginRateLimitWindowMs,
@@ -598,6 +603,9 @@ function createApp(overrides = {}) {
   });
 
   app.patch('/api/meetings/:room', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'status')) {
+      throw new AppError(400, 'El estado de la reunión debe modificarse mediante una acción específica', 'MEETING_STATUS_IMMUTABLE');
+    }
     const updated = await meetings.updateMeeting(req.params.room, withoutSeriesLinkage(req.body));
     if (updated.seriesId) await trainingSeries.touchSeries(updated.seriesId);
     await safeAudit({ actor: req.auth.u, action: 'MEETING_UPDATED', target: updated.id, room: updated.room, metadata: { status: updated.status }, ...auditContext(req) });
@@ -1528,6 +1536,7 @@ function createApp(overrides = {}) {
     if (!req.file) throw new AppError(400, 'No se recibió ningún archivo', 'VALIDATION_ERROR');
     const mimetype = String(req.file.mimetype || '').toLowerCase();
     if (!config.allowedChatMimeTypes.has(mimetype)) throw new AppError(415, 'El tipo de archivo no está permitido', 'UNSUPPORTED_MEDIA_TYPE');
+    assertValidFileContent(mimetype, req.file.buffer);
     const extension = path.extname(req.file.originalname || '').toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 10);
     const displayName = sanitizeText(path.basename(req.file.originalname || 'archivo'), { field: 'filename', min: 1, max: 120, required: true });
     const key = `chat-uploads/${req.roomSession.room}/${Date.now()}-${crypto.randomUUID()}${extension}`;

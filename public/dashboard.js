@@ -472,7 +472,6 @@ function openMeetingDialog(meeting = null) {
   document.getElementById('meetingScheduledAt').value = edit ? localDateTimeValue(meeting.scheduledAt) : '';
   document.getElementById('meetingDuration').value = edit ? meeting.durationMinutes : 60;
   document.getElementById('meetingType').value = edit ? meeting.type : 'WEBINAR';
-  document.getElementById('meetingStatus').value = edit ? meeting.status : 'DRAFT';
   document.getElementById('meetingCapacity').value = edit ? meeting.capacity : 100;
   document.getElementById('meetingViewerAccess').value = edit ? meeting.viewerAccessMode : 'INVITATION';
   document.getElementById('meetingPanelistAccess').value = edit ? meeting.panelistAccessMode : 'INVITATION';
@@ -508,7 +507,6 @@ async function saveMeeting(event) {
     scheduledAt: scheduledInput ? new Date(scheduledInput).toISOString() : null,
     durationMinutes: Number(document.getElementById('meetingDuration').value),
     type: document.getElementById('meetingType').value,
-    status: document.getElementById('meetingStatus').value,
     capacity: Number(document.getElementById('meetingCapacity').value),
     viewerAccessMode: document.getElementById('meetingViewerAccess').value,
     panelistAccessMode: document.getElementById('meetingPanelistAccess').value,
@@ -921,7 +919,6 @@ async function initialize() {
     document.getElementById('currentRole').textContent = ROLE_LABELS[me.user.role] || 'Usuario';
     document.querySelectorAll('.admin-only').forEach((element) => { element.hidden = me.user.role !== 'ADMIN'; });
     for (const status of Object.keys(STATUS_LABELS)) {
-      document.getElementById('meetingStatus').appendChild(new Option(STATUS_LABELS[status], status));
       document.getElementById('meetingStatusFilter').appendChild(new Option(STATUS_LABELS[status], status));
       document.getElementById('filterStatus').appendChild(new Option(STATUS_LABELS[status], status));
     }

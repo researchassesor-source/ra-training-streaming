@@ -166,7 +166,11 @@ async function updateUser(username, updates) {
 
   const record = { ...existing, updatedAt: new Date().toISOString() };
   delete record.bootstrap;
-  if (updates.role !== undefined) record.role = normalizeRole(updates.role);
+  if (updates.role !== undefined) {
+    const nextRole = normalizeRole(updates.role);
+    if (record.role !== nextRole) record.sessionVersion += 1;
+    record.role = nextRole;
+  }
   if (updates.active !== undefined) {
     if (typeof updates.active !== 'boolean') throw new AppError(400, 'active debe ser booleano', 'VALIDATION_ERROR');
     if (record.active !== updates.active) record.sessionVersion += 1;
@@ -279,8 +283,8 @@ async function verifySession(token) {
   const payload = decodeSignedPayload(token);
   if (!payload || payload.type !== 'auth' || !payload.u || !ROLE_SET.has(payload.role)) return null;
   const user = await getUser(payload.u);
-  if (!user || !user.active || (user.sessionVersion || 1) !== payload.sv) return null;
-  return { ...payload, user: publicUser(user) };
+  if (!user || !user.active || (user.sessionVersion || 1) !== payload.sv || user.role !== payload.role) return null;
+  return { ...payload, role: user.role, user: publicUser(user) };
 }
 
 function getRequestToken(req) {

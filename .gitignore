@@ -1,8 +1,14 @@
 node_modules/
 .env
+.env.*
+!.env.example
 bin/
+logs/
 *.log
-
 .local-data/
 .local-runtime/
 .tools/
+dist/
+release/
+*.zip
+*.tmp
