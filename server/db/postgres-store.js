@@ -16,10 +16,19 @@ const TABLES = Object.freeze({
   transcriptions: 'transcriptions',
 });
 
+const ORDER_COLUMNS = Object.freeze({
+  audit: 'timestamp',
+});
+
 function tableFor(section) {
   const table = TABLES[section];
   if (!table) throw new AppError(500, `Sección de datos no soportada en PostgreSQL: ${section}`, 'DATA_BACKEND_ERROR');
   return table;
+}
+
+function orderColumnFor(section) {
+  tableFor(section);
+  return ORDER_COLUMNS[section] || 'created_at';
 }
 
 function asIso(value) {
@@ -238,7 +247,8 @@ async function readJson(section, key, client = db.getPool()) {
 
 async function listJson(section, client = db.getPool()) {
   const table = tableFor(section);
-  const result = await client.query(`SELECT data FROM ${table} ORDER BY created_at NULLS LAST, store_key`);
+  const orderColumn = orderColumnFor(section);
+  const result = await client.query(`SELECT data FROM ${table} ORDER BY ${orderColumn} NULLS LAST, store_key`);
   return result.rows.map((row) => row.data);
 }
 
@@ -253,6 +263,7 @@ module.exports = {
   deleteJson,
   listJson,
   normalizedKey,
+  orderColumnFor,
   readJson,
   tableFor,
   writeJson,

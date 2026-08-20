@@ -61,6 +61,11 @@ test('PostgreSQL id-backed records resolve legacy room-prefixed keys', () => {
   assert.equal(postgresStore.normalizedKey('chat-pins', 'sala%20uno--pin-123'), 'pin-123');
 });
 
+test('PostgreSQL list ordering uses the real timestamp column for audit events', () => {
+  assert.equal(postgresStore.orderColumnFor('audit'), 'timestamp');
+  assert.equal(postgresStore.orderColumnFor('questions'), 'created_at');
+});
+
 test('PostgreSQL SSL options make sslmode=require explicit without disabling verification', () => {
   const options = db.connectionOptions('postgres://user:pass@example.test/db?sslmode=require');
   assert.equal(options.ssl.rejectUnauthorized, true);

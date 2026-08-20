@@ -113,6 +113,33 @@ test('series accesses use uniqueness and usage count survives touch', async () =
   assert.equal(touched.usageCount, 1);
 });
 
+test('audit events list by their real timestamp column', async () => {
+  const room = `${runId}-audit-order`;
+  await postgresStore.writeJson('audit', `${runId}-audit-old`, {
+    id: `${runId}-audit-old`,
+    timestamp: '2035-04-02T10:00:00.000Z',
+    actor: runId,
+    action: 'MEETING_CREATED',
+    target: `${runId}-target-old`,
+    room,
+    metadata: { order: 1 },
+  });
+  await postgresStore.writeJson('audit', `${runId}-audit-new`, {
+    id: `${runId}-audit-new`,
+    timestamp: '2035-04-02T10:01:00.000Z',
+    actor: runId,
+    action: 'MEETING_UPDATED',
+    target: `${runId}-target-new`,
+    room,
+    metadata: { order: 2 },
+  });
+
+  const events = await audit.listEvents({ room, limit: 10 });
+  assert.equal(events.length, 2);
+  assert.equal(events[0].id, `${runId}-audit-new`);
+  assert.equal(events[1].id, `${runId}-audit-old`);
+});
+
 test('rooms, attendance, questions, audit and transcriptions round-trip structured state', async () => {
   const meeting = await meetings.createMeeting({ title: `${runId} State`, room: `${runId}-state`, trainerName: 'Trainer', scheduledAt: '2035-05-01T10:00:00.000Z', durationMinutes: 60, status: 'COMPLETED', allowTranscription: true, createdBy: runId });
   await rooms.createRoom(meeting.room, { meetingId: meeting.id });
