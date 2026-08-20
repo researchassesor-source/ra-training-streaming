@@ -59,7 +59,23 @@ async function loadRecordings() {
       info.append(title, meta);
       if (item.transcript) { const state = document.createElement('p'); state.className = 'small transcript-recording-state'; state.textContent = TRANSCRIPT_STATUS[item.transcript.status] || 'Estado de transcripci\u00f3n no disponible'; info.appendChild(state); }
       const actions = document.createElement('div'); actions.className = 'meeting-actions';
-      if (item.url) { const link = document.createElement('a'); link.className = 'button secondary'; link.href = item.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Abrir'; actions.appendChild(link); }
+      if (item.key) {
+        const open = document.createElement('button'); open.className = 'secondary'; open.type = 'button'; open.textContent = 'Abrir';
+        open.addEventListener('click', async () => {
+          open.disabled = true;
+          const target = window.open('', '_blank', 'noopener,noreferrer');
+          try {
+            const signed = await api(`/api/recordings/download?key=${encodeURIComponent(item.key)}`);
+            if (target) target.location.href = signed.url;
+            else window.location.href = signed.url;
+          } catch (error) {
+            if (target) target.close();
+            open.textContent = 'Reintentar';
+          }
+          finally { open.disabled = false; }
+        });
+        actions.appendChild(open);
+      }
       const transcript = transcriptAction(item); if (transcript) actions.appendChild(transcript);
       card.append(info, actions); list.appendChild(card);
     }

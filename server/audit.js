@@ -2,6 +2,9 @@ const crypto = require('crypto');
 const { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
+const db = require('./db');
+const { decodeCursor, encodeCursor } = require('./pagination');
+const { AppError } = require('./http-utils');
 
 const ALLOWED_ACTIONS = new Set([
   'AUTH_LOGIN', 'AUTH_LOGIN_FAILED', 'AUTH_LOGOUT', 'USER_CREATED', 'USER_UPDATED',
@@ -76,7 +79,50 @@ async function logEvent({ actor = 'system', action, target = null, room = null, 
   return record;
 }
 
-async function listEvents({ limit = 200, action, actor, room } = {}) {
+function validateFilter(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const text = String(value);
+  if (!/^[\w:./ -]{1,160}$/u.test(text)) throw new AppError(400, `Filtro ${field} no válido`, 'VALIDATION_ERROR');
+  return text;
+}
+
+async function listPostgresEvents({ limit, action, actor, room, cursor } = {}) {
+  const params = [];
+  const where = [];
+  const safeAction = validateFilter(action, 'action');
+  const safeActor = validateFilter(actor, 'actor');
+  const safeRoom = validateFilter(room, 'room');
+  if (safeAction) { params.push(safeAction); where.push(`action = $${params.length}`); }
+  if (safeActor) { params.push(safeActor); where.push(`actor = $${params.length}`); }
+  if (safeRoom) { params.push(safeRoom); where.push(`room = $${params.length}`); }
+  const decoded = decodeCursor(cursor);
+  if (decoded) {
+    if (!decoded.timestamp || !decoded.id) throw new AppError(400, 'Cursor de auditoría no válido', 'VALIDATION_ERROR');
+    params.push(decoded.timestamp, decoded.id);
+    where.push(`(timestamp, id) < ($${params.length - 1}::timestamptz, $${params.length})`);
+  }
+  params.push(limit + 1);
+  const result = await db.query(
+    `SELECT data FROM audit_events
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY timestamp DESC, id DESC
+     LIMIT $${params.length}`,
+    params
+  );
+  const rows = result.rows.map((row) => row.data);
+  const items = rows.slice(0, limit);
+  return {
+    items,
+    nextCursor: rows.length > limit && items.length ? encodeCursor({ timestamp: items.at(-1).timestamp, id: items.at(-1).id }) : null,
+  };
+}
+
+async function listEvents({ limit = 200, action, actor, room, cursor, page = false } = {}) {
+  const boundedLimit = Math.max(1, Math.min(1_000, Number(limit) || 200));
+  if (!stateInS3() && localStore.usesPostgres()) {
+    const result = await listPostgresEvents({ limit: boundedLimit, action, actor, room, cursor });
+    return page ? result : result.items;
+  }
   let items;
   if (stateInS3()) {
     const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'audit/', MaxKeys: Math.min(1_000, limit * 3) }));
@@ -87,12 +133,13 @@ async function listEvents({ limit = 200, action, actor, room } = {}) {
   } else {
     items = await localStore.listJson('audit');
   }
-  return items
+  const filtered = items
     .filter((item) => !action || item.action === action)
     .filter((item) => !actor || item.actor === actor)
     .filter((item) => !room || item.room === room)
     .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
-    .slice(0, Math.max(1, Math.min(1_000, limit)));
+    .slice(0, boundedLimit);
+  return page ? { items: filtered, nextCursor: null } : filtered;
 }
 
 module.exports = { ALLOWED_ACTIONS, listEvents, logEvent, safeMetadata };

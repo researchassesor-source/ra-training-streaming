@@ -68,6 +68,17 @@ test('durable jobs migration defines worker queue and external session state', (
   assert.match(migration, /facebook_live_one_active_per_room_idx/);
 });
 
+test('operational performance migration adds targeted indexes without schema rewrites', () => {
+  const migration = fs.readFileSync(path.join(__dirname, '..', 'server', 'db', 'migrations', '004_operational_performance.sql'), 'utf8');
+  assert.match(migration, /meetings_status_scheduled_at_idx/);
+  assert.match(migration, /audit_events_action_timestamp_idx/);
+  assert.match(migration, /audit_events_actor_timestamp_idx/);
+  assert.match(migration, /transcriptions_meeting_created_at_idx/);
+  assert.match(migration, /recording_egress_meeting_id_idx/);
+  assert.match(migration, /background_jobs_status_available_priority_idx/);
+  assert.doesNotMatch(migration, /DROP TABLE|ALTER TABLE\s+\w+\s+DROP/i);
+});
+
 test('legacy importer maps stable keys without exposing plaintext secrets', () => {
   assert.equal(importer.keyFor('users', { username: 'admin' }), 'admin');
   assert.equal(importer.keyFor('meetings', { room: 'sala-uno' }), 'sala-uno');

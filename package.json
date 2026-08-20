@@ -17,6 +17,7 @@
     "test:postgres": "node scripts/test-postgres.js",
     "test:redis": "node scripts/test-redis.js",
     "test:watch": "node --test --watch --test-concurrency=1 \"test/*.test.js\"",
+    "check:release": "npm test && npm run build",
     "db:migrate": "node server/db/migrate.js migrate",
     "db:status": "node server/db/migrate.js status",
     "db:import:legacy": "node scripts/db-import-legacy.js",

@@ -4,11 +4,13 @@ const { createApp, recordingConfigured } = require('./app');
 const { log } = require('./logger');
 const db = require('./db');
 const redis = require('./redis');
+const { createShutdown } = require('./lifecycle');
 
 assertRuntimeConfig();
 
 const app = createApp();
 let server;
+const shutdown = createShutdown({ serverRef: () => server, redis, db });
 
 async function start() {
   if (db.usingPostgres()) {
@@ -26,16 +28,6 @@ async function start() {
   });
 }
 
-function shutdown(signal) {
-  log('info', 'server_shutdown', { signal });
-  if (!server) {
-    Promise.allSettled([redis.disconnect(), db.closePool()]).finally(() => process.exit(0));
-    return;
-  }
-  server.close(() => Promise.allSettled([redis.disconnect(), db.closePool()]).finally(() => process.exit(0)));
-  setTimeout(() => process.exit(1), 10_000).unref();
-}
-
 start().catch((error) => {
   log('error', 'server_start_failed', { errorName: error.name, errorCode: error.code });
   Promise.allSettled([redis.disconnect(), db.closePool()]).finally(() => process.exit(1));
@@ -43,3 +35,11 @@ start().catch((error) => {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('uncaughtException', (error) => {
+  log('error', 'uncaught_exception', { errorName: error.name, errorCode: error.code });
+  shutdown('uncaughtException', 1);
+});
+process.on('unhandledRejection', (error) => {
+  log('error', 'unhandled_rejection', { errorName: error?.name || 'UnhandledRejection', errorCode: error?.code });
+  shutdown('unhandledRejection', 1);
+});

@@ -29,6 +29,9 @@ const backgroundJobs = require('./background-jobs');
 const externalSessions = require('./external-sessions');
 const { classifyProviderError } = require('./provider-errors');
 const { createTranscriptionProvider } = require('./transcription-provider');
+const recordings = require('./recordings');
+const { parseLimit } = require('./pagination');
+const { createHealthRouter } = require('./routes/health.routes');
 const {
   clearRoomCookie,
   createRoomSession,
@@ -1789,23 +1792,33 @@ function createApp(overrides = {}) {
   app.get('/api/recordings', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
     if (!storageConfigured) throw new AppError(400, 'El almacenamiento no está configurado', 'STORAGE_NOT_CONFIGURED');
     const requestedRoom = req.query.room ? String(req.query.room) : null;
+    const limit = parseLimit(req.query.limit, { defaultLimit: 50, maxLimit: 200 });
     if (requestedRoom) {
       const meeting = await meetings.getMeeting(requestedRoom);
       if (!meeting || !canManageMeeting(req.auth, meeting)) throw new AppError(403, 'No tienes permiso para ver estas grabaciones', 'FORBIDDEN');
     }
+    if (db.usingPostgres()) {
+      const page = await recordings.listPostgresRecordings({ room: requestedRoom, limit, cursor: req.query.cursor });
+      const items = page.items
+        .filter((item) => canManageMeeting(req.auth, item.meeting))
+        .map(({ meeting, transcript, ...item }) => ({
+          ...item,
+          transcript: transcript ? transcriptions.transcriptSummary(transcript) : null,
+          transcriptionAllowed: Boolean(item.transcriptionAllowed && transcriptionProvider.isConfigured()),
+        }));
+      return res.json({ items, nextCursor: page.nextCursor, transcriptionConfigured: transcriptionProvider.isConfigured() });
+    }
     const allowedRooms = req.auth.role === 'ADMIN'
       ? null
       : new Set((await meetings.listMeetings({ includeDeleted: true })).filter((meeting) => canManageMeeting(req.auth, meeting)).map((meeting) => meeting.room));
-    const prefix = requestedRoom ? `recordings/${requestedRoom}/` : 'recordings/';
-    const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
-    const items = await Promise.all((listing.Contents || [])
+    const listing = await recordings.listS3Recordings({ room: requestedRoom, limit, continuationToken: req.query.cursor || null });
+    const items = await Promise.all((listing.objects || [])
       .filter((object) => object.Key.endsWith('.mp4'))
       .filter((object) => !allowedRooms || allowedRooms.has(object.Key.split('/')[1]))
        .map(async (object) => {
          const room = object.Key.split('/')[1];
          const meeting = await meetings.getMeeting(room);
-         const resolved = meeting ? await defaultRecordingResolver(object.Key, meeting) : null;
-         const transcript = meeting ? (await transcriptions.listTranscripts({ meetingId: meeting.id })).find((item) => item.recordingId === object.Key) : null;
+         const transcript = meeting ? (await transcriptions.listTranscriptSummaries({ meetingId: meeting.id })).find((item) => item.recordingId === object.Key) : null;
          return {
            id: object.Key,
            key: object.Key,
@@ -1816,16 +1829,25 @@ function createApp(overrides = {}) {
            size: object.Size,
            lastModified: object.LastModified,
            status: 'READY',
-           source: resolved?.source || 'ROOM_COMPOSITE',
-           participants: resolved?.participants || [],
-           tracks: resolved?.tracks || [],
-           url: resolved?.url,
-           transcript: transcript ? transcriptions.publicTranscript(transcript) : null,
+           source: 'ROOM_COMPOSITE',
+           participants: [],
+           tracks: [],
+           transcript: transcript || null,
            transcriptionAllowed: Boolean(meeting?.allowTranscription && meeting?.status === 'COMPLETED' && transcriptionProvider.isConfigured()),
          };
       }));
     items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
-    res.json({ items, transcriptionConfigured: transcriptionProvider.isConfigured() });
+    res.json({ items, nextCursor: listing.nextCursor, transcriptionConfigured: transcriptionProvider.isConfigured() });
+  }));
+
+  app.get('/api/recordings/download', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
+    if (!storageConfigured) throw new AppError(400, 'El almacenamiento no está configurado', 'STORAGE_NOT_CONFIGURED');
+    const key = recordings.validateRecordingKey(req.query.key);
+    const room = key.split('/')[1];
+    const meeting = await meetings.getMeeting(room);
+    if (!meeting || !canManageMeeting(req.auth, meeting)) throw new AppError(403, 'No tienes permiso para descargar esta grabación', 'FORBIDDEN');
+    await safeAudit({ actor: req.auth.u, action: 'RECORDING_DOWNLOADED', target: key, room, ...auditContext(req) });
+    res.json({ url: await recordings.signedRecordingUrl(key) });
   }));
 
   app.delete('/api/recordings', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN'), asyncHandler(async (req, res) => {
@@ -1948,8 +1970,9 @@ function createApp(overrides = {}) {
   }));
 
   app.get('/api/audit', auth.requireAuth, auth.requireRoles('ADMIN'), asyncHandler(async (req, res) => {
-    const limit = Number.parseInt(req.query.limit || '200', 10);
-    res.json({ items: await audit.listEvents({ limit, action: req.query.action, actor: req.query.actor, room: req.query.room }) });
+    const limit = parseLimit(req.query.limit, { defaultLimit: 100, maxLimit: 500 });
+    const result = await audit.listEvents({ limit, action: req.query.action, actor: req.query.actor, room: req.query.room, cursor: req.query.cursor, page: true });
+    res.json(result);
   }));
 
   app.get('/api/dashboard/summary', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
@@ -1989,34 +2012,11 @@ function createApp(overrides = {}) {
     });
   }));
 
-  async function healthResponse(_req, res) {
-    const [livekit, storage, transcription, jobs] = await Promise.all([livekitProbe(), storageProbe(), transcriptionStatus(), backgroundJobs.diagnostics()]);
-    const servicesStatus = {
-      livekit: { configured: livekit.configured === true, available: livekit.available === true },
-      storage: { configured: storage.configured === true, available: storage.available === true, mode: storage.mode },
-      recording: { available: recordingConfigured && livekit.available === true && storage.available === true },
-      transcription: { configured: transcription.configured === true, available: transcription.available === true, status: transcription.status || (transcription.available ? 'healthy' : transcription.configured ? 'degraded' : 'disabled') },
-      redis: redis.diagnostics(),
-      livekitWebhooks: liveKitWebhooks.diagnostics(),
-      backgroundJobs: jobs,
-    };
-    const requiredConfigured = !config.isProductionLike || (servicesStatus.livekit.configured && servicesStatus.storage.configured && recordingConfigured && (!config.transcriptionEnabled || servicesStatus.transcription.configured));
-    const requiredAvailable = !config.isProductionLike || (servicesStatus.livekit.available && servicesStatus.storage.available && servicesStatus.recording.available && (!config.transcriptionEnabled || servicesStatus.transcription.available));
-    const healthStatus = !requiredConfigured ? 'unhealthy' : requiredAvailable ? 'healthy' : 'degraded';
-    res.json({
-      app: config.appName,
-      environment: config.appEnv,
-      displayEnvironment: config.appDisplayEnv,
-      version: config.appVersion,
-      status: healthStatus,
-      checkedAt: new Date().toISOString(),
-      services: servicesStatus,
-    });
-  }
-  app.get('/health', asyncHandler(healthResponse));
-  app.get('/api/health', asyncHandler(healthResponse));
+  const healthRouter = createHealthRouter({ livekitProbe, storageProbe, transcriptionStatus, recordingConfigured });
+  app.use('/', healthRouter);
+  app.use('/api', healthRouter);
 
-  app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint no encontrado', code: 'NOT_FOUND' }));
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint no encontrado', code: 'NOT_FOUND', requestId: _req.requestId || null }));
   app.use((error, _req, res, _next) => {
     if (error instanceof multer.MulterError) {
       const message = error.code === 'LIMIT_FILE_SIZE' ? 'El archivo supera el tamaño permitido' : 'No se pudo procesar el archivo';
@@ -2029,6 +2029,7 @@ function createApp(overrides = {}) {
     return res.status(status).json({
       error: error instanceof AppError ? error.message : status >= 500 ? 'Ocurrió un error interno' : error.message,
       code: error.code || 'INTERNAL_ERROR',
+      requestId: _req.requestId || null,
     });
   });
 

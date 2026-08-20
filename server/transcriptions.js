@@ -3,6 +3,7 @@ const { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCo
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
 const backgroundJobs = require('./background-jobs');
+const db = require('./db');
 const { config } = require('./config');
 const { AppError, sanitizeText } = require('./http-utils');
 
@@ -98,6 +99,42 @@ async function listTranscripts({ meetingId } = {}) {
   return records
     .filter((record) => !meetingId || record.meetingId === meetingId)
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+function transcriptSummary(record) {
+  if (!record) return record;
+  const publicRecord = publicTranscript(record);
+  const { segments, words, providerMetadata, ...summary } = publicRecord;
+  return {
+    ...summary,
+    segmentCount: Array.isArray(segments) ? segments.length : Number(record.segmentCount || 0),
+    wordCount: Array.isArray(words) ? words.length : Number(record.wordCount || 0),
+    hasContent: Boolean((Array.isArray(segments) && segments.length) || record.hasContent),
+    providerMetadata: undefined,
+  };
+}
+
+async function listTranscriptSummaries({ meetingId, limit = 100 } = {}) {
+  const boundedLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  if (!stateInS3() && localStore.usesPostgres()) {
+    const params = [];
+    let where = '';
+    if (meetingId) {
+      params.push(meetingId);
+      where = `WHERE meeting_id = $${params.length}`;
+    }
+    params.push(boundedLimit);
+    const result = await db.query(
+      `SELECT data
+       FROM transcriptions
+       ${where}
+       ORDER BY created_at DESC NULLS LAST, id DESC
+       LIMIT $${params.length}`,
+      params
+    );
+    return result.rows.map((row) => transcriptSummary(normalizeStoredTranscript(row.data)));
+  }
+  return (await listTranscripts({ meetingId })).slice(0, boundedLimit).map(transcriptSummary);
 }
 
 function safeLanguage(value, fallback = 'es') {
@@ -729,6 +766,7 @@ module.exports = {
   exportTranscript,
   getTranscript,
   listTranscripts,
+  listTranscriptSummaries,
   normalizeStoredTranscript,
   processTranscriptionJob,
   publicTranscript,
@@ -736,6 +774,7 @@ module.exports = {
   renameSpeaker,
   retryTranscript,
   sanitizeTranscriptResult,
+  transcriptSummary,
   validateSrt,
   validateVtt,
 };

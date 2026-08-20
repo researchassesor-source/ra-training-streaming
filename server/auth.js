@@ -7,6 +7,7 @@ const {
 } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
+const db = require('./db');
 const { config } = require('./config');
 const {
   AppError,
@@ -111,6 +112,10 @@ async function getUser(username, { includeBootstrap = true } = {}) {
 }
 
 async function listStoredUsers() {
+  if (!stateInS3() && localStore.usesPostgres()) {
+    const result = await db.query('SELECT data FROM users ORDER BY username ASC');
+    return result.rows.map((row) => row.data);
+  }
   if (!stateInS3()) return localStore.listJson('users');
   const listing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'users/' }));
   return Promise.all((listing.Contents || []).map(async (object) => {

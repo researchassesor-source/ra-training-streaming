@@ -160,6 +160,19 @@ test('Preview Blueprint is isolated, manual and cannot silently fall back to moc
   assert.doesNotMatch(blueprint, /value: mock/);
 });
 
+test('production Render Blueprint separates web readiness from the worker process', () => {
+  const blueprint = fs.readFileSync(path.join(__dirname, '..', 'render.yaml'), 'utf8');
+  assert.match(blueprint, /type: web[\s\S]*name: ra-training-streaming-web/);
+  assert.match(blueprint, /healthCheckPath: \/ready/);
+  assert.match(blueprint, /buildCommand: npm ci && npm run build/);
+  assert.match(blueprint, /type: worker[\s\S]*name: ra-training-streaming-worker/);
+  assert.match(blueprint, /startCommand: npm run worker/);
+  assert.match(blueprint, /key: DATA_BACKEND\s+value: postgres/);
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.equal(manifest.scripts['check:release'], 'npm test && npm run build');
+});
+
 test('load harness is Preview-only, staged and high-cost guarded', () => {
   const harness = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'livekit-load-preview.ps1'), 'utf8');
   assert.match(harness, /ValidateSet\(25, 50, 100, 250, 500, 750, 1000\)/);
