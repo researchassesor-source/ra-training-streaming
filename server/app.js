@@ -21,6 +21,9 @@ const trainingSeries = require('./training-series');
 const seriesAccesses = require('./series-accesses');
 const speakerRequests = require('./speaker-requests');
 const attendance = require('./attendance');
+const liveKitWebhooks = require('./livekit-webhooks');
+const idempotency = require('./idempotency');
+const redis = require('./redis');
 const { createTranscriptionProvider } = require('./transcription-provider');
 const {
   clearRoomCookie,
@@ -236,6 +239,11 @@ function createApp(overrides = {}) {
     if (config.nodeEnv !== 'test') res.on('finish', () => log('info', 'http_request', { requestId, method: req.method, path: safeRequestPath(req.path), status: res.statusCode, durationMs: Date.now() - startedAt }));
     next();
   });
+  app.post('/api/webhooks/livekit', express.raw({ type: '*/*', limit: config.maxJsonPayload }), asyncHandler(async (req, res) => {
+    const result = await liveKitWebhooks.receiveLiveKitWebhook(req.body.toString('utf8'), req.headers.authorization || req.headers.authorize);
+    res.json({ received: true, duplicate: result.duplicate === true });
+  }));
+
   app.use(express.json({ limit: config.maxJsonPayload, strict: true }));
   app.use(express.urlencoded({ extended: false, limit: '64kb' }));
   app.get('/robots.txt', (_req, res) => {
@@ -501,13 +509,16 @@ function createApp(overrides = {}) {
   }));
 
   app.post('/api/series', meetingLimiter, auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
-    const created = await trainingSeries.createSeries({ ...req.body, createdBy: req.auth.u });
-    for (const meeting of created.sessions) await roomRegistry.createRoom(meeting.room, { meetingId: meeting.id });
-    await safeAudit({ actor: req.auth.u, action: 'SERIES_CREATED', target: created.series.id, metadata: { type: created.series.type, sessions: created.sessions.length }, ...auditContext(req) });
-    for (const meeting of created.sessions) {
-      await safeAudit({ actor: req.auth.u, action: 'MEETING_CREATED', target: meeting.id, room: meeting.room, metadata: { seriesId: created.series.id, sessionNumber: meeting.sessionNumber }, ...auditContext(req) });
-    }
-    res.status(201).json(await seriesPayload(created.series));
+    const result = await idempotency.runHttp(req, 'series:create', async () => {
+      const created = await trainingSeries.createSeries({ ...req.body, createdBy: req.auth.u });
+      for (const meeting of created.sessions) await roomRegistry.createRoom(meeting.room, { meetingId: meeting.id });
+      await safeAudit({ actor: req.auth.u, action: 'SERIES_CREATED', target: created.series.id, metadata: { type: created.series.type, sessions: created.sessions.length }, ...auditContext(req) });
+      for (const meeting of created.sessions) {
+        await safeAudit({ actor: req.auth.u, action: 'MEETING_CREATED', target: meeting.id, room: meeting.room, metadata: { seriesId: created.series.id, sessionNumber: meeting.sessionNumber }, ...auditContext(req) });
+      }
+      return { status: 201, body: await seriesPayload(created.series) };
+    });
+    res.status(result.status).json(result.body);
   }));
 
   app.get('/api/series/:seriesId', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
@@ -592,10 +603,13 @@ function createApp(overrides = {}) {
   }));
 
   app.post('/api/meetings', meetingLimiter, auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
-    const record = await meetings.createMeeting({ ...withoutSeriesLinkage(req.body), createdBy: req.auth.u });
-    await roomRegistry.createRoom(record.room, { meetingId: record.id });
-    await safeAudit({ actor: req.auth.u, action: 'MEETING_CREATED', target: record.id, room: record.room, metadata: { type: record.type, status: record.status }, ...auditContext(req) });
-    res.status(201).json(record);
+    const result = await idempotency.runHttp(req, 'meetings:create', async () => {
+      const record = await meetings.createMeeting({ ...withoutSeriesLinkage(req.body), createdBy: req.auth.u });
+      await roomRegistry.createRoom(record.room, { meetingId: record.id });
+      await safeAudit({ actor: req.auth.u, action: 'MEETING_CREATED', target: record.id, room: record.room, metadata: { type: record.type, status: record.status }, ...auditContext(req) });
+      return { status: 201, body: record };
+    });
+    res.status(result.status).json(result.body);
   }));
 
   app.get('/api/meetings/:room', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, (req, res) => {
@@ -623,19 +637,22 @@ function createApp(overrides = {}) {
     const action = req.params.action;
     const allowed = new Set(['reschedule', 'cancel', 'archive', 'restore', 'complete']);
     if (!allowed.has(action)) throw new AppError(400, 'Acción no válida', 'VALIDATION_ERROR');
-    const updated = await meetings.transitionMeeting(req.params.room, action, req.body || {});
-    if (updated.seriesId) await trainingSeries.touchSeries(updated.seriesId);
-    if (action === 'cancel' || action === 'archive' || action === 'complete') await roomRegistry.revokeRoom(updated.room);
-    if (action === 'restore') await roomRegistry.createRoom(updated.room, { meetingId: updated.id });
-    const auditAction = {
-      reschedule: 'MEETING_RESCHEDULED', cancel: 'MEETING_CANCELLED', archive: 'MEETING_ARCHIVED',
-      restore: 'MEETING_RESTORED', complete: 'ROOM_ENDED',
-    }[action];
-    await safeAudit({ actor: req.auth.u, action: auditAction, target: updated.id, room: updated.room, ...auditContext(req) });
-    if (action === 'reschedule' && updated.seriesId) {
-      await safeAudit({ actor: req.auth.u, action: 'SERIES_RESCHEDULED', target: updated.seriesId, room: updated.room, metadata: { meetingId: updated.id, sessionNumber: updated.sessionNumber, scheduledAt: updated.scheduledAt }, ...auditContext(req) });
-    }
-    res.json(updated);
+    const result = await idempotency.runHttp(req, `meetings:${req.params.room}:actions:${action}`, async () => {
+      const updated = await meetings.transitionMeeting(req.params.room, action, req.body || {});
+      if (updated.seriesId) await trainingSeries.touchSeries(updated.seriesId);
+      if (action === 'cancel' || action === 'archive' || action === 'complete') await roomRegistry.revokeRoom(updated.room);
+      if (action === 'restore') await roomRegistry.createRoom(updated.room, { meetingId: updated.id });
+      const auditAction = {
+        reschedule: 'MEETING_RESCHEDULED', cancel: 'MEETING_CANCELLED', archive: 'MEETING_ARCHIVED',
+        restore: 'MEETING_RESTORED', complete: 'ROOM_ENDED',
+      }[action];
+      await safeAudit({ actor: req.auth.u, action: auditAction, target: updated.id, room: updated.room, ...auditContext(req) });
+      if (action === 'reschedule' && updated.seriesId) {
+        await safeAudit({ actor: req.auth.u, action: 'SERIES_RESCHEDULED', target: updated.seriesId, room: updated.room, metadata: { meetingId: updated.id, sessionNumber: updated.sessionNumber, scheduledAt: updated.scheduledAt }, ...auditContext(req) });
+      }
+      return { status: 200, body: updated };
+    });
+    res.status(result.status).json(result.body);
   }));
 
   app.delete('/api/meetings/:room', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN'), requireManagedMeeting, asyncHandler(async (req, res) => {
@@ -653,19 +670,22 @@ function createApp(overrides = {}) {
     if (req.meeting.deletedAt || ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(req.meeting.status)) {
       throw new AppError(409, 'No se pueden crear invitaciones para esta reunión', 'MEETING_NOT_JOINABLE');
     }
-    const created = await invitations.createInvitation({
-      meetingId: req.meeting.id,
-      room: req.meeting.room,
-      role: req.body?.role,
-      meetingType: req.body?.meetingRole ? req.meeting.type : undefined,
-      meetingRole: req.body?.meetingRole,
-      expiresInMinutes: req.body?.expiresInMinutes,
-      singleUse: req.body?.singleUse === true,
-      maxUses: req.body?.maxUses,
-      createdBy: req.auth.u,
+    const result = await idempotency.runHttp(req, `meetings:${req.params.room}:invitations:create`, async () => {
+      const created = await invitations.createInvitation({
+        meetingId: req.meeting.id,
+        room: req.meeting.room,
+        role: req.body?.role,
+        meetingType: req.body?.meetingRole ? req.meeting.type : undefined,
+        meetingRole: req.body?.meetingRole,
+        expiresInMinutes: req.body?.expiresInMinutes,
+        singleUse: req.body?.singleUse === true,
+        maxUses: req.body?.maxUses,
+        createdBy: req.auth.u,
+      });
+      await safeAudit({ actor: req.auth.u, action: 'INVITATION_CREATED', target: created.invitation.id, room: req.meeting.room, metadata: { role: created.invitation.role, meetingRole: created.invitation.meetingRole, expiresAt: created.invitation.expiresAt }, ...auditContext(req) });
+      return { status: 201, body: { invitation: created.invitation, ...invitationSharePayload({ token: created.token, meeting: req.meeting, role: created.invitation.meetingRole }) } };
     });
-    await safeAudit({ actor: req.auth.u, action: 'INVITATION_CREATED', target: created.invitation.id, room: req.meeting.room, metadata: { role: created.invitation.role, meetingRole: created.invitation.meetingRole, expiresAt: created.invitation.expiresAt }, ...auditContext(req) });
-    res.status(201).json({ invitation: created.invitation, ...invitationSharePayload({ token: created.token, meeting: req.meeting, role: created.invitation.meetingRole }) });
+    res.status(result.status).json(result.body);
   }));
 
   app.delete('/api/meetings/:room/invitations/:id', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
@@ -1691,20 +1711,23 @@ function createApp(overrides = {}) {
   }));
 
   app.post('/api/room/end', requireRoomSession, requireRoomCsrf, roomMeeting, requireRoomCapability('canEndMeeting'), asyncHandler(async (req, res) => {
-    await assertCallerPresent(req);
-    try {
-      const egresses = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
-      const external = egresses.filter((info) => isFacebookEgress(req.roomSession.room, info));
-      await Promise.allSettled(external.map((info) => egressClient.stopEgress(info.egressId)));
-    } catch { /* An external destination must never block ending the meeting. */ }
-    const updated = await meetings.transitionMeeting(req.roomSession.room, 'complete');
-    await roomRegistry.revokeRoom(req.roomSession.room);
-    await roomService.deleteRoom(req.roomSession.room).catch((error) => {
-      if (!/not found/i.test(error.message || '')) throw error;
+    const result = await idempotency.runHttp(req, `room:${req.roomSession.room}:end`, async () => {
+      await assertCallerPresent(req);
+      try {
+        const egresses = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
+        const external = egresses.filter((info) => isFacebookEgress(req.roomSession.room, info));
+        await Promise.allSettled(external.map((info) => egressClient.stopEgress(info.egressId)));
+      } catch { /* An external destination must never block ending the meeting. */ }
+      const updated = await meetings.transitionMeeting(req.roomSession.room, 'complete');
+      await roomRegistry.revokeRoom(req.roomSession.room);
+      await roomService.deleteRoom(req.roomSession.room).catch((error) => {
+        if (!/not found/i.test(error.message || '')) throw error;
+      });
+      await safeAudit({ actor: req.roomSession.identity, action: 'ROOM_ENDED', target: updated.id, room: updated.room, ...auditContext(req) });
+      return { status: 200, body: { ended: true } };
     });
     res.setHeader('Set-Cookie', [clearRoomCookie(), clearRoomCookie(req.roomSessionSelector)]);
-    await safeAudit({ actor: req.roomSession.identity, action: 'ROOM_ENDED', target: updated.id, room: updated.room, ...auditContext(req) });
-    res.json({ ended: true });
+    res.status(result.status).json(result.body);
   }));
 
   app.get('/api/recordings', auth.requireAuth, auth.requireRoles('ADMIN', 'ORGANIZER'), asyncHandler(async (req, res) => {
@@ -1917,6 +1940,8 @@ function createApp(overrides = {}) {
       storage: { configured: storage.configured === true, available: storage.available === true, mode: storage.mode },
       recording: { available: recordingConfigured && livekit.available === true && storage.available === true },
       transcription: { configured: transcription.configured === true, available: transcription.available === true, status: transcription.status || (transcription.available ? 'healthy' : transcription.configured ? 'degraded' : 'disabled') },
+      redis: redis.diagnostics(),
+      livekitWebhooks: liveKitWebhooks.diagnostics(),
     };
     const requiredConfigured = !config.isProductionLike || (servicesStatus.livekit.configured && servicesStatus.storage.configured && recordingConfigured && (!config.transcriptionEnabled || servicesStatus.transcription.configured));
     const requiredAvailable = !config.isProductionLike || (servicesStatus.livekit.available && servicesStatus.storage.available && servicesStatus.recording.available && (!config.transcriptionEnabled || servicesStatus.transcription.available));

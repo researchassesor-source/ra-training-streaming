@@ -63,6 +63,7 @@ const config = {
   databaseDirectUrlConfigured: Boolean(process.env.DATABASE_URL_DIRECT),
   databasePoolMax: intFromEnv('DATABASE_POOL_MAX', 10, { min: 1, max: 50 }),
   databaseStatementTimeoutMs: intFromEnv('DATABASE_STATEMENT_TIMEOUT_MS', 15_000, { min: 1_000, max: 120_000 }),
+  redisUrlConfigured: Boolean(process.env.REDIS_URL),
   appTimeZone: String(process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
   appTimeZoneLabel: String(process.env.APP_TIME_ZONE_LABEL || process.env.APP_TIME_ZONE || 'America/Guayaquil').trim(),
   noIndex: appEnv === 'preview',
@@ -119,6 +120,7 @@ function validateRuntimeConfig(candidate = config) {
   if (!APP_ENVIRONMENTS.has(candidate.appEnv)) errors.push('APP_ENV debe ser development, test, preview o production.');
   if (!['legacy', 'postgres'].includes(candidate.dataBackend)) errors.push('DATA_BACKEND debe ser legacy o postgres.');
   if (candidate.dataBackend === 'postgres' && !candidate.databaseUrlConfigured) errors.push('DATABASE_URL is required when DATA_BACKEND=postgres.');
+  if (candidate.isProductionLike && !candidate.redisUrlConfigured) errors.push('REDIS_URL is required for distributed runtime.');
   if (!candidate.appName) errors.push('APP_NAME no puede estar vacío.');
   try { new Intl.DateTimeFormat('es-EC', { timeZone: candidate.appTimeZone }).format(new Date()); }
   catch { errors.push('APP_TIME_ZONE no es una zona horaria válida.'); }

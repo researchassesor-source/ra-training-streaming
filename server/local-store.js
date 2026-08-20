@@ -102,6 +102,7 @@ async function deleteJson(section, key) {
 
 async function withTransaction(callback) {
   if (!db.usingPostgres()) return callback();
+  if (currentClient()) return callback();
   return db.transaction((client) => transactionContext.run(client, callback));
 }
 
@@ -114,6 +115,7 @@ module.exports = {
   readLegacyJson,
   listJson,
   listLegacyJson,
+  currentClient,
   deleteJson,
   usesPostgres: db.usingPostgres,
   withTransaction,

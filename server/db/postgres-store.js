@@ -140,6 +140,9 @@ function projection(section, key, data) {
         join_count: Number(data.joinCount || 0),
         accumulated_ms: Number(data.accumulatedMs || 0),
         active_since: asIso(data.activeSince),
+        last_presence_event_at: asIso(data.lastPresenceEventAt),
+        last_presence_event_type: data.lastPresenceEventType || null,
+        active_identity: data.activeIdentity || data.participantIdentity || null,
         created_at: asIso(data.createdAt || data.firstJoinedAt),
         updated_at: asIso(data.updatedAt || data.lastLeftAt || data.lastJoinedAt),
       };
@@ -238,10 +241,10 @@ async function syncAuxiliary(section, projectionRow, data, client) {
   }
 }
 
-async function readJson(section, key, client = db.getPool()) {
+async function readJson(section, key, client = db.getPool(), options = {}) {
   const table = tableFor(section);
   const normalized = normalizedKey(section, key);
-  const result = await client.query(`SELECT data FROM ${table} WHERE store_key = $1`, [normalized]);
+  const result = await client.query(`SELECT data FROM ${table} WHERE store_key = $1${options.forUpdate ? ' FOR UPDATE' : ''}`, [normalized]);
   return result.rows[0]?.data;
 }
 

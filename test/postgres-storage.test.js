@@ -46,6 +46,16 @@ test('initial PostgreSQL migration defines relational tables, foreign keys and u
   assert.match(sql, /PRIMARY KEY \(question_id, participant_identity\)/);
 });
 
+test('distributed resilience migration defines durable webhook and idempotency state', () => {
+  const sql = fs.readFileSync(path.join(__dirname, '..', 'server', 'db', 'migrations', '002_distributed_resilience.sql'), 'utf8');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS livekit_webhook_events/);
+  assert.match(sql, /event_id TEXT PRIMARY KEY/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS idempotency_keys/);
+  assert.match(sql, /PRIMARY KEY \(scope, key\)/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS last_presence_event_at/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS last_presence_event_type/);
+});
+
 test('legacy importer maps stable keys without exposing plaintext secrets', () => {
   assert.equal(importer.keyFor('users', { username: 'admin' }), 'admin');
   assert.equal(importer.keyFor('meetings', { room: 'sala-uno' }), 'sala-uno');

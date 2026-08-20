@@ -2,6 +2,9 @@ const { GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, storageConfigured, bucket } = require('./s3');
 const localStore = require('./local-store');
 const { config } = require('./config');
+const redis = require('./redis');
+const distributedLock = require('./redis/distributed-lock');
+const { AppError } = require('./http-utils');
 
 const KEY_PREFIX = 'room-configs/';
 const CACHE_TTL_MS = 30_000;
@@ -97,6 +100,13 @@ async function setRoomLock(room, locked, actor) {
 
 async function withAdmissionLock(room, operation) {
   const key = String(room);
+  if (redis.hasRedis()) {
+    const token = await distributedLock.acquire(`room-admission:${key}`, 5_000);
+    if (!token) throw new AppError(409, 'Otra operación está actualizando la sala. Intenta nuevamente.', 'ROOM_CONCURRENT_UPDATE');
+    try { return await localStore.withTransaction(operation); } finally {
+      await distributedLock.release(`room-admission:${key}`, token).catch(() => null);
+    }
+  }
   const previous = admissionLocks.get(key) || Promise.resolve();
   let release;
   const current = new Promise((resolve) => { release = resolve; });

@@ -15,6 +15,7 @@ const questions = require('../server/questions');
 const audit = require('../server/audit');
 const transcriptions = require('../server/transcriptions');
 const postgresStore = require('../server/db/postgres-store');
+const liveKitWebhooks = require('../server/livekit-webhooks');
 
 const runId = `pg-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -138,6 +139,37 @@ test('audit events list by their real timestamp column', async () => {
   assert.equal(events.length, 2);
   assert.equal(events[0].id, `${runId}-audit-new`);
   assert.equal(events[1].id, `${runId}-audit-old`);
+});
+
+test('LiveKit webhook deduplication and attendance effects are durable in PostgreSQL', async () => {
+  const created = await trainingSeries.createSeries({
+    title: `${runId} Webhook`, trainerName: 'Trainer', type: 'WEBINAR', timezone: 'America/Guayaquil',
+    sessions: [{ scheduledAt: '2035-04-03T10:00:00.000Z', durationMinutes: 60 }],
+    createdBy: runId,
+  });
+  const meeting = created.sessions[0];
+  const participantKey = `${runId}-webhook-participant`;
+  const body = JSON.stringify({
+    id: `${runId}-webhook-join`,
+    event: 'participant_joined',
+    createdAt: Math.floor(new Date('2035-04-03T10:00:00.000Z').getTime() / 1000),
+    room: { sid: `${runId}-room-sid`, name: meeting.room },
+    participant: {
+      sid: `${runId}-participant-sid`,
+      identity: `${runId}-identity`,
+      name: 'Webhook Participant',
+      metadata: JSON.stringify({ participantKey }),
+    },
+  });
+  const first = await liveKitWebhooks.receiveLiveKitWebhook(body, null, { skipAuth: true });
+  const second = await liveKitWebhooks.receiveLiveKitWebhook(body, null, { skipAuth: true });
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  const stored = await db.query('SELECT status FROM livekit_webhook_events WHERE event_id = $1', [`${runId}-webhook-join`]);
+  assert.equal(stored.rows[0].status, 'PROCESSED');
+  const record = await attendance.getRecord({ seriesId: created.series.id, meetingId: meeting.id, participantKey });
+  assert.equal(record.joinCount, 1);
+  assert.equal(record.activeSince, '2035-04-03T10:00:00.000Z');
 });
 
 test('rooms, attendance, questions, audit and transcriptions round-trip structured state', async () => {

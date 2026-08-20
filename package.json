@@ -13,6 +13,7 @@
     "build": "npm run build:track-processors",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "test:postgres": "node scripts/test-postgres.js",
+    "test:redis": "node scripts/test-redis.js",
     "test:watch": "node --test --watch --test-concurrency=1 \"test/*.test.js\"",
     "db:migrate": "node server/db/migrate.js migrate",
     "db:status": "node server/db/migrate.js status",
@@ -29,7 +30,8 @@
     "livekit-client": "^2.21.0",
     "livekit-server-sdk": "^2.9.4",
     "multer": "^2.2.0",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "redis": "^4.7.1"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"
