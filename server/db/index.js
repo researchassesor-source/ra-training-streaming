@@ -13,11 +13,27 @@ function connectionString({ direct = false } = {}) {
     : (process.env.DATABASE_URL || '');
 }
 
+function connectionOptions(url) {
+  const options = { connectionString: url };
+  try {
+    const parsed = new URL(url);
+    const sslMode = parsed.searchParams.get('sslmode');
+    if (['require', 'verify-ca', 'verify-full'].includes(sslMode)) {
+      parsed.searchParams.delete('sslmode');
+      options.connectionString = parsed.toString();
+      options.ssl = { rejectUnauthorized: true };
+    }
+  } catch {
+    // Let pg surface malformed connection strings without logging their content.
+  }
+  return options;
+}
+
 function createPool({ direct = false } = {}) {
   const url = connectionString({ direct });
   if (!url) throw new Error(direct ? 'DATABASE_URL_DIRECT or DATABASE_URL is required for PostgreSQL administration.' : 'DATABASE_URL is required when DATA_BACKEND=postgres.');
   return new Pool({
-    connectionString: url,
+    ...connectionOptions(url),
     max: config.databasePoolMax,
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 30_000,
@@ -66,6 +82,7 @@ async function closePool() {
 module.exports = {
   closePool,
   connectionString,
+  connectionOptions,
   createPool,
   getPool,
   ping,

@@ -29,7 +29,10 @@ function asIso(value) {
 }
 
 function normalizedKey(section, key, data = {}) {
-  if (section === 'questions' || section === 'speaker-requests' || section === 'chat-pins') return String(data.id || key).split('/').pop();
+  if (section === 'questions' || section === 'speaker-requests' || section === 'chat-pins') {
+    if (data.id) return String(data.id);
+    return String(key).split('/').pop().split('--').pop();
+  }
   return String(key);
 }
 
@@ -249,6 +252,7 @@ async function deleteJson(section, key, client = db.getPool()) {
 module.exports = {
   deleteJson,
   listJson,
+  normalizedKey,
   readJson,
   tableFor,
   writeJson,

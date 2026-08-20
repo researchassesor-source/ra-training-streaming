@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateRuntimeConfig } = require('../server/config');
+const db = require('../server/db');
+const postgresStore = require('../server/db/postgres-store');
 const importer = require('../scripts/db-import-legacy');
 
 test('PostgreSQL runtime configuration fails closed without DATABASE_URL', () => {
@@ -51,4 +53,16 @@ test('legacy importer maps stable keys without exposing plaintext secrets', () =
   const source = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-import-legacy.js'), 'utf8');
   assert.doesNotMatch(source, /console\.log\(.*token/i);
   assert.doesNotMatch(source, /console\.log\(.*password/i);
+});
+
+test('PostgreSQL id-backed records resolve legacy room-prefixed keys', () => {
+  assert.equal(postgresStore.normalizedKey('questions', 'sala%20uno--question-123'), 'question-123');
+  assert.equal(postgresStore.normalizedKey('questions', 'sala%20uno--ignored', { id: 'question-456' }), 'question-456');
+  assert.equal(postgresStore.normalizedKey('chat-pins', 'sala%20uno--pin-123'), 'pin-123');
+});
+
+test('PostgreSQL SSL options make sslmode=require explicit without disabling verification', () => {
+  const options = db.connectionOptions('postgres://user:pass@example.test/db?sslmode=require');
+  assert.equal(options.ssl.rejectUnauthorized, true);
+  assert.doesNotMatch(options.connectionString, /sslmode=/);
 });
