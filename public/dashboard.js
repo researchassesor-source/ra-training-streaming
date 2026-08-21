@@ -203,7 +203,10 @@ function meetingMatchesFilters(meeting) {
 function meetingAction(label, action, meeting, className = 'secondary compact') {
   const button = textElement('button', label, className);
   button.type = 'button';
-  button.addEventListener('click', () => action(meeting));
+  button.addEventListener('click', () => {
+    closeActionMenus({ restoreFocus: false });
+    action(meeting);
+  });
   return button;
 }
 
@@ -278,6 +281,79 @@ function renderTrainingSeries() {
     return;
   }
   for (const series of filteredSeries) list.appendChild(renderSeriesCard(series));
+}
+
+function mobileActionMenus() {
+  return window.matchMedia('(max-width: 700px)').matches;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function openActionMenus() {
+  return [...document.querySelectorAll('.action-menu[open]')];
+}
+
+function closeActionMenus({ except = null, restoreFocus = false } = {}) {
+  for (const menu of openActionMenus()) {
+    if (menu === except) continue;
+    const trigger = menu.querySelector(':scope > summary');
+    menu.open = false;
+    menu.classList.remove('opens-up', 'opens-down');
+    menu.closest('.training-series-card, .meeting-card, .recording-card')?.classList.remove('menu-open');
+    const items = menu.querySelector('.action-menu-items');
+    if (items) {
+      items.style.left = '';
+      items.style.top = '';
+      items.style.right = '';
+      items.style.bottom = '';
+      items.style.maxHeight = '';
+      items.style.width = '';
+    }
+    if (restoreFocus) trigger?.focus();
+  }
+}
+
+function positionActionMenu(menu) {
+  if (!menu?.open) return;
+  const items = menu.querySelector('.action-menu-items');
+  const trigger = menu.querySelector(':scope > summary');
+  if (!items || !trigger) return;
+  menu.closest('.training-series-card, .meeting-card, .recording-card')?.classList.add('menu-open');
+  if (mobileActionMenus()) {
+    menu.classList.remove('opens-up', 'opens-down');
+    items.style.left = '';
+    items.style.top = '';
+    items.style.right = '';
+    items.style.bottom = '';
+    items.style.maxHeight = '';
+    items.style.width = '';
+    return;
+  }
+  const margin = 12;
+  const gap = 8;
+  const triggerRect = trigger.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  items.style.width = `${Math.min(280, viewportWidth - margin * 2)}px`;
+  items.style.maxHeight = `${viewportHeight - margin * 2}px`;
+  const itemRect = items.getBoundingClientRect();
+  const width = itemRect.width || Math.min(280, viewportWidth - margin * 2);
+  const height = Math.min(itemRect.height || 0, viewportHeight - margin * 2);
+  const spaceBelow = viewportHeight - triggerRect.bottom - margin;
+  const spaceAbove = triggerRect.top - margin;
+  const opensUp = spaceBelow < height + gap && spaceAbove > spaceBelow;
+  const left = clampNumber(triggerRect.right - width, margin, Math.max(margin, viewportWidth - width - margin));
+  const top = opensUp
+    ? clampNumber(triggerRect.top - height - gap, margin, Math.max(margin, viewportHeight - height - margin))
+    : clampNumber(triggerRect.bottom + gap, margin, Math.max(margin, viewportHeight - height - margin));
+  menu.classList.toggle('opens-up', opensUp);
+  menu.classList.toggle('opens-down', !opensUp);
+  items.style.left = `${left}px`;
+  items.style.top = `${top}px`;
+  items.style.right = 'auto';
+  items.style.bottom = 'auto';
 }
 
 function renderMeetings() {
@@ -439,11 +515,11 @@ async function saveSeries(event) {
 async function seriesTransition(series, status) {
   const archived = status === 'ARCHIVED';
   if (!await askConfirmation({
-    title: archived ? 'Archivar capacitación' : 'Restaurar capacitación',
+    title: archived ? '¿Archivar esta capacitación?' : '¿Restaurar esta capacitación?',
     message: archived
-      ? `“${series.title}” saldrá del listado normal, pero sus datos y sesiones se conservarán.`
+      ? 'La capacitación dejará de aparecer entre las activas y sus sesiones dejarán de mostrarse como disponibles. Podrás restaurarla más adelante.'
       : `“${series.title}” volverá al listado principal de capacitaciones.`,
-    confirmLabel: archived ? 'Archivar' : 'Restaurar',
+    confirmLabel: archived ? 'Archivar capacitación' : 'Restaurar capacitación',
     danger: archived,
   })) return;
   try {
@@ -1115,7 +1191,30 @@ document.getElementById('calendarToday').addEventListener('click', () => { state
 function closeSidebar() { document.getElementById('dashboardSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('visible'); document.getElementById('sidebarOverlay').setAttribute('aria-hidden', 'true'); document.getElementById('menuToggle').setAttribute('aria-expanded', 'false'); }
 document.getElementById('menuToggle').addEventListener('click', () => { const sidebar = document.getElementById('dashboardSidebar'); const open = sidebar.classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('visible', open); document.getElementById('sidebarOverlay').setAttribute('aria-hidden', String(!open)); document.getElementById('menuToggle').setAttribute('aria-expanded', String(open)); if (open) sidebar.querySelector('button:not([hidden])')?.focus(); });
 document.getElementById('sidebarOverlay').addEventListener('click', closeSidebar);
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeSidebar(); document.getElementById('menuToggle').focus(); } });
+document.addEventListener('click', (event) => {
+  const summary = event.target.closest('.action-menu > summary');
+  if (summary) {
+    const menu = summary.parentElement;
+    closeActionMenus({ except: menu });
+    window.requestAnimationFrame(() => {
+      if (menu.open) positionActionMenu(menu);
+      else {
+        menu.classList.remove('opens-up', 'opens-down');
+        menu.closest('.training-series-card, .meeting-card, .recording-card')?.classList.remove('menu-open');
+      }
+    });
+    return;
+  }
+  if (!event.target.closest('.action-menu')) closeActionMenus();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const hadOpenMenu = openActionMenus().length > 0;
+  closeActionMenus({ restoreFocus: hadOpenMenu });
+  if (!hadOpenMenu) { closeSidebar(); document.getElementById('menuToggle').focus(); }
+});
+window.addEventListener('resize', () => openActionMenus().forEach(positionActionMenu));
+document.getElementById('dashboardMain').addEventListener('scroll', () => openActionMenus().forEach(positionActionMenu), { passive: true });
 window.addEventListener('offline', () => notice('Parece que no tienes conexión. Algunas acciones pueden fallar hasta reconectarte.', 'error'));
 window.addEventListener('online', () => notice('Conexión restaurada.'));
 for (const id of ['userPassword', 'userPasswordConfirm']) document.getElementById(id).addEventListener('input', () => { const password = document.getElementById('userPassword').value; const confirmation = document.getElementById('userPasswordConfirm').value; const match = document.getElementById('userPasswordMatch'); match.textContent = confirmation ? (password === confirmation ? 'Las contraseñas coinciden.' : 'Las contraseñas no coinciden.') : ''; match.className = `password-match ${password === confirmation ? 'matches' : 'mismatch'}`; });

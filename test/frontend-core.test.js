@@ -208,6 +208,21 @@ test('dashboard information architecture separates trainings from independent me
   assert.doesNotMatch(html, /data-section-panel="meetings"[\s\S]*data-open-series/);
 });
 
+test('training action menu is viewport-aware and exposes archive restore actions', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '..', 'public', 'dashboard.js'), 'utf8');
+  assert.match(css, /\.training-series-card\s*\{[^}]*overflow: visible/);
+  assert.match(css, /\.action-menu-items\s*\{[^}]*position: fixed/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*\.action-menu-items\s*\{[^}]*position: static/);
+  assert.match(script, /function positionActionMenu/);
+  assert.match(script, /function closeActionMenus/);
+  assert.match(script, /openActionMenus\(\)\.length/);
+  assert.match(script, /Archivar capacitación/);
+  assert.match(script, /Restaurar capacitación/);
+  assert.match(script, /¿Archivar esta capacitación\?/);
+  assert.match(script, /¿Restaurar esta capacitación\?/);
+});
+
 test('visible roles and room connection failures are translated safely', () => {
   assert.equal(roleLabel('ADMIN'), 'Administrador');
   assert.equal(roleLabel('VIEWER'), 'Asistente');
