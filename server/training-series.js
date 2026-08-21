@@ -273,6 +273,35 @@ async function updateSeries(id, input) {
   return writeSeries({ ...existing, ...clean, id: existing.id, updatedAt: new Date().toISOString() });
 }
 
+async function archiveSeries(id, { archivedAt, sessionStates } = {}) {
+  const existing = await getSeries(id);
+  if (!existing) throw new AppError(404, 'Capacitaci\u00f3n no encontrada', 'NOT_FOUND');
+  const now = archivedAt || new Date().toISOString();
+  return writeSeries({
+    ...existing,
+    id: existing.id,
+    status: 'ARCHIVED',
+    archivedAt: existing.archivedAt || now,
+    archivedSessionStates: sessionStates && typeof sessionStates === 'object' ? sessionStates : existing.archivedSessionStates || {},
+    updatedAt: now,
+  });
+}
+
+async function restoreSeries(id) {
+  const existing = await getSeries(id);
+  if (!existing) throw new AppError(404, 'Capacitaci\u00f3n no encontrada', 'NOT_FOUND');
+  const now = new Date().toISOString();
+  const { archivedSessionStates, ...rest } = existing;
+  return writeSeries({
+    ...rest,
+    id: existing.id,
+    status: 'ACTIVE',
+    archivedAt: null,
+    restoredAt: now,
+    updatedAt: now,
+  });
+}
+
 async function touchSeries(id) {
   const existing = await getSeries(id);
   return existing ? writeSeries({ ...existing, updatedAt: new Date().toISOString() }) : null;
@@ -280,12 +309,14 @@ async function touchSeries(id) {
 
 module.exports = {
   STATUSES,
+  archiveSeries,
   createSeries,
   getSeries,
   listSeries,
   normalizeStoredSeries,
   normalizeSeriesInput,
   resolveSeriesSession,
+  restoreSeries,
   seriesSessions,
   touchSeries,
   updateSeries,

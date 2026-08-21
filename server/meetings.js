@@ -301,6 +301,9 @@ async function transitionMeeting(room, action, data = {}) {
   }
   if (!transitions[action]) throw new AppError(400, 'Acción de reunión no válida', 'VALIDATION_ERROR');
   if (existing.deletedAt && action !== 'restore') throw new AppError(409, 'La reunión está eliminada', 'MEETING_DELETED');
+  if (action === 'start' && ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(existing.status)) {
+    throw new AppError(409, 'La reunión no se puede iniciar en su estado actual', 'MEETING_NOT_JOINABLE');
+  }
   return writeMeeting({ ...existing, ...transitions[action], updatedAt: now });
 }
 

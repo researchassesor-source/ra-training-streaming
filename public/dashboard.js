@@ -517,7 +517,7 @@ async function seriesTransition(series, status) {
   if (!await askConfirmation({
     title: archived ? '¿Archivar esta capacitación?' : '¿Restaurar esta capacitación?',
     message: archived
-      ? 'La capacitación dejará de aparecer entre las activas y sus sesiones dejarán de mostrarse como disponibles. Podrás restaurarla más adelante.'
+      ? 'Se desactivará la capacitación, se cerrarán sesiones activas y se impedirán nuevos accesos. Las grabaciones y el historial se conservarán.'
       : `“${series.title}” volverá al listado principal de capacitaciones.`,
     confirmLabel: archived ? 'Archivar capacitación' : 'Restaurar capacitación',
     danger: archived,

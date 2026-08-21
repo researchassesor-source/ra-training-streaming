@@ -321,6 +321,129 @@ function createApp(overrides = {}) {
     return { ...series, sessions, resolution: trainingSeries.resolveSeriesSession(series, sessions, now) };
   }
 
+  async function stopActiveEgresses(room) {
+    try {
+      const active = await egressClient.listEgress({ roomName: room, active: true });
+      const results = await Promise.allSettled((active || []).map((info) => egressClient.stopEgress(info.egressId)));
+      return {
+        attempted: (active || []).length,
+        stopped: results.filter((result) => result.status === 'fulfilled').length,
+        failed: results.filter((result) => result.status === 'rejected').length,
+      };
+    } catch (error) {
+      log('warn', 'series_archive_egress_stop_failed', { room, errorName: error.name, errorCode: error.code });
+      return { attempted: 0, stopped: 0, failed: 1 };
+    }
+  }
+
+  async function closeLiveKitRoom(room) {
+    try {
+      await roomService.deleteRoom(room);
+      return true;
+    } catch (error) {
+      log('warn', 'series_archive_livekit_room_close_failed', { room, errorName: error.name, errorCode: error.code });
+      return false;
+    }
+  }
+
+  async function revokeSeriesAccesses(seriesId) {
+    const active = (await seriesAccesses.listAccesses({ seriesId }))
+      .filter((access) => access.status === 'ACTIVE' && !access.revokedAt);
+    await Promise.all(active.map((access) => seriesAccesses.revokeAccess(access.id, seriesId)));
+    return active.length;
+  }
+
+  async function revokeSessionInvitations(sessions) {
+    let count = 0;
+    for (const meeting of sessions) {
+      const active = (await invitations.listInvitations({ room: meeting.room }))
+        .filter((invitation) => invitation.status === 'ACTIVE' && !invitation.revokedAt);
+      for (const invitation of active) {
+        await invitations.revokeInvitation(invitation.id, meeting.room);
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async function archiveTrainingSeries(series, req) {
+    const sessions = await trainingSeries.seriesSessions(series.id, { includeDeleted: true });
+    const sessionStates = { ...(series.archivedSessionStates || {}) };
+    const now = new Date().toISOString();
+    const summary = {
+      archivedSessions: 0,
+      restoredSessions: 0,
+      revokedAccesses: 0,
+      revokedInvitations: 0,
+      stoppedEgresses: 0,
+      egressStopFailures: 0,
+      closedLivekitRooms: 0,
+    };
+
+    for (const meeting of sessions) {
+      if (['DRAFT', 'SCHEDULED', 'LIVE'].includes(meeting.status)) {
+        if (!sessionStates[meeting.room]) {
+          sessionStates[meeting.room] = {
+            id: meeting.id,
+            room: meeting.room,
+            status: meeting.status,
+            scheduledAt: meeting.scheduledAt || null,
+            archivedBySeriesAt: now,
+          };
+        }
+        if (meeting.status === 'LIVE') {
+          const egress = await stopActiveEgresses(meeting.room);
+          summary.stoppedEgresses += egress.stopped;
+          summary.egressStopFailures += egress.failed;
+          if (await closeLiveKitRoom(meeting.room)) summary.closedLivekitRooms += 1;
+        }
+        const archived = await meetings.transitionMeeting(meeting.room, 'archive');
+        await roomRegistry.revokeRoom(archived.room);
+        summary.archivedSessions += 1;
+      }
+    }
+
+    summary.revokedInvitations = await revokeSessionInvitations(sessions);
+    summary.revokedAccesses = await revokeSeriesAccesses(series.id);
+    const updated = await trainingSeries.archiveSeries(series.id, { archivedAt: now, sessionStates });
+    if (series.status !== 'ARCHIVED') {
+      await safeAudit({
+        actor: req.auth.u,
+        action: 'SERIES_ARCHIVED',
+        target: updated.id,
+        metadata: summary,
+        ...auditContext(req),
+      });
+    }
+    return updated;
+  }
+
+  async function restoreTrainingSeries(series, req) {
+    const sessions = await trainingSeries.seriesSessions(series.id, { includeDeleted: true });
+    const sessionStates = series.archivedSessionStates && typeof series.archivedSessionStates === 'object'
+      ? series.archivedSessionStates
+      : {};
+    const summary = { restoredSessions: 0 };
+    for (const meeting of sessions) {
+      const previous = sessionStates[meeting.room];
+      if (!previous || meeting.status !== 'ARCHIVED' || !['DRAFT', 'SCHEDULED'].includes(previous.status)) continue;
+      const restored = await meetings.transitionMeeting(meeting.room, 'restore');
+      await roomRegistry.createRoom(restored.room, { meetingId: restored.id });
+      summary.restoredSessions += 1;
+    }
+    const updated = await trainingSeries.restoreSeries(series.id);
+    if (series.status === 'ARCHIVED') {
+      await safeAudit({
+        actor: req.auth.u,
+        action: 'SERIES_RESTORED',
+        target: updated.id,
+        metadata: summary,
+        ...auditContext(req),
+      });
+    }
+    return updated;
+  }
+
   async function activeSeriesAccess(session) {
     const access = await seriesAccesses.getAccess(session?.accessId);
     if (!access || access.seriesId !== session.seriesId || access.status !== 'ACTIVE' || access.revokedAt) {
@@ -533,8 +656,15 @@ function createApp(overrides = {}) {
   }));
 
   app.patch('/api/series/:seriesId', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedSeries, asyncHandler(async (req, res) => {
-    const updated = await trainingSeries.updateSeries(req.params.seriesId, req.body || {});
-    await safeAudit({ actor: req.auth.u, action: 'SERIES_UPDATED', target: updated.id, metadata: { status: updated.status }, ...auditContext(req) });
+    const requestedStatus = Object.prototype.hasOwnProperty.call(req.body || {}, 'status') ? String(req.body.status || '').toUpperCase() : null;
+    const updated = requestedStatus === 'ARCHIVED'
+      ? await archiveTrainingSeries(req.trainingSeries, req)
+      : requestedStatus === 'ACTIVE' && req.trainingSeries.status === 'ARCHIVED'
+        ? await restoreTrainingSeries(req.trainingSeries, req)
+        : await trainingSeries.updateSeries(req.params.seriesId, req.body || {});
+    if (!['ARCHIVED', 'ACTIVE'].includes(requestedStatus) || (requestedStatus === 'ACTIVE' && req.trainingSeries.status !== 'ARCHIVED')) {
+      await safeAudit({ actor: req.auth.u, action: 'SERIES_UPDATED', target: updated.id, metadata: { status: updated.status }, ...auditContext(req) });
+    }
     res.json(await seriesPayload(updated));
   }));
 

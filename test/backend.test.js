@@ -31,6 +31,7 @@ const mockRoomService = {
   participants: [],
   sentData: [],
   updates: [],
+  deletedRooms: [],
   async listParticipants() { return this.participants; },
   async updateParticipant(room, identity, update) {
     this.updates.push({ room, identity, update });
@@ -42,7 +43,7 @@ const mockRoomService = {
   },
   async removeParticipant() {},
   async mutePublishedTrack() {},
-  async deleteRoom() {},
+  async deleteRoom(room) { this.deletedRooms.push(room); },
   async sendData(room, data, kind, options) { this.sentData.push({ room, data: JSON.parse(Buffer.from(data).toString('utf8')), kind, options }); },
 };
 const mockEgressClient = {
@@ -1157,6 +1158,106 @@ test('stable series access waits without LiveKit, enters only when live and adva
   assert.equal(relinkAttempt.response.status, 200, JSON.stringify(relinkAttempt.data));
   assert.equal(relinkAttempt.data.seriesId, created.data.id);
   assert.equal(relinkAttempt.data.sessionNumber, 2);
+});
+
+test('archiving a training series fully deactivates sessions and stable access without deleting history', async () => {
+  mockEgressClient.reset();
+  mockRoomService.deletedRooms = [];
+  const admin = await login();
+  const base = Date.now() + 6 * 60 * 60_000;
+  const created = await request('/api/series', {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf,
+    body: {
+      title: `Ciclo desactivación ${Date.now()}`,
+      trainerName: 'Operaciones RA',
+      type: 'WEBINAR',
+      timezone: 'America/Guayaquil',
+      earlyAccessMinutes: 120,
+      allowRecording: true,
+      sessions: [0, 1, 2].map((offset) => ({ scheduledAt: new Date(base + offset * 60 * 60_000).toISOString(), durationMinutes: 45 })),
+    },
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.data));
+  const [liveSession, futureSession, completedSession] = created.data.sessions;
+  const draftSession = await meetings.createMeeting({
+    title: `${created.data.title} · Borrador`,
+    trainerName: 'Operaciones RA',
+    type: 'WEBINAR',
+    room: `serie-draft-archive-${Date.now()}`,
+    scheduledAt: null,
+    status: 'DRAFT',
+    durationMinutes: 45,
+    seriesId: created.data.id,
+    sessionNumber: 4,
+    createdBy: admin.user.username,
+  });
+  await rooms.createRoom(draftSession.room, { meetingId: draftSession.id });
+  await meetings.transitionMeeting(liveSession.room, 'start', { livekitConfirmedAt: new Date().toISOString() });
+  await meetings.transitionMeeting(completedSession.room, 'complete');
+  const individual = await request(`/api/series/${created.data.id}/accesses`, {
+    method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: { participantName: 'Acceso activo', participantKey: `archive-person-${Date.now()}` },
+  });
+  const general = await request(`/api/series/${created.data.id}/general-access`, { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(individual.response.status, 201, JSON.stringify(individual.data));
+  assert.equal(general.response.status, 201, JSON.stringify(general.data));
+  const invitation = await invitations.createInvitation({
+    meetingId: futureSession.id,
+    room: futureSession.room,
+    role: 'VIEWER',
+    meetingType: futureSession.type,
+    createdBy: admin.user.username,
+  });
+  await audit.logEvent({ actor: 'system', action: 'RECORDING_STARTED', target: 'recording-history-kept', room: liveSession.room, metadata: { seriesId: created.data.id } });
+  mockEgressClient.items.push(
+    { egressId: 'archive-recording-egress', roomName: liveSession.room, status: 'EGRESS_ACTIVE', fileResults: [{}], request: { value: { file: {} } } },
+    { egressId: 'archive-stream-egress', roomName: liveSession.room, status: 'EGRESS_STARTING', streamResults: [{}], request: { value: { streamOutputs: [{}] } } },
+  );
+
+  const archived = await request(`/api/series/${created.data.id}`, {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'ARCHIVED' },
+  });
+  assert.equal(archived.response.status, 200, JSON.stringify(archived.data));
+  assert.equal(archived.data.status, 'ARCHIVED');
+  const archivedStatuses = Object.fromEntries(archived.data.sessions.map((session) => [session.room, session.status]));
+  assert.equal(archivedStatuses[liveSession.room], 'ARCHIVED');
+  assert.equal(archivedStatuses[futureSession.room], 'ARCHIVED');
+  assert.equal(archivedStatuses[draftSession.room], 'ARCHIVED');
+  assert.equal(archivedStatuses[completedSession.room], 'COMPLETED');
+  assert.deepEqual(new Set(mockEgressClient.stops), new Set(['archive-recording-egress', 'archive-stream-egress']));
+  assert.deepEqual(mockRoomService.deletedRooms, [liveSession.room]);
+  assert.equal((await rooms.checkAccess(liveSession.room)).allowed, false);
+  assert.equal((await rooms.checkAccess(futureSession.room)).allowed, false);
+  await assert.rejects(() => meetings.transitionMeeting(futureSession.room, 'start'), (error) => error.code === 'MEETING_NOT_JOINABLE');
+  const revokedIndividual = await request(new URL(individual.data.access.url).pathname, { redirect: 'manual' });
+  const revokedGeneral = await request(new URL(general.data.access.url).pathname, { redirect: 'manual' });
+  assert.equal(revokedIndividual.response.status, 410);
+  assert.equal(revokedGeneral.response.status, 410);
+  await assert.rejects(() => invitations.consumeInvitation(invitation.token), (error) => error.code === 'INVITATION_REVOKED');
+
+  const stopCount = mockEgressClient.stops.length;
+  const closeCount = mockRoomService.deletedRooms.length;
+  const secondArchive = await request(`/api/series/${created.data.id}`, {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'ARCHIVED' },
+  });
+  assert.equal(secondArchive.response.status, 200, JSON.stringify(secondArchive.data));
+  assert.equal(mockEgressClient.stops.length, stopCount);
+  assert.equal(mockRoomService.deletedRooms.length, closeCount);
+  assert.equal((await audit.listEvents({ action: 'SERIES_ARCHIVED' })).filter((event) => event.target === created.data.id).length, 1);
+
+  const restored = await request(`/api/series/${created.data.id}`, {
+    method: 'PATCH', cookie: admin.cookie, csrf: admin.csrf, body: { status: 'ACTIVE' },
+  });
+  assert.equal(restored.response.status, 200, JSON.stringify(restored.data));
+  assert.equal(restored.data.status, 'ACTIVE');
+  const restoredStatuses = Object.fromEntries(restored.data.sessions.map((session) => [session.room, session.status]));
+  assert.equal(restoredStatuses[liveSession.room], 'ARCHIVED');
+  assert.equal(restoredStatuses[futureSession.room], 'SCHEDULED');
+  assert.equal(restoredStatuses[draftSession.room], 'DRAFT');
+  assert.equal(restoredStatuses[completedSession.room], 'COMPLETED');
+  assert.equal((await request(new URL(individual.data.access.url).pathname, { redirect: 'manual' })).response.status, 410);
+  await assert.rejects(() => invitations.consumeInvitation(invitation.token), (error) => error.code === 'INVITATION_REVOKED');
+  assert.ok((await audit.listEvents({ room: liveSession.room, limit: 100 })).some((event) => event.target === 'recording-history-kept'));
+  assert.equal((await audit.listEvents({ action: 'SERIES_RESTORED' })).filter((event) => event.target === created.data.id).length, 1);
 });
 
 test('one general series URL resolves three sessions and creates separate attendee identities', async () => {
