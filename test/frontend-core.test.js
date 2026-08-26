@@ -223,6 +223,10 @@ test('training action menu is viewport-aware and exposes archive restore actions
   assert.match(css, /\.meeting-card\.menu-open[\s\S]*transform: none/);
   assert.match(css, /\.recording-card\.menu-open[\s\S]*transform: none/);
   assert.match(script, /function positionActionMenu/);
+  assert.match(script, /function portalActionMenuItems/);
+  assert.match(script, /document\.body\.appendChild\(items\)/);
+  assert.match(script, /function restoreActionMenuItems/);
+  assert.match(script, /function eventInsideActionMenu/);
   assert.match(script, /function closeActionMenus/);
   assert.match(script, /openActionMenus\(\)\.length/);
   assert.match(script, /Archivar capacitación/);

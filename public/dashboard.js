@@ -295,6 +295,30 @@ function openActionMenus() {
   return [...document.querySelectorAll('.action-menu[open]')];
 }
 
+const actionMenuPortals = new WeakMap();
+
+function actionMenuItems(menu) {
+  return menu?.querySelector('.action-menu-items') || actionMenuPortals.get(menu)?.items || null;
+}
+
+function portalActionMenuItems(menu, items) {
+  if (!menu || !items || items.parentElement === document.body || mobileActionMenus()) return;
+  const placeholder = document.createComment('action-menu-items');
+  items.replaceWith(placeholder);
+  document.body.appendChild(items);
+  items.classList.add('is-portaled');
+  actionMenuPortals.set(menu, { items, placeholder });
+}
+
+function restoreActionMenuItems(menu) {
+  const portal = actionMenuPortals.get(menu);
+  if (!portal) return;
+  portal.items.classList.remove('is-portaled');
+  if (portal.placeholder.parentNode) portal.placeholder.replaceWith(portal.items);
+  else menu.appendChild(portal.items);
+  actionMenuPortals.delete(menu);
+}
+
 function closeActionMenus({ except = null, restoreFocus = false } = {}) {
   for (const menu of openActionMenus()) {
     if (menu === except) continue;
@@ -302,7 +326,7 @@ function closeActionMenus({ except = null, restoreFocus = false } = {}) {
     menu.open = false;
     menu.classList.remove('opens-up', 'opens-down');
     menu.closest('.training-series-card, .meeting-card, .recording-card')?.classList.remove('menu-open');
-    const items = menu.querySelector('.action-menu-items');
+    const items = actionMenuItems(menu);
     if (items) {
       items.style.left = '';
       items.style.top = '';
@@ -311,13 +335,14 @@ function closeActionMenus({ except = null, restoreFocus = false } = {}) {
       items.style.maxHeight = '';
       items.style.width = '';
     }
+    restoreActionMenuItems(menu);
     if (restoreFocus) trigger?.focus();
   }
 }
 
 function positionActionMenu(menu) {
   if (!menu?.open) return;
-  const items = menu.querySelector('.action-menu-items');
+  const items = actionMenuItems(menu);
   const trigger = menu.querySelector(':scope > summary');
   if (!items || !trigger) return;
   menu.closest('.training-series-card, .meeting-card, .recording-card')?.classList.add('menu-open');
@@ -329,6 +354,7 @@ function positionActionMenu(menu) {
     items.style.bottom = '';
     items.style.maxHeight = '';
     items.style.width = '';
+    restoreActionMenuItems(menu);
     return;
   }
   const margin = 12;
@@ -336,8 +362,13 @@ function positionActionMenu(menu) {
   const triggerRect = trigger.getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
   const viewportHeight = document.documentElement.clientHeight;
+  portalActionMenuItems(menu, items);
   items.style.width = `${Math.min(280, viewportWidth - margin * 2)}px`;
   items.style.maxHeight = `${viewportHeight - margin * 2}px`;
+  items.style.left = `${margin}px`;
+  items.style.top = `${margin}px`;
+  items.style.right = 'auto';
+  items.style.bottom = 'auto';
   const itemRect = items.getBoundingClientRect();
   const width = itemRect.width || Math.min(280, viewportWidth - margin * 2);
   const height = Math.min(itemRect.height || 0, viewportHeight - margin * 2);
@@ -354,6 +385,11 @@ function positionActionMenu(menu) {
   items.style.top = `${top}px`;
   items.style.right = 'auto';
   items.style.bottom = 'auto';
+}
+
+function eventInsideActionMenu(event) {
+  if (event.target.closest('.action-menu')) return true;
+  return openActionMenus().some((menu) => actionMenuItems(menu)?.contains(event.target));
 }
 
 function renderMeetings() {
@@ -1220,11 +1256,21 @@ document.addEventListener('click', (event) => {
       else {
         menu.classList.remove('opens-up', 'opens-down');
         menu.closest('.training-series-card, .meeting-card, .recording-card')?.classList.remove('menu-open');
+        const items = actionMenuItems(menu);
+        if (items) {
+          items.style.left = '';
+          items.style.top = '';
+          items.style.right = '';
+          items.style.bottom = '';
+          items.style.maxHeight = '';
+          items.style.width = '';
+        }
+        restoreActionMenuItems(menu);
       }
     });
     return;
   }
-  if (!event.target.closest('.action-menu')) closeActionMenus();
+  if (!eventInsideActionMenu(event)) closeActionMenus();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
