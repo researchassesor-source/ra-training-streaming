@@ -151,7 +151,8 @@
       <h2>Configurar Facebook Live</h2>
       <p>Obtén estos datos desde Facebook Live Producer.</p>
       <label>Servidor RTMP/RTMPS<input id="facebookServerUrl" type="text" inputmode="url" maxlength="512" autocomplete="off" spellcheck="false" placeholder="rtmps://live-api-s.facebook.com:443/rtmp/" required /></label>
-      <label>Clave de transmisión<input id="facebookStreamKey" type="password" maxlength="512" autocomplete="off" spellcheck="false" required /></label>
+      <label>Clave de transmisión<input id="facebookStreamKey" type="password" maxlength="512" autocomplete="off" spellcheck="false" aria-describedby="facebookStreamKeyHelp" required /></label>
+      <p id="facebookStreamKeyHelp" class="muted small">Pega la Stream Key completa de Facebook, incluyendo los parámetros después de “?” si aparecen.</p>
       <ol class="facebook-live-steps">
         <li>Abre Facebook Live Producer.</li><li>Selecciona “Software de streaming”.</li><li>Copia Server URL y Stream Key.</li><li>Pégalos en R.A. Training.</li><li>Pulsa “Iniciar transmisión”.</li><li>Cuando Facebook muestre la previsualización, vuelve allí y pulsa “Transmitir en vivo”.</li>
       </ol>

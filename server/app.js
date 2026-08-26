@@ -63,6 +63,7 @@ const { createLiveKitStatusProbe } = require('./livekit-status');
 const { assertValidFileContent } = require('./file-validation');
 const {
   facebookStateFromEgress,
+  facebookStartFailureMessage,
   isRecordingEgress,
   isStreamingEgress,
   validateFacebookDestination,
@@ -2006,7 +2007,7 @@ function createApp(overrides = {}) {
         }
       }
       if (error instanceof AppError) throw error;
-      throw new AppError(502, 'No fue posible iniciar la señal hacia Facebook', 'FACEBOOK_EGRESS_FAILED');
+      throw new AppError(502, facebookStartFailureMessage(error), 'FACEBOOK_EGRESS_FAILED');
     } finally {
       output.urls.fill('');
       if (req.body) req.body.streamKey = '';

@@ -41,7 +41,7 @@ function validateFacebookDestination(serverUrl, streamKey) {
   if (serverUrl !== serverUrl.trim() || streamKey !== streamKey.trim() || /[\u0000-\u001f\u007f]/.test(serverUrl + streamKey)) {
     throw new AppError(400, 'Los datos de Facebook Live no tienen un formato válido', 'FACEBOOK_DESTINATION_INVALID');
   }
-  if (/[\s/?#]/.test(streamKey)) {
+  if (/[\s/#]/.test(streamKey) || /^(?:https?|rtmps?):\/\//i.test(streamKey)) {
     throw new AppError(400, 'La clave de transmisión no tiene un formato válido', 'FACEBOOK_STREAM_KEY_INVALID');
   }
   let parsed;
@@ -56,6 +56,17 @@ function validateFacebookDestination(serverUrl, streamKey) {
   return {
     output: { protocol: StreamProtocol.RTMP, urls: [`${serverUrl.replace(/\/+$/, '')}/${streamKey}`] },
   };
+}
+
+function facebookStartFailureMessage(error) {
+  const detail = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''}`.toLowerCase();
+  if (/egress|unavailable|deadline|timeout|connection|connect|refused|not found|grpc|14/.test(detail)) {
+    return 'No fue posible iniciar la señal hacia Facebook. Verifica que LiveKit Egress esté habilitado y que la reunión siga en vivo.';
+  }
+  if (/unauthor|permission|credential|api[_ -]?key|api[_ -]?secret|token/.test(detail)) {
+    return 'No fue posible iniciar la señal hacia Facebook. Verifica las credenciales de LiveKit configuradas en el servidor.';
+  }
+  return 'No fue posible iniciar la señal hacia Facebook. Verifica el Server URL y la Stream Key de Facebook Live Producer e inténtalo otra vez.';
 }
 
 function facebookStateFromEgress(info, metadata = {}) {
@@ -87,5 +98,6 @@ module.exports = {
   facebookStateFromEgress,
   isRecordingEgress,
   isStreamingEgress,
+  facebookStartFailureMessage,
   validateFacebookDestination,
 };

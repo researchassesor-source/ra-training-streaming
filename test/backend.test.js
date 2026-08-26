@@ -624,7 +624,7 @@ test('manual Facebook Live uses a host-only, secret-free and recording-independe
     assert.equal(invalid.response.status, 400);
   }
 
-  const secret = 'facebook-secret-key-123';
+  const secret = 'facebook-secret-key-123?s_bl=1&s_ps=1&s_sw=0&s_vt=api-s&a=abc_DEF-123.%25';
   const serverUrl = 'rtmps://live-api-s.facebook.com:443/rtmp/';
   const started = await request('/api/facebook-live/start', {
     method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
@@ -676,6 +676,7 @@ test('manual Facebook Live uses a host-only, secret-free and recording-independe
   });
   assert.equal(failed.response.status, 502);
   assert.equal(failed.data.code, 'FACEBOOK_EGRESS_FAILED');
+  assert.match(failed.data.error, /LiveKit Egress|Server URL|Stream Key/);
   assert.doesNotMatch(JSON.stringify(failed.data), new RegExp(failedSecret));
   assert.equal((await meetings.getMeeting(meeting.room)).status, 'LIVE');
   mockEgressClient.failStart = null;

@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const {
   facebookStateFromEgress,
+  facebookStartFailureMessage,
   isRecordingEgress,
   isStreamingEgress,
   validateFacebookDestination,
@@ -14,13 +15,26 @@ test('Facebook destination accepts only bounded RTMP/RTMPS server and key values
   const secure = validateFacebookDestination('rtmps://live-api-s.facebook.com:443/rtmp/', 'stream-key_123');
   assert.equal(secure.output.protocol, 1);
   assert.deepEqual(secure.output.urls, ['rtmps://live-api-s.facebook.com:443/rtmp/stream-key_123']);
+  const facebookProducerKey = '1234567890?s_bl=1&s_ps=1&s_sw=0&s_vt=api-s&a=AbCdEf_123-456.%25';
+  assert.deepEqual(
+    validateFacebookDestination('rtmps://live-api-s.facebook.com:443/rtmp/', facebookProducerKey).output.urls,
+    [`rtmps://live-api-s.facebook.com:443/rtmp/${facebookProducerKey}`]
+  );
   assert.deepEqual(validateFacebookDestination('rtmp://example.test/live', 'stream-key_456').output.urls, ['rtmp://example.test/live/stream-key_456']);
   for (const invalid of ['https://facebook.example/live', 'ftp://facebook.example/live', 'file:///tmp/live', 'javascript:alert(1)']) {
     assert.throws(() => validateFacebookDestination(invalid, 'stream-key_123'), /Solo se permiten|servidor RTMP/);
   }
   assert.throws(() => validateFacebookDestination('rtmps://example.test/live?secret=value', 'stream-key_123'), /Solo se permiten/);
   assert.throws(() => validateFacebookDestination('rtmps://example.test/live', 'key/with/path'), /clave de transmisión/);
+  assert.throws(() => validateFacebookDestination('rtmps://example.test/live', 'rtmps://live-api-s.facebook.com:443/rtmp/key'), /clave de transmisión/);
   assert.throws(() => validateFacebookDestination('rtmps://example.test/live', 'x'.repeat(513)), /clave de transmisión/);
+});
+
+test('Facebook start failures stay actionable without exposing stream secrets', () => {
+  const secret = 'abc123?s_bl=1&token=do-not-leak';
+  const message = facebookStartFailureMessage(new Error(`egress connection refused for ${secret}`));
+  assert.match(message, /LiveKit Egress/);
+  assert.doesNotMatch(message, /do-not-leak|abc123/);
 });
 
 test('streaming and recording Egress stay distinct and expose honest states', () => {
