@@ -31,10 +31,14 @@ test('Facebook destination accepts only bounded RTMP/RTMPS server and key values
 });
 
 test('Facebook start failures stay actionable without exposing stream secrets', () => {
-  const secret = 'abc123?s_bl=1&token=do-not-leak';
-  const message = facebookStartFailureMessage(new Error(`egress connection refused for ${secret}`));
+  const secret = 'FB-122108851215399299-0-Ab4MKBTBLBdmCDezapWFKEEu';
+  const message = facebookStartFailureMessage(
+    new Error(`egress connection refused for rtmps://live-api-s.facebook.com:443/rtmp/${secret}`),
+    { safeMessage: 'egress connection refused for rtmps=[redacted]' }
+  );
   assert.match(message, /LiveKit Egress/);
-  assert.doesNotMatch(message, /do-not-leak|abc123/);
+  assert.match(message, /Detalle seguro/);
+  assert.doesNotMatch(message, /Ab4MKBTBLBdmCDezapWFKEEu|live-api-s\.facebook\.com/);
 });
 
 test('streaming and recording Egress stay distinct and expose honest states', () => {

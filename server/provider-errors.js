@@ -5,6 +5,7 @@ const TERMINAL_HTTP = new Set([400, 401, 403, 404, 413, 415, 422]);
 const SECRET_PATTERNS = [
   /authorization:\s*[^\s,;]+/ig,
   /(token|secret|password|api[_-]?key|stream[_-]?key)=([^&\s]+)/ig,
+  /FB-\d+-\d+-[A-Za-z0-9_-]+/g,
   /(rediss?|postgres(?:ql)?):\/\/[^\s]+/ig,
   /rtmps?:\/\/[^\s]+/ig,
 ];

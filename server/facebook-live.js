@@ -58,15 +58,18 @@ function validateFacebookDestination(serverUrl, streamKey) {
   };
 }
 
-function facebookStartFailureMessage(error) {
+function facebookStartFailureMessage(error, classified = null) {
   const detail = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''}`.toLowerCase();
+  const providerDetail = classified?.safeMessage && classified.safeMessage !== 'No fue posible completar la operación externa.'
+    ? ` Detalle seguro: ${classified.safeMessage}`
+    : '';
   if (/egress|unavailable|deadline|timeout|connection|connect|refused|not found|grpc|14/.test(detail)) {
-    return 'No fue posible iniciar la señal hacia Facebook. Verifica que LiveKit Egress esté habilitado y que la reunión siga en vivo.';
+    return `No fue posible iniciar la señal hacia Facebook. Verifica que LiveKit Egress esté habilitado y que la reunión siga en vivo.${providerDetail}`;
   }
   if (/unauthor|permission|credential|api[_ -]?key|api[_ -]?secret|token/.test(detail)) {
-    return 'No fue posible iniciar la señal hacia Facebook. Verifica las credenciales de LiveKit configuradas en el servidor.';
+    return `No fue posible iniciar la señal hacia Facebook. Verifica las credenciales de LiveKit configuradas en el servidor.${providerDetail}`;
   }
-  return 'No fue posible iniciar la señal hacia Facebook. Verifica el Server URL y la Stream Key de Facebook Live Producer e inténtalo otra vez.';
+  return `No fue posible iniciar la señal hacia Facebook. Verifica el Server URL y la Stream Key de Facebook Live Producer e inténtalo otra vez.${providerDetail}`;
 }
 
 function facebookStateFromEgress(info, metadata = {}) {

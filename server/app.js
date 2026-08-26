@@ -1995,8 +1995,9 @@ function createApp(overrides = {}) {
       await relayRoomData(req, { kind: 'external-stream-status', ...state, sentAt: new Date().toISOString() });
       res.status(201).json({ ...state, alreadyRunning: false });
     } catch (error) {
+      let classified = null;
       if (durableSession) {
-        const classified = classifyProviderError(error, { provider: 'livekit', operation: 'startFacebookLive', creatingSideEffect: true });
+        classified = classifyProviderError(error, { provider: 'livekit', operation: 'startFacebookLive', creatingSideEffect: true });
         await externalSessions.updateFacebook(durableSession.id, {
           status: classified.unknownSideEffect ? 'PENDING_RECONCILIATION' : 'FAILED',
           lastErrorCode: classified.code,
@@ -2007,7 +2008,7 @@ function createApp(overrides = {}) {
         }
       }
       if (error instanceof AppError) throw error;
-      throw new AppError(502, facebookStartFailureMessage(error), 'FACEBOOK_EGRESS_FAILED');
+      throw new AppError(502, facebookStartFailureMessage(error, classified), 'FACEBOOK_EGRESS_FAILED');
     } finally {
       output.urls.fill('');
       if (req.body) req.body.streamKey = '';
