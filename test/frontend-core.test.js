@@ -220,6 +220,8 @@ test('training action menu is viewport-aware and exposes archive restore actions
   assert.match(css, /\.training-series-card\s*\{[^}]*overflow: visible/);
   assert.match(css, /\.action-menu-items\s*\{[^}]*position: fixed/);
   assert.match(css, /@media \(max-width: 700px\)[\s\S]*\.action-menu-items\s*\{[^}]*position: static/);
+  assert.match(css, /\.meeting-card\.menu-open[\s\S]*transform: none/);
+  assert.match(css, /\.recording-card\.menu-open[\s\S]*transform: none/);
   assert.match(script, /function positionActionMenu/);
   assert.match(script, /function closeActionMenus/);
   assert.match(script, /openActionMenus\(\)\.length/);
