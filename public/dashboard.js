@@ -385,6 +385,8 @@ function renderMeetings() {
       actions.append(meetingAction('Editar', openMeetingDialog, meeting));
       if (!['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(meeting.status)) {
         actions.append(meetingAction(meeting.status === 'LIVE' ? 'Abrir sala' : 'Iniciar', launchMeeting, meeting, 'primary compact'));
+        actions.append(meetingAction('Enlace anfitrión', (item) => openSimpleMeetingAccessDialog(item, 'HOST'), meeting, 'secondary compact'));
+        actions.append(meetingAction('Enlace participante', (item) => openSimpleMeetingAccessDialog(item, 'PARTICIPANT'), meeting, 'secondary compact'));
       }
       const recording = state.recordings.find((item) => item.meetingId === meeting.id && item.status === 'READY');
       if (recording?.transcript) {
@@ -395,9 +397,6 @@ function renderMeetings() {
       const menu = document.createElement('details'); menu.className = 'action-menu';
       const summary = document.createElement('summary'); summary.textContent = 'Más acciones'; menu.appendChild(summary);
       const menuItems = document.createElement('div'); menuItems.className = 'action-menu-items';
-      for (const role of RATCore.MEETING_ROLES[meeting.type] || []) {
-        menuItems.append(meetingAction(`Preparar acceso de ${RATCore.roleLabel(role).toLowerCase()}`, (item) => openInvitationDialog(item, role), meeting));
-      }
       menuItems.append(meetingAction('Duplicar', duplicateMeeting, meeting));
       if (!['CANCELLED', 'COMPLETED', 'ARCHIVED'].includes(meeting.status)) menuItems.append(meetingAction('Cancelar', (item) => meetingTransition(item, 'cancel'), meeting));
       if (meeting.status !== 'ARCHIVED') menuItems.append(meetingAction('Archivar', (item) => meetingTransition(item, 'archive'), meeting));
@@ -767,6 +766,11 @@ async function createInvitation(meeting, role) {
   return data;
 }
 
+async function createSimpleMeetingAccess(meeting, kind) {
+  const data = await api(`/api/meetings/${encodeURIComponent(meeting.room)}/simple-accesses/${kind}`, { method: 'POST', body: {} });
+  return data.access;
+}
+
 async function copyText(value) {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
   const input = document.createElement('textarea');
@@ -789,11 +793,26 @@ async function openInvitationDialog(meeting, role) {
   } catch (error) { notice(error.message, 'error'); }
 }
 
+async function openSimpleMeetingAccessDialog(meeting, kind) {
+  try {
+    const access = await createSimpleMeetingAccess(meeting, kind);
+    state.invitation = { ...access, title: meeting.title, role: access.meetingRole };
+    document.getElementById('invitationDialogTitle').textContent = meeting.title;
+    document.getElementById('invitationRole').textContent = access.kind === 'HOST'
+      ? 'Acceso único de anfitrión · reutilizable por varios anfitriones autorizados.'
+      : 'Acceso único de participante · reutilizable por todo el grupo con identidades separadas.';
+    document.getElementById('invitationMessage').value = access.message;
+    document.getElementById('invitationUrl').value = access.url;
+    document.getElementById('shareInvitation').hidden = typeof navigator.share !== 'function';
+    document.getElementById('invitationDialog').showModal();
+  } catch (error) { notice(error.message, 'error'); }
+}
+
 async function copyCurrentInvitation(field) {
   if (!state.invitation) return;
   try {
     await copyText(state.invitation[field]);
-    notice(field === 'url' ? 'Enlace privado copiado.' : 'Mensaje de invitación copiado.');
+    notice(field === 'url' ? 'Enlace copiado.' : 'Mensaje de invitación copiado.');
   } catch (error) { notice(error.message, 'error'); }
 }
 

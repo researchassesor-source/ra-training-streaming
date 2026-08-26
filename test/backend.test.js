@@ -933,6 +933,55 @@ test('canonical invitations bind modality and role, force privileged single use 
   assert.deepEqual(session.data.publishSources.sort(), ['CAMERA', 'MICROPHONE'].sort());
 });
 
+test('simple meeting links expose only reusable host and participant access with separate identities', async () => {
+  const admin = await login();
+  const meeting = await meetings.createMeeting({
+    title: 'Reunión enlaces simples', room: 'reunion-enlaces-simples', trainerName: 'Trainer',
+    scheduledAt: null, durationMinutes: 60, status: 'LIVE', type: 'WEBINAR', createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+
+  const hostAccess = await request(`/api/meetings/${meeting.room}/simple-accesses/HOST`, { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  const hostAgain = await request(`/api/meetings/${meeting.room}/simple-accesses/HOST`, { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  const participantAccess = await request(`/api/meetings/${meeting.room}/simple-accesses/PARTICIPANT`, { method: 'POST', cookie: admin.cookie, csrf: admin.csrf, body: {} });
+  assert.equal(hostAccess.response.status, 200, JSON.stringify(hostAccess.data));
+  assert.equal(hostAgain.response.status, 200, JSON.stringify(hostAgain.data));
+  assert.equal(participantAccess.response.status, 200, JSON.stringify(participantAccess.data));
+  assert.equal(hostAccess.data.access.url, hostAgain.data.access.url);
+  assert.match(hostAccess.data.access.path, /^\/a\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(hostAccess.data.access.meetingRole, 'HOST');
+  assert.equal(participantAccess.data.access.meetingRole, 'ATTENDEE');
+  assert.match(hostAccess.data.access.message, /varios anfitriones autorizados|permisos de anfitrión/i);
+  assert.match(participantAccess.data.access.message, /Cada persona tendrá su propia identidad/i);
+
+  async function redeem(path) {
+    const redemption = await request(path, { redirect: 'manual' });
+    assert.equal(redemption.response.status, 303, JSON.stringify(redemption.data));
+    const roomSessionId = new URL(redemption.response.headers.get('location'), baseUrl).searchParams.get('roomSession');
+    const session = await request('/api/room-session', { cookie: redemption.cookies.join('; '), roomSessionId });
+    assert.equal(session.response.status, 200, JSON.stringify(session.data));
+    return { location: redemption.response.headers.get('location'), session: session.data };
+  }
+
+  const hostA = await redeem(hostAccess.data.access.path);
+  const hostB = await redeem(hostAccess.data.access.path);
+  assert.match(hostA.location, /^\/presenter\.html\?roomSession=/);
+  assert.match(hostB.location, /^\/presenter\.html\?roomSession=/);
+  assert.notEqual(hostA.session.identity, hostB.session.identity);
+  assert.equal(hostA.session.meetingRole, 'HOST');
+  assert.equal(hostB.session.role, 'ORGANIZER');
+  assert.equal(hostA.session.capabilities.canManageRoom, true);
+
+  const participantA = await redeem(participantAccess.data.access.path);
+  const participantB = await redeem(participantAccess.data.access.path);
+  assert.match(participantA.location, /^\/viewer\.html\?roomSession=/);
+  assert.notEqual(participantA.session.identity, participantB.session.identity);
+  assert.equal(participantA.session.meetingRole, 'ATTENDEE');
+  assert.equal(participantB.session.role, 'VIEWER');
+  assert.equal(participantA.session.capabilities.canManageRoom, false);
+  assert.equal(participantA.session.capabilities.canUsePresenterPanel, false);
+});
+
 test('viewer consent is persisted and required before issuing a LiveKit token', async () => {
   const meeting = await meetings.createMeeting({
     title: 'Consentimiento verificable', room: 'consentimiento-verificable', trainerName: 'Trainer', scheduledAt: null,

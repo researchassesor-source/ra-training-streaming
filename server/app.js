@@ -6,8 +6,8 @@ const { PutObjectCommand, ListObjectsV2Command, GetObjectCommand, DeleteObjectCo
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { AccessToken, RoomServiceClient, EgressClient, EgressStatus, EncodedFileType, DataPacket_Kind, TrackSource } = require('livekit-server-sdk');
 const { s3, storageConfigured, bucket, storageStatus } = require('./s3');
-const { config } = require('./config');
-const { invitationSharePayload } = require('./invitation-message');
+const { config, publicUrl } = require('./config');
+const { buildInvitationMessage, invitationSharePayload } = require('./invitation-message');
 const { log } = require('./logger');
 const roomRegistry = require('./rooms');
 const auth = require('./auth');
@@ -54,6 +54,7 @@ const {
   legacyDefaultMeetingRole,
   legacyRoleForMeetingRole,
   normalizeMeetingRole,
+  normalizeMeetingType,
   resolvePublishSources,
   roleCapabilities,
 } = require('./meeting-permissions');
@@ -157,6 +158,75 @@ function liveKitSourceValues(sourceNames = []) {
 function publishPermission(sourceNames = []) {
   const canPublishSources = liveKitSourceValues(sourceNames);
   return { permission: { canPublish: canPublishSources.length > 0, canPublishSources, canSubscribe: true, canPublishData: false } };
+}
+
+function simpleAccessMeetingRole(type, kind) {
+  const meetingType = normalizeMeetingType(type);
+  const normalized = String(kind || '').toUpperCase();
+  if (normalized === 'HOST') return meetingType === 'CLASS' ? 'TEACHER' : 'HOST';
+  if (normalized === 'PARTICIPANT') {
+    if (meetingType === 'SESSION') return 'PARTICIPANT';
+    if (meetingType === 'CLASS') return 'STUDENT';
+    return 'ATTENDEE';
+  }
+  throw new AppError(400, 'Tipo de acceso no válido', 'VALIDATION_ERROR');
+}
+
+function simpleAccessKind(value) {
+  const kind = String(value || '').toUpperCase();
+  if (['HOST', 'PARTICIPANT'].includes(kind)) return kind;
+  throw new AppError(400, 'Tipo de acceso no válido', 'VALIDATION_ERROR');
+}
+
+function simpleAccessSecret() {
+  return config.invitationHashSecret || config.sessionSecret;
+}
+
+function signSimpleMeetingAccessPayload(payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', simpleAccessSecret()).update(body).digest('base64url');
+  return `${body}.${signature}`;
+}
+
+function readSimpleMeetingAccessToken(token) {
+  const text = String(token || '');
+  const [body, signature, extra] = text.split('.');
+  if (!body || !signature || extra || body.length > 900 || signature.length > 120) {
+    throw new AppError(404, 'Acceso no válido', 'MEETING_ACCESS_INVALID');
+  }
+  const expected = crypto.createHmac('sha256', simpleAccessSecret()).update(body).digest('base64url');
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw new AppError(404, 'Acceso no válido', 'MEETING_ACCESS_INVALID');
+  let payload;
+  try { payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { throw new AppError(404, 'Acceso no válido', 'MEETING_ACCESS_INVALID'); }
+  if (payload?.type !== 'meeting-access' || payload.v !== 1) throw new AppError(404, 'Acceso no válido', 'MEETING_ACCESS_INVALID');
+  return payload;
+}
+
+function simpleMeetingAccessPayload(meeting, kind) {
+  const accessKind = simpleAccessKind(kind);
+  const meetingRole = simpleAccessMeetingRole(meeting.type, accessKind);
+  const token = signSimpleMeetingAccessPayload({
+    type: 'meeting-access',
+    v: 1,
+    room: meeting.room,
+    meetingId: meeting.id,
+    kind: accessKind,
+    meetingRole,
+  });
+  const path = `/a/${token}`;
+  const url = publicUrl(path);
+  const message = buildInvitationMessage({ meeting, role: meetingRole, url, sharedAccess: true });
+  return {
+    kind: accessKind,
+    role: accessKind === 'HOST' ? 'Anfitrión' : 'Participante',
+    meetingRole,
+    path,
+    url,
+    message,
+    whatsappUrl: `https://wa.me/?text=${encodeURIComponent(message)}`,
+  };
 }
 
 async function requireManagedMeeting(req, _res, next) {
@@ -825,6 +895,22 @@ function createApp(overrides = {}) {
     res.status(result.status).json(result.body);
   }));
 
+  app.post('/api/meetings/:room/simple-accesses/:kind', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
+    if (req.meeting.deletedAt || ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(req.meeting.status)) {
+      throw new AppError(409, 'No se pueden crear accesos para esta reunión', 'MEETING_NOT_JOINABLE');
+    }
+    const access = simpleMeetingAccessPayload(req.meeting, req.params.kind);
+    await safeAudit({
+      actor: req.auth.u,
+      action: 'INVITATION_CREATED',
+      target: req.meeting.id,
+      room: req.meeting.room,
+      metadata: { accessKind: access.kind, meetingRole: access.meetingRole, stable: true },
+      ...auditContext(req),
+    });
+    res.json({ access });
+  }));
+
   app.delete('/api/meetings/:room/invitations/:id', auth.requireAuth, auth.requireCsrf, auth.requireRoles('ADMIN', 'ORGANIZER'), requireManagedMeeting, asyncHandler(async (req, res) => {
     const invitation = await invitations.revokeInvitation(req.params.id, req.params.room);
     await safeAudit({ actor: req.auth.u, action: 'INVITATION_REVOKED', target: invitation.id, room: invitation.room, ...auditContext(req) });
@@ -986,6 +1072,42 @@ function createApp(overrides = {}) {
     const viewerAccess = invitation.legacyAccess ? invitation.role === 'VIEWER' : invitation.meetingRole === 'ATTENDEE';
     const destination = viewerAccess ? '/viewer.html' : '/presenter.html';
     res.redirect(303, `${destination}?roomSession=${encodeURIComponent(created.session.sid)}`);
+  }));
+
+  app.get('/a/:token', asyncHandler(async (req, res) => {
+    const access = readSimpleMeetingAccessToken(req.params.token);
+    const meeting = await meetings.getMeeting(access.room);
+    if (!meeting || meeting.id !== access.meetingId || meeting.deletedAt || ['CANCELLED', 'ARCHIVED', 'COMPLETED'].includes(meeting.status)) {
+      throw new AppError(410, 'Esta reunión ya no admite accesos', 'MEETING_NOT_JOINABLE');
+    }
+    const meetingRole = normalizeMeetingRole(meeting.type, access.meetingRole);
+    const accessKind = simpleAccessKind(access.kind);
+    const roomAccess = await roomRegistry.checkAccess(meeting.room, { allowLocked: accessKind === 'HOST' });
+    if (!roomAccess.allowed) {
+      const locked = roomAccess.reason === 'ROOM_LOCKED';
+      throw new AppError(locked ? 423 : 503, locked ? 'La sala está bloqueada y no admite nuevos accesos' : 'La sala no está disponible', roomAccess.reason);
+    }
+    const role = legacyRoleForMeetingRole(meeting.type, meetingRole, accessKind === 'HOST' ? 'ORGANIZER' : 'VIEWER');
+    const created = createRoomSession({
+      room: meeting.room,
+      meetingId: meeting.id,
+      role,
+      meetingType: meeting.type,
+      meetingRole,
+      legacyAccess: false,
+      invitationId: `simple-${accessKind.toLowerCase()}`,
+    });
+    res.setHeader('Set-Cookie', [roomCookie(created.token), roomCookie(created.token, created.session.sid)]);
+    await safeAudit({
+      actor: created.session.identity,
+      action: 'INVITATION_REDEEMED',
+      target: meeting.id,
+      room: meeting.room,
+      metadata: { accessKind, meetingRole, stable: true },
+      ...auditContext(req),
+    });
+    const viewerAccess = ['ATTENDEE', 'PARTICIPANT', 'STUDENT'].includes(meetingRole);
+    res.redirect(303, `${viewerAccess ? '/viewer.html' : '/presenter.html'}?roomSession=${encodeURIComponent(created.session.sid)}`);
   }));
 
   app.get('/api/room-session', requireRoomSession, asyncHandler(async (req, res) => {
@@ -1280,6 +1402,21 @@ function createApp(overrides = {}) {
     });
     await safeAudit({ actor: req.roomSession.identity, action: 'INVITATION_CREATED', target: created.invitation.id, room: req.meeting.room, metadata: { role: created.invitation.role, meetingRole: created.invitation.meetingRole, source: 'in-room' }, ...auditContext(req) });
     res.status(201).json({ invitation: created.invitation, ...invitationSharePayload({ token: created.token, meeting: req.meeting, role: created.invitation.meetingRole }) });
+  }));
+
+  app.post('/api/room/simple-accesses/:kind', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, requireRoomCapability('canManageInvitations'), asyncHandler(async (req, res) => {
+    if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
+    await assertCallerPresent(req);
+    const access = simpleMeetingAccessPayload(req.meeting, req.params.kind);
+    await safeAudit({
+      actor: req.roomSession.identity,
+      action: 'INVITATION_CREATED',
+      target: req.meeting.id,
+      room: req.meeting.room,
+      metadata: { accessKind: access.kind, meetingRole: access.meetingRole, stable: true, source: 'in-room' },
+      ...auditContext(req),
+    });
+    res.json({ access });
   }));
 
   app.post('/api/room/media-state', requireRoomSession, requireRoomCsrf, interactionLimiter, roomMeeting, asyncHandler(async (req, res) => {

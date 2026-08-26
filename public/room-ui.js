@@ -633,9 +633,9 @@ function renderParticipants(participants = []) {
     empty.className = 'empty-state compact participants-empty';
     empty.append(
       Object.assign(document.createElement('strong'), { textContent: 'Esperando participantes…' }),
-      Object.assign(document.createElement('span'), { textContent: 'Comparte un enlace seguro para invitar asistentes o panelistas.' }),
-      actionButton('Copiar enlace de asistente', () => createInRoomInvitation('VIEWER'), 'primary compact'),
-      actionButton('Copiar enlace de panelista', () => createInRoomInvitation('PANELIST'), 'secondary compact'),
+      Object.assign(document.createElement('span'), { textContent: 'Comparte un enlace seguro para invitar anfitriones o participantes.' }),
+      actionButton('Copiar enlace de participante', () => createInRoomAccess('PARTICIPANT'), 'primary compact'),
+      actionButton('Copiar enlace de anfitrión', () => createInRoomAccess('HOST'), 'secondary compact'),
     );
     container.appendChild(empty);
   }
@@ -1300,6 +1300,22 @@ async function createInRoomInvitation(role) {
   } catch (error) { showMessage(error.message, true); }
 }
 
+async function createInRoomAccess(kind) {
+  try {
+    const result = await roomRequest(`/api/room/simple-accesses/${kind}`, { method: 'POST', body: {} }, ui.session.csrfToken);
+    const access = result.access || {};
+    await copyText(access.message || access.url);
+    notifier.notify(`simple-access-${kind}`, {
+      title: 'Enlace copiado',
+      message: access.kind === 'HOST'
+        ? 'El enlace de anfitrión puede usarse por varios anfitriones autorizados.'
+        : 'El enlace de participante puede enviarse al grupo sin pisar identidades.',
+      tone: 'success',
+      system: false,
+    });
+  } catch (error) { showMessage(error.message, true); }
+}
+
 async function sendReaction(reaction) {
   if (!ui.session.meeting.allowReactions) return;
   try {
@@ -1374,7 +1390,10 @@ function configureMeetingMode() {
   invitationActions.replaceChildren();
   invitationActions.hidden = !ui.session.capabilities?.canManageInvitations;
   if (!invitationActions.hidden) {
-    for (const role of RATCore.MEETING_ROLES[meeting.type] || []) invitationActions.appendChild(actionButton(`Copiar enlace de ${RATCore.roleLabel(role).toLowerCase()}`, () => createInRoomInvitation(role)));
+    invitationActions.append(
+      actionButton('Copiar enlace de participante', () => createInRoomAccess('PARTICIPANT')),
+      actionButton('Copiar enlace de anfitrión', () => createInRoomAccess('HOST')),
+    );
   }
   renderRoomLock(meeting.roomLocked === true);
 }
@@ -1443,8 +1462,8 @@ function setupControls() {
   document.getElementById('btnLeave').onclick = leaveRoom;
   document.getElementById('btnEnd').onclick = endRoom;
   document.getElementById('btnLock').onclick = toggleRoomLock;
-  document.getElementById('btnInviteViewer').onclick = () => createInRoomInvitation('VIEWER');
-  document.getElementById('btnInvitePanelist').onclick = () => createInRoomInvitation('PANELIST');
+  document.getElementById('btnInviteViewer').onclick = () => createInRoomAccess('PARTICIPANT');
+  document.getElementById('btnInvitePanelist').onclick = () => createInRoomAccess('HOST');
   document.querySelectorAll('.organizer-control').forEach((element) => { element.hidden = !ui.session.capabilities?.canManageInvitations && !ui.session.capabilities?.canManageRoom && !ui.session.capabilities?.canManageRecording && !ui.session.capabilities?.canEndMeeting; });
   if (!navigator.mediaDevices?.getDisplayMedia) { document.getElementById('btnScreen').disabled = true; document.getElementById('btnScreen').title = 'Compartir pantalla no está disponible en este navegador.'; }
   document.getElementById('btnMore').onclick = () => { const panel = document.getElementById('morePanel'); panel.hidden = !panel.hidden; document.getElementById('btnMore').setAttribute('aria-expanded', String(!panel.hidden)); };

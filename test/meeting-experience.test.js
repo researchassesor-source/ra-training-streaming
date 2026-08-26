@@ -104,9 +104,18 @@ test('new mobile, media and invitation contracts are explicit and accessible', (
   assert.match(room, /updateCounter\('chatControlUnread', count\)/);
   assert.match(room, /speakerModeLabel'\)\.hidden = !canUsePresenterPanel/);
   assert.match(room, /recordingHelp'\)\.hidden = !ui\.session\.capabilities\?\.canManageRecording/);
-  assert.match(dashboard, /RATCore\.MEETING_ROLES\[meeting\.type\]/);
-  assert.match(dashboard, /meetingRole: role/);
+  assert.match(dashboard, /openSimpleMeetingAccessDialog\(item, 'HOST'\)/);
+  assert.match(dashboard, /openSimpleMeetingAccessDialog\(item, 'PARTICIPANT'\)/);
+  assert.match(dashboard, /\/simple-accesses\/\$\{kind\}/);
   assert.match(dashboardHtml, /id="openInvitationLink"/);
+  assert.match(dashboardHtml, /Enlace de acceso/);
+  assert.match(room, /createInRoomAccess\('PARTICIPANT'\)/);
+  assert.match(room, /createInRoomAccess\('HOST'\)/);
+  assert.match(room, /\/api\/room\/simple-accesses\/\$\{kind\}/);
+  assert.match(presenter, /Copiar enlace de participante/);
+  assert.match(presenter, /Copiar enlace de anfitrión/);
+  assert.match(viewer, /Copiar enlace de participante/);
+  assert.match(viewer, /Copiar enlace de anfitrión/);
 });
 
 test('meeting notifier groups repeated toasts and reports permission states', async () => {

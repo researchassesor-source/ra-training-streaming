@@ -205,6 +205,12 @@ test('dashboard information architecture separates trainings from independent me
   assert.match(html, /id="includeArchivedSeries"/);
   assert.match(script, /renderTrainingSeries/);
   assert.match(script, /includeArchived=true/);
+  assert.match(script, /Enlace anfitrión/);
+  assert.match(script, /Enlace participante/);
+  assert.match(script, /\/simple-accesses\/\$\{kind\}/);
+  assert.doesNotMatch(script, /Preparar acceso de/);
+  assert.match(html, /Enlace de acceso/);
+  assert.match(html, /identidad técnica propia/);
   assert.doesNotMatch(html, /data-section-panel="meetings"[\s\S]*data-open-series/);
 });
 

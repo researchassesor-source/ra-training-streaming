@@ -36,7 +36,7 @@ function meetingSchedule(meeting, { timeZone, timeZoneLabel } = {}) {
   };
 }
 
-function buildInvitationMessage({ meeting, role, url, timeZone, timeZoneLabel } = {}) {
+function buildInvitationMessage({ meeting, role, url, timeZone, timeZoneLabel, sharedAccess = false } = {}) {
   const meetingType = normalizeMeetingType(meeting?.meetingType || meeting?.type);
   const requestedRole = String(role || '').toUpperCase();
   const meetingRole = ['ADMIN', 'ORGANIZER', 'PANELIST', 'VIEWER'].includes(requestedRole)
@@ -69,7 +69,13 @@ function buildInvitationMessage({ meeting, role, url, timeZone, timeZoneLabel } 
     '',
     'Te recomendamos conectarte unos minutos antes y comprobar tu audio.',
   ];
-  if (privileged) lines.push('', 'Este enlace es personal y habilita permisos mayores. No lo compartas públicamente.');
+  if (privileged) {
+    lines.push('', sharedAccess
+      ? 'Este enlace habilita permisos de anfitrión. Compártelo solo con personas autorizadas por la organización.'
+      : 'Este enlace es personal y habilita permisos mayores. No lo compartas públicamente.');
+  } else if (sharedAccess) {
+    lines.push('', 'Este enlace puede enviarse al grupo. Cada persona tendrá su propia identidad al entrar.');
+  }
   lines.push('', config.appName);
   return lines.join('\n');
 }
