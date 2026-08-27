@@ -97,7 +97,7 @@ function renderFacebookState(result = {}) {
   const status = document.getElementById('facebookLiveState');
   if (status) status.textContent = labels[state];
   const notice = document.getElementById('externalBroadcastNotice');
-  if (notice) notice.hidden = !ui.facebookActive;
+  if (notice) notice.hidden = state !== 'ACTIVE';
   const configure = document.getElementById('btnFacebookConfig');
   const stop = document.getElementById('btnFacebookStop');
   if (configure) {
@@ -106,7 +106,7 @@ function renderFacebookState(result = {}) {
     configure.textContent = state === 'ERROR' ? 'Reintentar' : 'Configurar Facebook Live';
   }
   if (stop) {
-    stop.hidden = !ui.facebookActive;
+    stop.hidden = !ui.facebookEgressId || state === 'IDLE' || state === 'ERROR';
     stop.disabled = state === 'STOPPING' || !ui.facebookEgressId;
   }
   const help = document.getElementById('facebookLiveHelp');

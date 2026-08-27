@@ -13,6 +13,15 @@ function egressRequest(info) {
   return info?.request?.value || info?.request || {};
 }
 
+function safeEgressMessage(info, fallback) {
+  const raw = String(info?.error || info?.errorMessage || '').trim();
+  if (!raw) return fallback;
+  return raw
+    .replace(/rtmps?:\/\/[^\s"']+/gi, '[destino externo oculto]')
+    .replace(/FB-[A-Za-z0-9._?%=&-]+/g, '[clave Facebook oculta]')
+    .slice(0, 220);
+}
+
 function isStreamingEgress(info) {
   const request = egressRequest(info);
   return Boolean(
@@ -92,6 +101,7 @@ function facebookStateFromEgress(info, metadata = {}) {
     egressId: info.egressId || metadata.egressId || null,
     startedAt: metadata.startedAt || null,
     stoppedAt: metadata.stoppedAt || null,
+    message: state === 'ERROR' ? safeEgressMessage(info, 'LiveKit no pudo iniciar la señal externa.') : undefined,
   };
 }
 
@@ -102,5 +112,6 @@ module.exports = {
   isRecordingEgress,
   isStreamingEgress,
   facebookStartFailureMessage,
+  safeEgressMessage,
   validateFacebookDestination,
 };

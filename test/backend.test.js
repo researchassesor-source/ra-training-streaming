@@ -26,6 +26,7 @@ const questions = require('../server/questions');
 const { assertValidFileContent, hasValidMagicBytes } = require('../server/file-validation');
 const { createRoomSession, roomCookie } = require('../server/room-session');
 const { createApp } = require('../server/app');
+const externalSessions = require('../server/external-sessions');
 
 const mockRoomService = {
   participants: [],
@@ -697,6 +698,55 @@ test('manual Facebook Live uses a host-only, secret-free and recording-independe
   assert.equal(mockEgressClient.stops.slice(stopCount).includes(recording.egressId), false);
   mockEgressClient.reset();
   mockRoomService.participants = [];
+});
+
+test('stale external Facebook sessions do not block a clean retry', async () => {
+  mockEgressClient.reset();
+  mockRoomService.sentData = [];
+  const meeting = await meetings.createMeeting({
+    title: 'Facebook Live retry', room: 'facebook-live-retry', trainerName: 'Trainer', scheduledAt: null,
+    durationMinutes: 60, status: 'LIVE', allowRecording: true, type: 'WEBINAR', createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const host = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingRole: 'HOST', displayName: 'Host' });
+  const hostCookie = roomCookie(host.token, host.session.sid).split(';')[0];
+  mockRoomService.participants = [{ identity: host.session.identity }];
+  const serverUrl = 'rtmps://live-api-s.facebook.com:443/rtmp/';
+
+  const first = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { serverUrl, streamKey: 'first-facebook-key-123' },
+  });
+  assert.equal(first.response.status, 201, JSON.stringify(first.data));
+  assert.equal(mockEgressClient.starts.length, 1);
+  mockEgressClient.items[0].status = 'EGRESS_ABORTED';
+  mockEgressClient.items[0].error = 'Start signal not received';
+
+  const retry = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { serverUrl, streamKey: 'second-facebook-key-456' },
+  });
+  assert.equal(retry.response.status, 201, JSON.stringify(retry.data));
+  assert.equal(retry.data.state, 'ACTIVE');
+  assert.equal(mockEgressClient.starts.length, 2);
+  mockEgressClient.reset();
+  mockRoomService.participants = [];
+});
+
+test('stale recording sessions are failed before a clean retry', async () => {
+  await externalSessions.resetForTest();
+  const first = await externalSessions.beginRecording({ meetingId: 'recording-retry-meeting', room: 'recording-retry-room' });
+  assert.equal(first.created, true);
+
+  const failed = await externalSessions.failOpenRecordingSessions('recording-retry-room', { message: 'Start signal not received' });
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].status, 'FAILED');
+  assert.equal(failed[0].lastErrorMessage, 'Start signal not received');
+
+  const retry = await externalSessions.beginRecording({ meetingId: 'recording-retry-meeting', room: 'recording-retry-room' });
+  assert.equal(retry.created, true);
+  assert.notEqual(retry.session.id, first.session.id);
+  await externalSessions.resetForTest();
 });
 
 test('chat is server-relayed, session-bound and rate limited', async () => {

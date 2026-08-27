@@ -66,6 +66,7 @@ const {
   facebookStartFailureMessage,
   isRecordingEgress,
   isStreamingEgress,
+  safeEgressMessage,
   validateFacebookDestination,
 } = require('./facebook-live');
 const {
@@ -109,7 +110,12 @@ function recordingStateFromEgress(info) {
     EGRESS_COMPLETE: 'PROCESSING', EGRESS_FAILED: 'FAILED', EGRESS_ABORTED: 'FAILED', EGRESS_LIMIT_REACHED: 'FAILED',
   };
   const state = states[status] || 'FAILED';
-  return { state, active: state === 'RECORDING', egressId: state === 'RECORDING' ? info.egressId : null };
+  return {
+    state,
+    active: state === 'RECORDING',
+    egressId: state === 'RECORDING' ? info.egressId : null,
+    message: state === 'FAILED' ? safeEgressMessage(info, 'LiveKit no pudo iniciar la grabación.') : undefined,
+  };
 }
 
 function localDateKey(value = new Date()) {
@@ -1854,6 +1860,9 @@ function createApp(overrides = {}) {
     try {
       const active = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
       const recording = active.find(isRecordingEgress);
+      if (!recording && db.usingPostgres()) {
+        await externalSessions.failOpenRecordingSessions(req.roomSession.room).catch(() => null);
+      }
       const state = recording ? recordingStateFromEgress(recording) : { state: 'IDLE', active: false, egressId: null };
       res.json({ ...state, configured: true });
     } catch {
@@ -1870,6 +1879,9 @@ function createApp(overrides = {}) {
       const existing = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
       const currentRecording = existing.find(isRecordingEgress);
       if (currentRecording) return res.json({ ...recordingStateFromEgress(currentRecording), alreadyRunning: true });
+      if (db.usingPostgres()) {
+        await externalSessions.failOpenRecordingSessions(req.roomSession.room).catch(() => null);
+      }
       if (db.usingPostgres()) {
         const begun = await externalSessions.beginRecording({ meetingId: req.meeting.id, room: req.roomSession.room });
         durableSession = begun.session;
@@ -1977,6 +1989,9 @@ function createApp(overrides = {}) {
       const current = await facebookEgress(req.roomSession.room);
       const currentState = publicFacebookState(req.roomSession.room, current);
       if (currentState.active) return res.json({ ...currentState, alreadyRunning: true });
+      if (db.usingPostgres()) {
+        await externalSessions.failOpenFacebookSessions(req.roomSession.room).catch(() => null);
+      }
       if (db.usingPostgres()) {
         const begun = await externalSessions.beginFacebook({ meetingId: req.meeting.id, room: req.roomSession.room });
         durableSession = begun.session;

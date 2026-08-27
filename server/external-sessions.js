@@ -4,6 +4,8 @@ const { sanitizeText } = require('./http-utils');
 
 const memoryRecording = new Map();
 const memoryFacebook = new Map();
+const ACTIVE_RECORDING_STATUSES = ['PENDING', 'STARTING', 'RECORDING', 'STOPPING', 'PROCESSING', 'PENDING_RECONCILIATION'];
+const ACTIVE_FACEBOOK_STATUSES = ['PENDING', 'STARTING', 'LIVE', 'STOPPING', 'PENDING_RECONCILIATION'];
 
 function nowIso() { return new Date().toISOString(); }
 
@@ -30,7 +32,7 @@ function publicSession(row) {
 async function beginRecording({ meetingId, room }) {
   const cleanRoom = sanitizeText(room, { field: 'room', min: 3, max: 80, required: true });
   if (!db.usingPostgres()) {
-    const existing = [...memoryRecording.values()].find((item) => item.room === cleanRoom && ['PENDING', 'STARTING', 'RECORDING', 'STOPPING', 'PROCESSING', 'PENDING_RECONCILIATION'].includes(item.status));
+    const existing = [...memoryRecording.values()].find((item) => item.room === cleanRoom && ACTIVE_RECORDING_STATUSES.includes(item.status));
     if (existing) return { session: publicSession(existing), created: false };
     const session = { id: crypto.randomUUID(), meetingId, room: cleanRoom, status: 'PENDING', createdAt: nowIso(), updatedAt: nowIso() };
     memoryRecording.set(session.id, session);
@@ -83,7 +85,7 @@ async function updateRecording(id, patch = {}) {
 async function beginFacebook({ meetingId, room }) {
   const cleanRoom = sanitizeText(room, { field: 'room', min: 3, max: 80, required: true });
   if (!db.usingPostgres()) {
-    const existing = [...memoryFacebook.values()].find((item) => item.room === cleanRoom && ['PENDING', 'STARTING', 'LIVE', 'STOPPING', 'PENDING_RECONCILIATION'].includes(item.status));
+    const existing = [...memoryFacebook.values()].find((item) => item.room === cleanRoom && ACTIVE_FACEBOOK_STATUSES.includes(item.status));
     if (existing) return { session: publicSession(existing), created: false };
     const session = { id: crypto.randomUUID(), meetingId, room: cleanRoom, status: 'PENDING', createdAt: nowIso(), updatedAt: nowIso() };
     memoryFacebook.set(session.id, session);
@@ -103,6 +105,72 @@ async function beginFacebook({ meetingId, room }) {
     [crypto.randomUUID(), meetingId || null, cleanRoom]
   );
   return { session: publicSession(result.rows[0]), created: true };
+}
+
+async function failOpenRecordingSessions(room, { code = 'EGRESS_NOT_ACTIVE', message = 'LiveKit no reporta una grabación activa para esta sala' } = {}) {
+  const cleanRoom = sanitizeText(room, { field: 'room', min: 3, max: 80, required: true });
+  if (!db.usingPostgres()) {
+    const updated = [];
+    for (const session of memoryRecording.values()) {
+      if (session.room !== cleanRoom || !ACTIVE_RECORDING_STATUSES.includes(session.status)) continue;
+      Object.assign(session, {
+        status: 'FAILED',
+        endedAt: session.endedAt || nowIso(),
+        lastReconciledAt: nowIso(),
+        lastErrorCode: code,
+        lastErrorMessage: message,
+        updatedAt: nowIso(),
+      });
+      updated.push(publicSession(session));
+    }
+    return updated;
+  }
+  const result = await db.query(
+    `UPDATE recording_egress_sessions
+     SET status = 'FAILED',
+         ended_at = COALESCE(ended_at, now()),
+         last_reconciled_at = now(),
+         last_error_code = $2,
+         last_error_message = $3,
+         updated_at = now()
+     WHERE room = $1 AND status IN ('PENDING', 'STARTING', 'RECORDING', 'STOPPING', 'PROCESSING', 'PENDING_RECONCILIATION')
+     RETURNING *`,
+    [cleanRoom, code, message]
+  );
+  return result.rows.map(publicSession);
+}
+
+async function failOpenFacebookSessions(room, { code = 'EGRESS_NOT_ACTIVE', message = 'LiveKit no reporta una señal externa activa para esta sala' } = {}) {
+  const cleanRoom = sanitizeText(room, { field: 'room', min: 3, max: 80, required: true });
+  if (!db.usingPostgres()) {
+    const updated = [];
+    for (const session of memoryFacebook.values()) {
+      if (session.room !== cleanRoom || !ACTIVE_FACEBOOK_STATUSES.includes(session.status)) continue;
+      Object.assign(session, {
+        status: 'FAILED',
+        endedAt: session.endedAt || nowIso(),
+        lastReconciledAt: nowIso(),
+        lastErrorCode: code,
+        lastErrorMessage: message,
+        updatedAt: nowIso(),
+      });
+      updated.push(publicSession(session));
+    }
+    return updated;
+  }
+  const result = await db.query(
+    `UPDATE facebook_live_sessions
+     SET status = 'FAILED',
+         ended_at = COALESCE(ended_at, now()),
+         last_reconciled_at = now(),
+         last_error_code = $2,
+         last_error_message = $3,
+         updated_at = now()
+     WHERE room = $1 AND status IN ('PENDING', 'STARTING', 'LIVE', 'STOPPING', 'PENDING_RECONCILIATION')
+     RETURNING *`,
+    [cleanRoom, code, message]
+  );
+  return result.rows.map(publicSession);
 }
 
 async function updateFacebook(id, patch = {}) {
@@ -137,4 +205,13 @@ async function resetForTest() {
   memoryFacebook.clear();
 }
 
-module.exports = { beginFacebook, beginRecording, publicSession, resetForTest, updateFacebook, updateRecording };
+module.exports = {
+  beginFacebook,
+  beginRecording,
+  failOpenFacebookSessions,
+  failOpenRecordingSessions,
+  publicSession,
+  resetForTest,
+  updateFacebook,
+  updateRecording,
+};
