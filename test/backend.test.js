@@ -86,6 +86,10 @@ let server;
 let baseUrl;
 let app;
 
+function publishedMicTrack() {
+  return { sid: 'TR_MIC_TEST', type: 'AUDIO', source: 'MICROPHONE', muted: false };
+}
+
 async function request(route, { method = 'GET', body, cookie, csrf, roomCsrf, seriesCsrf, roomSessionId, redirect = 'follow' } = {}) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -596,6 +600,27 @@ test('viewer room sessions cannot promote participants or control recording', as
   assert.equal(recording.response.status, 403);
 });
 
+test('Facebook Live requires a published media source before creating Egress', async () => {
+  mockEgressClient.reset();
+  const meeting = await meetings.createMeeting({
+    title: 'Empty media room', room: 'empty-media-room', trainerName: 'Trainer', scheduledAt: null,
+    durationMinutes: 60, status: 'LIVE', allowRecording: true, type: 'WEBINAR', createdBy: 'rootadmin',
+  });
+  await rooms.createRoom(meeting.room, { meetingId: meeting.id });
+  const host = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingRole: 'HOST', displayName: 'Host' });
+  const hostCookie = roomCookie(host.token, host.session.sid).split(';')[0];
+  mockRoomService.participants = [{ identity: host.session.identity, tracks: [] }];
+
+  const facebook = await request('/api/facebook-live/start', {
+    method: 'POST', cookie: hostCookie, roomSessionId: host.session.sid, roomCsrf: host.session.csrf,
+    body: { serverUrl: 'rtmps://live-api-s.facebook.com:443/rtmp/', streamKey: 'facebook-key-123' },
+  });
+  assert.equal(facebook.response.status, 409);
+  assert.equal(facebook.data.code, 'ROOM_HAS_NO_EGRESS_MEDIA');
+  assert.equal(mockEgressClient.starts.length, 0);
+  mockRoomService.participants = [];
+});
+
 test('manual Facebook Live uses a host-only, secret-free and recording-independent Egress flow', async () => {
   mockEgressClient.reset();
   mockRoomService.sentData = [];
@@ -608,7 +633,7 @@ test('manual Facebook Live uses a host-only, secret-free and recording-independe
   const cohost = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingRole: 'COHOST', displayName: 'Cohost' });
   const hostCookie = roomCookie(host.token, host.session.sid).split(';')[0];
   const cohostCookie = roomCookie(cohost.token, cohost.session.sid).split(';')[0];
-  mockRoomService.participants = [{ identity: host.session.identity }, { identity: cohost.session.identity }];
+  mockRoomService.participants = [{ identity: host.session.identity, tracks: [publishedMicTrack()] }, { identity: cohost.session.identity }];
 
   const forbidden = await request('/api/facebook-live/start', {
     method: 'POST', cookie: cohostCookie, roomSessionId: cohost.session.sid, roomCsrf: cohost.session.csrf,
@@ -710,7 +735,7 @@ test('stale external Facebook sessions do not block a clean retry', async () => 
   await rooms.createRoom(meeting.room, { meetingId: meeting.id });
   const host = createRoomSession({ room: meeting.room, meetingId: meeting.id, role: 'ORGANIZER', meetingRole: 'HOST', displayName: 'Host' });
   const hostCookie = roomCookie(host.token, host.session.sid).split(';')[0];
-  mockRoomService.participants = [{ identity: host.session.identity }];
+  mockRoomService.participants = [{ identity: host.session.identity, tracks: [publishedMicTrack()] }];
   const serverUrl = 'rtmps://live-api-s.facebook.com:443/rtmp/';
 
   const first = await request('/api/facebook-live/start', {

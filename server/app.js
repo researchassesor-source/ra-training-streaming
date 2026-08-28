@@ -113,7 +113,7 @@ function recordingStateFromEgress(info) {
   return {
     state,
     active: state === 'RECORDING',
-    egressId: state === 'RECORDING' ? info.egressId : null,
+    egressId: ['STARTING', 'RECORDING', 'STOPPING'].includes(state) ? info.egressId : null,
     message: state === 'FAILED' ? safeEgressMessage(info, 'LiveKit no pudo iniciar la grabación.') : undefined,
   };
 }
@@ -1297,6 +1297,19 @@ function createApp(overrides = {}) {
     return participants;
   }
 
+  function participantHasPublishedMedia(participant) {
+    return Array.isArray(participant?.tracks) && participant.tracks.some((track) => track && track.muted !== true);
+  }
+
+  function assertRoomHasEgressMedia(participants) {
+    if (participants.some(participantHasPublishedMedia)) return;
+    throw new AppError(
+      409,
+      'Activa o espera una fuente de audio, cámara o pantalla antes de iniciar grabación o Facebook Live. LiveKit no puede generar señal desde una sala sin medios.',
+      'ROOM_HAS_NO_EGRESS_MEDIA'
+    );
+  }
+
   function participantCanPublishSource(participant, source) {
     const permission = participant?.permission || participant?.permissions || {};
     const sources = permission.canPublishSources;
@@ -1876,6 +1889,7 @@ function createApp(overrides = {}) {
       if (!recordingConfigured) throw new AppError(400, 'La grabación no está configurada', 'RECORDING_NOT_CONFIGURED');
       if (!req.meeting.allowRecording || req.meeting.status !== 'LIVE') throw new AppError(409, 'La grabación no está permitida en esta reunión', 'RECORDING_DISABLED');
       const participants = await assertCallerPresent(req);
+      assertRoomHasEgressMedia(participants);
       const existing = await egressClient.listEgress({ roomName: req.roomSession.room, active: true });
       const currentRecording = existing.find(isRecordingEgress);
       if (currentRecording) return res.json({ ...recordingStateFromEgress(currentRecording), alreadyRunning: true });
@@ -1982,7 +1996,8 @@ function createApp(overrides = {}) {
   app.post('/api/facebook-live/start', requireRoomSession, requireRoomCsrf, roomMeeting, requireRoomCapability('canManageRecording'), asyncHandler(async (req, res) => {
     if (req.meeting.status !== 'LIVE') throw new AppError(409, 'La reunión no está en vivo', 'MEETING_NOT_LIVE');
     if (config.isProductionLike && !req.secure) throw new AppError(400, 'Facebook Live requiere una conexión HTTPS', 'HTTPS_REQUIRED');
-    await assertCallerPresent(req);
+    const participants = await assertCallerPresent(req);
+    assertRoomHasEgressMedia(participants);
     const { output } = validateFacebookDestination(req.body?.serverUrl, req.body?.streamKey);
     let durableSession = null;
     try {

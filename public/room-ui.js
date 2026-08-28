@@ -68,8 +68,9 @@ function renderRecordingState(snapshot) {
   badge.textContent = snapshot.active ? 'Grabando' : '';
   const button = document.getElementById('btnRecord');
   if (button) {
-    button.disabled = snapshot.busy || snapshot.state === 'DISABLED';
-    button.textContent = snapshot.state === 'DISABLED' ? 'Grabación no disponible' : snapshot.active ? 'Detener grabación' : snapshot.busy ? snapshot.label : 'Iniciar grabación';
+    const canCancelStarting = snapshot.state === 'STARTING' && Boolean(snapshot.egressId);
+    button.disabled = (snapshot.busy && !canCancelStarting) || snapshot.state === 'DISABLED';
+    button.textContent = snapshot.state === 'DISABLED' ? 'Grabación no disponible' : snapshot.active ? 'Detener grabación' : canCancelStarting ? 'Cancelar grabación' : snapshot.busy ? snapshot.label : 'Iniciar grabación';
     button.setAttribute('aria-busy', String(snapshot.busy));
     button.title = snapshot.state === 'DISABLED' ? 'La grabación no está configurada en este entorno' : snapshot.label;
   }
@@ -1122,18 +1123,19 @@ async function queryRecordingStatus() {
 async function toggleRecording() {
   if (!ui.session?.capabilities?.canManageRecording) return;
   const current = recordingMachine.emit();
-  if (current.busy || current.state === 'DISABLED') return;
-  if (!current.active) {
+  const shouldStop = current.active || (current.state === 'STARTING' && current.egressId);
+  if ((current.busy && !shouldStop) || current.state === 'DISABLED') return;
+  if (!shouldStop) {
     const confirmed = await askConfirmation({
       title: 'Iniciar grabación',
-      message: 'Se avisará a todos los participantes. La grabación solo aparecerá activa cuando Egress lo confirme.',
+      message: 'Se avisará a todos los participantes. Debe existir audio, cámara o pantalla activa de alguien en la sala; si no hay señal, LiveKit no puede grabar.',
       confirmLabel: 'Iniciar grabación',
     });
     if (!confirmed) return;
   }
-  recordingMachine.set(current.active ? 'STOPPING' : 'STARTING');
+  recordingMachine.set(shouldStop ? 'STOPPING' : 'STARTING', { egressId: current.egressId });
   try {
-    const result = current.active
+    const result = shouldStop
       ? await roomRequest('/api/recording/stop', { method: 'POST', body: { egressId: current.egressId } }, ui.session.csrfToken)
       : await roomRequest('/api/recording/start', { method: 'POST', body: {} }, ui.session.csrfToken);
     recordingMachine.set(result.state, { active: result.active === true, egressId: result.egressId });

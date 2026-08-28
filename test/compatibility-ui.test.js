@@ -71,12 +71,18 @@ test('recording state is false when disabled, unknown, failed, stopped or proces
   assert.equal(latest.active, true);
   machine.set('STOPPING', { active: true, egressId: 'egress-confirmed' });
   assert.equal(latest.active, false);
+  assert.equal(latest.egressId, 'egress-confirmed');
+  machine.set('STARTING', { egressId: 'egress-starting' });
+  assert.equal(latest.active, false);
+  assert.equal(latest.egressId, 'egress-starting');
   machine.set('PROCESSING');
   assert.equal(latest.active, false);
 });
 
 test('LiveKit Egress mapping only marks EGRESS_ACTIVE as recording', () => {
-  assert.equal(recordingStateFromEgress({ status: EgressStatus.EGRESS_STARTING, egressId: 'a' }).active, false);
+  const starting = recordingStateFromEgress({ status: EgressStatus.EGRESS_STARTING, egressId: 'a' });
+  assert.equal(starting.active, false);
+  assert.equal(starting.egressId, 'a');
   assert.equal(recordingStateFromEgress({ status: EgressStatus.EGRESS_ACTIVE, egressId: 'b' }).active, true);
   assert.equal(recordingStateFromEgress({ status: EgressStatus.EGRESS_FAILED, egressId: 'c' }).active, false);
   assert.equal(recordingStateFromEgress({ status: 999, egressId: 'd' }).active, false);

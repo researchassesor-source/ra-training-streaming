@@ -150,7 +150,7 @@
     set(next, { egressId = null, active = false, message = '' } = {}) {
       const state = Object.prototype.hasOwnProperty.call(RECORDING_STATES, next) ? next : 'FAILED';
       this.state = state;
-      this.egressId = state === 'RECORDING' && active === true ? egressId : null;
+      this.egressId = (state === 'RECORDING' && active === true) || ['STARTING', 'STOPPING'].includes(state) ? egressId : null;
       return this.emit(message);
     }
 
